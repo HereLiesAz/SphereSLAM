@@ -4,14 +4,19 @@
 #include <string>
 #include <thread>
 #include <opencv2/core/core.hpp>
+#include <vector>
+#include <mutex>
 
-// Forward declarations
-class Tracking;
-class LocalMapping;
-class LoopClosing;
-class KeyFrameDatabase;
-class Map;
-class Settings;
+#include "Tracking.h"
+#include "GeometricCamera.h"
+#include "Map.h"
+#include "LocalMapping.h"
+#include "LoopClosing.h"
+#include "KeyFrameDatabase.h"
+
+// New forward declaration
+class Densifier;
+class DepthAnyCamera;
 
 class System {
 public:
@@ -29,24 +34,43 @@ public:
     // Returns the camera pose (Tcw)
     cv::Mat TrackMonocular(const cv::Mat &im, const double &timestamp);
 
+    // New: Process CubeMap (6 faces)
+    cv::Mat TrackCubeMap(const std::vector<cv::Mat> &faces, const double &timestamp);
+
+    // New: Process IMU
+    void ProcessIMU(const cv::Point3f &data, const double &timestamp, int type);
+
+    // Setters for Densification (called from JNI)
+    void SetDensifier(Densifier* pDensifier);
+
+    // New: Save Map
+    void SaveMap(const std::string &filename);
+
+    // New: Save Trajectory
+    void SaveTrajectoryTUM(const std::string &filename);
+
+    int GetTrackingState();
+
     void Shutdown();
 
 private:
-    // Pointers to the main modules
-    // Tracking *mpTracker;
-    // LocalMapping *mpLocalMapper;
-    // LoopClosing *mpLoopCloser;
-
-    // Map *mpMap;
-    // KeyFrameDatabase *mpKeyFrameDatabase;
-
-    // Settings *mpSettings;
-
-    // System threads
-    std::thread *mptLocalMapping;
-    std::thread *mptLoopClosing;
-
     eSensor mSensor;
+
+    // Modules
+    Tracking* mpTracker;
+    LocalMapping* mpLocalMapper;
+    LoopClosing* mpLoopCloser;
+    Map* mpMap;
+    KeyFrameDatabase* mpKeyFrameDatabase;
+
+    GeometricCamera* mpCamera;
+
+    // New: Densifier
+    Densifier* mpDensifier;
+
+    // Threads
+    std::thread* mptLocalMapping;
+    std::thread* mptLoopClosing;
 };
 
 #endif // SYSTEM_H

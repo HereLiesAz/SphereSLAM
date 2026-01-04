@@ -2,6 +2,10 @@
 #include <string>
 #include <android/asset_manager_jni.h>
 #include <android/log.h>
+#include <android/native_window.h>
+#include <android/native_window_jni.h>
+#include <vector>
+#include <mutex>
 
 #include "SLAM/System.h"
 #include "VulkanCompute.h"
@@ -15,6 +19,10 @@ System* slamSystem = nullptr;
 VulkanCompute* vulkanCompute = nullptr;
 DepthAnyCamera* depthEstimator = nullptr;
 MobileGS* renderer = nullptr;
+
+// Thread safety for Pose
+std::mutex mMutexPose;
+cv::Mat mCurrentPose = cv::Mat::eye(4, 4, CV_32F);
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_example_sphereslam_MainActivity_stringFromJNI(
@@ -38,17 +46,101 @@ Java_com_example_sphereslam_MainActivity_initNative(JNIEnv* env, jobject thiz, j
     renderer = new MobileGS();
     renderer->initialize();
 
-    // slamSystem = new System(...); // Needs proper arguments
+    // Initialize SLAM System
+    // VocFile and SettingsFile would be paths to assets extracted to cache
+    slamSystem = new System("", "", System::IMU_MONOCULAR, false); // Enable IMU mode
 
     __android_log_print(ANDROID_LOG_INFO, TAG, "Native Systems Initialized");
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_example_sphereslam_MainActivity_processFrame(JNIEnv* env, jobject thiz, jlong matAddr, jdouble timestamp) {
-    if (slamSystem && matAddr != 0) {
-        cv::Mat* pMat = (cv::Mat*)matAddr;
-        slamSystem->TrackMonocular(*pMat, timestamp);
-    } else {
-         // __android_log_print(ANDROID_LOG_WARN, TAG, "Skipping frame: System not init or invalid matAddr");
+    if (slamSystem && vulkanCompute) {
+        std::vector<cv::Mat> faces;
+        if (matAddr != 0) {
+            cv::Mat* pMat = (cv::Mat*)matAddr;
+            // faces.push_back(*pMat);
+        }
+
+        cv::Mat Tcw = slamSystem->TrackCubeMap(faces, timestamp);
+
+        // Update Pose for Renderer
+        {
+            std::unique_lock<std::mutex> lock(mMutexPose);
+            if (!Tcw.empty()) {
+                mCurrentPose = Tcw.clone();
+                // Pass keyframe to renderer if it's new (Stub logic)
+                // renderer->addKeyFrameFrustum(glm_pose);
+            }
+        }
     }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_sphereslam_MainActivity_processIMU(JNIEnv* env, jobject thiz, jint type, jfloat x, jfloat y, jfloat z, jlong timestamp) {
+    if (slamSystem) {
+        // Type 1: Accel, Type 4: Gyro (Android constants)
+        // Timestamp is nanoseconds, convert to seconds if needed or keep consistent
+        double t = (double)timestamp / 1e9;
+        cv::Point3f data(x, y, z);
+
+        // Map Android Sensor Types to internal enum or separate methods
+        // 1 = ACCELEROMETER, 4 = GYROSCOPE
+        if (type == 1) { // Accel
+             slamSystem->ProcessIMU(data, t, 0); // 0 for Accel
+        } else if (type == 4) { // Gyro
+             slamSystem->ProcessIMU(data, t, 1); // 1 for Gyro
+        }
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_sphereslam_MainActivity_setNativeWindow(JNIEnv* env, jobject thiz, jobject surface) {
+    if (renderer) {
+        ANativeWindow* window = nullptr;
+        if (surface != nullptr) {
+            window = ANativeWindow_fromSurface(env, surface);
+        }
+        renderer->setWindow(window);
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_sphereslam_MainActivity_renderFrame(JNIEnv* env, jobject thiz) {
+    if (renderer) {
+        // Get latest pose
+        cv::Mat pose;
+        {
+            std::unique_lock<std::mutex> lock(mMutexPose);
+            pose = mCurrentPose.clone();
+        }
+
+        // Convert cv::Mat to glm::mat4
+        // Logic to convert Tcw to View Matrix
+        // For Blueprint: Assuming pose is View Matrix or Inverse View Matrix
+        // Need to convert OpenCV coordinate system to OpenGL
+        glm::mat4 viewMatrix(1.0f);
+
+        // Populate viewMatrix from pose (stub)
+
+        glm::mat4 projMatrix(1.0f); // Identity placeholder or perspective setup
+
+        renderer->updateCamera(viewMatrix, projMatrix);
+        renderer->draw();
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_sphereslam_MainActivity_manipulateView(JNIEnv* env, jobject thiz, jfloat dx, jfloat dy) {
+    if (renderer) {
+        renderer->handleInput(dx, dy);
+    }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_example_sphereslam_MainActivity_getTrackingState(JNIEnv* env, jobject thiz) {
+    if (slamSystem) {
+        return slamSystem->GetTrackingState();
+    }
+    return -1;
 }

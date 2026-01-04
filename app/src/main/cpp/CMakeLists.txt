@@ -31,8 +31,20 @@ add_library( # Sets the name of the library.
              native-lib.cpp
              VulkanCompute.cpp
              DepthAnyCamera.cpp
+             Densifier.cpp
              MobileGS.cpp
              SLAM/System.cpp
+             SLAM/Tracking.cpp
+             SLAM/Frame.cpp
+             SLAM/ORBextractor.cpp
+             SLAM/MapPoint.cpp
+             SLAM/KeyFrame.cpp
+             SLAM/Map.cpp
+             SLAM/LocalMapping.cpp
+             SLAM/LoopClosing.cpp
+             SLAM/KeyFrameDatabase.cpp
+             SLAM/Optimizer.cpp
+             SLAM/Settings.cpp
              )
 
 # Searches for a specified prebuilt library and stores the path as a

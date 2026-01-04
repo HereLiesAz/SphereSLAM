@@ -49,7 +49,7 @@ void main() {
 }
 )";
 
-MobileGS::MobileGS() {
+MobileGS::MobileGS() : mWindow(nullptr), mUserOffset(0.0f), mUserRotation(0.0f) {
 }
 
 MobileGS::~MobileGS() {
@@ -69,14 +69,42 @@ void MobileGS::initialize() {
     // glGenBuffers(1, &vbo);
 }
 
+void MobileGS::setWindow(ANativeWindow* window) {
+    mWindow = window;
+    if (mWindow) {
+        // Initialize EGL Context here
+        // eglInitialize(...)
+        // eglCreateWindowSurface(...)
+        // eglMakeCurrent(...)
+        __android_log_print(ANDROID_LOG_INFO, TAG, "Window set for MobileGS");
+    } else {
+        // Destroy Surface
+        __android_log_print(ANDROID_LOG_INFO, TAG, "Window released");
+    }
+}
+
 void MobileGS::updateCamera(const glm::mat4& viewMatrix, const glm::mat4& projectionMatrix) {
-    // glUniformMatrix4fv(viewLoc, 1, GL_FALSE, &viewMatrix[0][0]);
+    // Apply user offset/rotation to viewMatrix here
+    // glm::mat4 finalView = glm::translate(viewMatrix, mUserOffset);
+    // ... apply rotation ...
+
+    // glUniformMatrix4fv(viewLoc, 1, GL_FALSE, &finalView[0][0]);
     // glUniformMatrix4fv(projLoc, 1, GL_FALSE, &projectionMatrix[0][0]);
+}
+
+void MobileGS::handleInput(float dx, float dy) {
+    // Basic orbit/pan logic
+    mUserRotation.y += dx * 0.01f;
+    mUserRotation.x += dy * 0.01f;
 }
 
 void MobileGS::addGaussians(const std::vector<Gaussian>& newGaussians) {
     sceneGaussians.insert(sceneGaussians.end(), newGaussians.begin(), newGaussians.end());
     // Update GPU VBO buffer logic here (glBufferSubData or MapBuffer)
+}
+
+void MobileGS::addKeyFrameFrustum(const glm::mat4& pose) {
+    keyFramePoses.push_back(pose);
 }
 
 struct DepthSorter {
@@ -89,7 +117,20 @@ struct DepthSorter {
 };
 
 void MobileGS::draw() {
-    if (sceneGaussians.empty()) return;
+    if (!mWindow) return;
+
+    // eglMakeCurrent(...)
+
+    // Clear screen
+    // glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    // Draw Frustums (Helper)
+    drawFrustums();
+
+    if (sceneGaussians.empty()) {
+        // eglSwapBuffers(...)
+        return;
+    }
 
     // 1. Sort Gaussians (CPU Fallback)
     // In a real implementation, we get camPos from the inverse View Matrix
@@ -103,6 +144,14 @@ void MobileGS::draw() {
     // glUseProgram(program);
     // glBindVertexArray(vao);
     // glDrawArrays(GL_POINTS, 0, sceneGaussians.size()); // Using Points expanded in Geometry shader or Billboards
+
+    // eglSwapBuffers(...)
+}
+
+void MobileGS::drawFrustums() {
+    // Conceptually draw lines representing camera poses
+    // glLineWidth(2.0f);
+    // ...
 }
 
 void MobileGS::sortGaussians() {
