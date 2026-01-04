@@ -11,12 +11,17 @@ import android.hardware.SensorManager
 import android.media.Image
 import android.os.Bundle
 import android.util.Log
+import android.view.Choreographer
+import android.view.Surface
+import android.view.SurfaceHolder
+import android.view.SurfaceView
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 
-class MainActivity : AppCompatActivity(), SensorEventListener {
+class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Callback, Choreographer.FrameCallback {
 
     private val CAMERA_PERMISSION_REQUEST_CODE = 100
     private lateinit var cameraManager: SphereCameraManager
@@ -24,9 +29,17 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private var accelerometer: Sensor? = null
     private var gyroscope: Sensor? = null
 
+    private lateinit var surfaceView: SurfaceView
+    private lateinit var fpsText: TextView
+    private var lastFrameTime = 0L
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        surfaceView = findViewById(R.id.surfaceView)
+        surfaceView.holder.addCallback(this)
+        fpsText = findViewById(R.id.fpsText)
 
         // Initialize Native Systems
         initNative(assets)
@@ -65,9 +78,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         gyroscope?.also { sensor ->
             sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_FASTEST)
         }
+        Choreographer.getInstance().postFrameCallback(this)
     }
 
     override fun onPause() {
+        Choreographer.getInstance().removeFrameCallback(this)
         cameraManager.closeCamera()
         cameraManager.stopBackgroundThread()
         sensorManager.unregisterListener(this)
@@ -114,10 +129,40 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         // Do nothing
     }
 
+    // SurfaceHolder.Callback
+    override fun surfaceCreated(holder: SurfaceHolder) {
+        setNativeWindow(holder.surface)
+    }
+
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        // Handle resize if needed
+    }
+
+    override fun surfaceDestroyed(holder: SurfaceHolder) {
+        setNativeWindow(null)
+    }
+
+    // Choreographer.FrameCallback
+    override fun doFrame(frameTimeNanos: Long) {
+        renderFrame()
+
+        // Simple FPS counter
+        if (lastFrameTime != 0L) {
+            val diff = frameTimeNanos - lastFrameTime
+            // val fps = 1_000_000_000 / diff
+            // fpsText.text = "FPS: $fps"
+        }
+        lastFrameTime = frameTimeNanos
+
+        Choreographer.getInstance().postFrameCallback(this)
+    }
+
     // Native Methods Declaration
     external fun stringFromJNI(): String
     external fun initNative(assetManager: AssetManager)
     external fun processFrame(matAddr: Long, timestamp: Double)
+    external fun setNativeWindow(surface: Surface?)
+    external fun renderFrame()
 
     companion object {
         init {

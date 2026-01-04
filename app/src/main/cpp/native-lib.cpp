@@ -2,7 +2,10 @@
 #include <string>
 #include <android/asset_manager_jni.h>
 #include <android/log.h>
+#include <android/native_window.h>
+#include <android/native_window_jni.h>
 #include <vector>
+#include <mutex>
 
 #include "SLAM/System.h"
 #include "VulkanCompute.h"
@@ -16,6 +19,10 @@ System* slamSystem = nullptr;
 VulkanCompute* vulkanCompute = nullptr;
 DepthAnyCamera* depthEstimator = nullptr;
 MobileGS* renderer = nullptr;
+
+// Thread safety for Pose
+std::mutex mMutexPose;
+cv::Mat mCurrentPose = cv::Mat::eye(4, 4, CV_32F);
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_example_sphereslam_MainActivity_stringFromJNI(
@@ -49,24 +56,51 @@ Java_com_example_sphereslam_MainActivity_initNative(JNIEnv* env, jobject thiz, j
 extern "C" JNIEXPORT void JNICALL
 Java_com_example_sphereslam_MainActivity_processFrame(JNIEnv* env, jobject thiz, jlong matAddr, jdouble timestamp) {
     if (slamSystem && vulkanCompute) {
-        // Conceptual flow:
-        // 1. In a real app, matAddr would be the Equirectangular image.
-        // 2. We pass it to VulkanCompute -> processImage(matAddr...)
-        // 3. VulkanCompute outputs 6 faces (stored internally in textures or CPU accessible buffers).
-        // 4. We retrieve those faces.
-
-        // For Blueprint: We simulate receiving the faces.
-        // If matAddr is valid, we assume it's one face or the equirect.
-        // Let's assume for now we just pass a dummy vector to verify the pipeline.
-
         std::vector<cv::Mat> faces;
         if (matAddr != 0) {
             cv::Mat* pMat = (cv::Mat*)matAddr;
-            // faces.push_back(*pMat); // Add the input as if it were a face
-            // In reality, we would split or use the Vulkan output.
+            // faces.push_back(*pMat);
         }
 
-        // Call TrackCubeMap (even with empty faces for now to trigger logic)
-        slamSystem->TrackCubeMap(faces, timestamp);
+        cv::Mat Tcw = slamSystem->TrackCubeMap(faces, timestamp);
+
+        // Update Pose for Renderer
+        {
+            std::unique_lock<std::mutex> lock(mMutexPose);
+            if (!Tcw.empty()) {
+                mCurrentPose = Tcw.clone();
+            }
+        }
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_sphereslam_MainActivity_setNativeWindow(JNIEnv* env, jobject thiz, jobject surface) {
+    if (renderer) {
+        ANativeWindow* window = nullptr;
+        if (surface != nullptr) {
+            window = ANativeWindow_fromSurface(env, surface);
+        }
+        renderer->setWindow(window);
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_sphereslam_MainActivity_renderFrame(JNIEnv* env, jobject thiz) {
+    if (renderer) {
+        // Get latest pose
+        cv::Mat pose;
+        {
+            std::unique_lock<std::mutex> lock(mMutexPose);
+            pose = mCurrentPose.clone();
+        }
+
+        // Convert cv::Mat to glm::mat4
+        // Logic to convert Tcw to View Matrix
+        glm::mat4 viewMatrix(1.0f); // Identity placeholder
+        glm::mat4 projMatrix(1.0f); // Identity placeholder
+
+        renderer->updateCamera(viewMatrix, projMatrix);
+        renderer->draw();
     }
 }

@@ -4,6 +4,7 @@
 #include <vector>
 #include <GLES3/gl32.h>
 #include <glm/glm.hpp>
+#include <android/native_window.h>
 
 // Structure for a 3D Gaussian
 struct Gaussian {
@@ -21,6 +22,9 @@ public:
 
     void initialize();
 
+    // Set the output window
+    void setWindow(ANativeWindow* window);
+
     // Update the virtual camera pose
     void updateCamera(const glm::mat4& viewMatrix, const glm::mat4& projectionMatrix);
 
@@ -32,6 +36,7 @@ public:
 
 private:
     std::vector<Gaussian> sceneGaussians;
+    ANativeWindow* mWindow;
 
     // OpenGL/Vulkan resources (buffers, shaders)
     // For blueprint, we assume these exist

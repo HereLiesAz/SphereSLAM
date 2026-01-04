@@ -49,7 +49,7 @@ void main() {
 }
 )";
 
-MobileGS::MobileGS() {
+MobileGS::MobileGS() : mWindow(nullptr) {
 }
 
 MobileGS::~MobileGS() {
@@ -67,6 +67,20 @@ void MobileGS::initialize() {
     // 2. Create Buffers (VAO/VBO)
     // glGenVertexArrays(1, &vao);
     // glGenBuffers(1, &vbo);
+}
+
+void MobileGS::setWindow(ANativeWindow* window) {
+    mWindow = window;
+    if (mWindow) {
+        // Initialize EGL Context here
+        // eglInitialize(...)
+        // eglCreateWindowSurface(...)
+        // eglMakeCurrent(...)
+        __android_log_print(ANDROID_LOG_INFO, TAG, "Window set for MobileGS");
+    } else {
+        // Destroy Surface
+        __android_log_print(ANDROID_LOG_INFO, TAG, "Window released");
+    }
 }
 
 void MobileGS::updateCamera(const glm::mat4& viewMatrix, const glm::mat4& projectionMatrix) {
@@ -89,7 +103,17 @@ struct DepthSorter {
 };
 
 void MobileGS::draw() {
-    if (sceneGaussians.empty()) return;
+    if (!mWindow) return;
+
+    // eglMakeCurrent(...)
+
+    // Clear screen
+    // glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    if (sceneGaussians.empty()) {
+        // eglSwapBuffers(...)
+        return;
+    }
 
     // 1. Sort Gaussians (CPU Fallback)
     // In a real implementation, we get camPos from the inverse View Matrix
@@ -103,6 +127,8 @@ void MobileGS::draw() {
     // glUseProgram(program);
     // glBindVertexArray(vao);
     // glDrawArrays(GL_POINTS, 0, sceneGaussians.size()); // Using Points expanded in Geometry shader or Billboards
+
+    // eglSwapBuffers(...)
 }
 
 void MobileGS::sortGaussians() {
