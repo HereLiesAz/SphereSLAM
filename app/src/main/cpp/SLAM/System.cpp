@@ -6,32 +6,25 @@ System::System(const std::string &strVocFile, const std::string &strSettingsFile
 
     std::cout << "SphereSLAM System Initializing..." << std::endl;
 
-    // Load Vocabulary
-    // Load Settings
+    // Initialize Camera Model (CubeMap)
+    // Assuming 512x512 faces for now
+    mpCamera = new CubeMapCamera(512, 512);
 
-    // Initialize Map
-    // Initialize KeyFrameDatabase
-
-    // Initialize Drawers (if viewer is used - but we pruned it)
-
-    // Initialize Local Mapping
-    // Initialize Loop Closing
     // Initialize Tracking
-
-    // Create threads
+    mpTracker = new Tracking(this, mpCamera);
 }
 
 cv::Mat System::TrackMonocular(const cv::Mat &im, const double &timestamp) {
-    // Check mode change
+    // Deprecated for SphereSLAM, or used if we just pass one face
+    std::vector<cv::Mat> faces;
+    faces.push_back(im);
+    return mpTracker->GrabImageCubeMap(faces, timestamp);
+}
 
-    // Pass to Tracker
-    // return mpTracker->GrabImageMonocular(im, timestamp);
-
-    // Placeholder return identity
-    return cv::Mat::eye(4, 4, CV_32F);
+cv::Mat System::TrackCubeMap(const std::vector<cv::Mat> &faces, const double &timestamp) {
+    return mpTracker->GrabImageCubeMap(faces, timestamp);
 }
 
 void System::Shutdown() {
     // Request finish to threads
-    // Wait for threads
 }
