@@ -293,7 +293,3 @@ SphereSLAM-Droid represents a comprehensive blueprint for bringing high-end 3D r
 33. Driving photorealistic 3D avatars in real time with on-device 3D Gaussian splatting, accessed January 3, 2026, [https://www.qualcomm.com/developer/blog/2024/12/driving-photorealistic03d-avatars-in-real-time-on-device-3d-gaussian-splatting](https://www.qualcomm.com/developer/blog/2024/12/driving-photorealistic03d-avatars-in-real-time-on-device-3d-gaussian-splatting)  
 34. Splatter Image: Ultra-Fast Single-View 3D Reconstruction \- arXiv, accessed January 3, 2026, [https://arxiv.org/html/2312.13150v2](https://arxiv.org/html/2312.13150v2)  
 35. \[Quick Review\] Splatter Image: Ultra-Fast Single-View 3D Reconstruction \- Liner, accessed January 3, 2026, [https://liner.com/review/splatter-image-ultrafast-singleview-3d-reconstruction](https://liner.com/review/splatter-image-ultrafast-singleview-3d-reconstruction)
-
-
-
-
