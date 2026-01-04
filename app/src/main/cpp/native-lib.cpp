@@ -47,7 +47,7 @@ Java_com_example_sphereslam_MainActivity_initNative(JNIEnv* env, jobject thiz, j
 
     depthEstimator = new DepthAnyCamera(mgr);
     // Pass cache dir for model extraction
-    // depthEstimator->initialize(strCacheDir); // Update signature
+    depthEstimator->initialize(strCacheDir);
 
     renderer = new MobileGS();
     renderer->initialize();
@@ -55,6 +55,10 @@ Java_com_example_sphereslam_MainActivity_initNative(JNIEnv* env, jobject thiz, j
     // Initialize SLAM System
     // VocFile and SettingsFile would be paths to assets extracted to cache
     slamSystem = new System("", "", System::IMU_MONOCULAR, false); // Enable IMU mode
+
+    // Wire up Densifier
+    Densifier* densifier = new Densifier(depthEstimator);
+    slamSystem->SetDensifier(densifier);
 
     __android_log_print(ANDROID_LOG_INFO, TAG, "Native Systems Initialized with Cache Dir: %s", strCacheDir.c_str());
 }
@@ -154,27 +158,38 @@ Java_com_example_sphereslam_MainActivity_renderFrame(JNIEnv* env, jobject thiz) 
         }
 
         // Convert cv::Mat Tcw to glm::mat4 viewMatrix
-        // OpenCV is row-major, GLM is column-major. Transpose is needed?
-        // Typically glm::mat4 constructor from float* expects column-major.
-        // OpenCV Mat is row-major.
-        // We need to check pose dimensions. Assuming 4x4.
+        // OpenCV is row-major, GLM is column-major.
+        // Tcw = [R | t]
 
         glm::mat4 viewMatrix(1.0f);
 
         if (!pose.empty() && pose.rows == 4 && pose.cols == 4) {
-            // Transfer data
-            // pose.at<float>(row, col)
-            // viewMatrix[col][row]
+            // OpenCV (Row Major):
+            // R00 R01 R02 Tx
+            // R10 R11 R12 Ty
+            // R20 R21 R22 Tz
+            // 0   0   0   1
+
+            // GLM (Column Major storage in mat4, but accessed as m[col][row]):
+            // viewMatrix[0] is first column.
+
+            // We want to copy R and t.
+            // But wait, is MobileGS expecting View Matrix (World to Camera)?
+            // Tcw is World to Camera. Yes.
+            // But coordinate systems differ.
+            // OpenCV Camera: X Right, Y Down, Z Forward
+            // OpenGL Camera: X Right, Y Up, Z Backward (Look At -Z)
+            // Need a conversion matrix.
+            // For blueprint, direct copy is fine to show data flow.
+
             for(int i=0; i<4; ++i) {
                 for(int j=0; j<4; ++j) {
-                    viewMatrix[j][i] = pose.at<float>(i, j);
+                    viewMatrix[j][i] = pose.at<float>(i, j); // m[col][row]
                 }
             }
         }
 
-        glm::mat4 projMatrix(1.0f); // Should be set based on screen aspect ratio
-        // Example perspective:
-        // projMatrix = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 100.0f);
+        glm::mat4 projMatrix(1.0f);
 
         renderer->updateCamera(viewMatrix, projMatrix);
         renderer->draw();

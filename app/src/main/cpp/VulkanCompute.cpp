@@ -216,14 +216,20 @@ void VulkanCompute::processImage(void* inputBuffer, int width, int height) {
     // We would need to create a VkImageView from inputBuffer and update vkCtx.descriptorSet
 
     // Stub call to update sets (conceptual)
+    VkDescriptorImageInfo imageInfo = {};
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    // imageInfo.imageView = (VkImageView)inputBuffer; // Requires inputBuffer to be a valid handle
+    imageInfo.sampler = VK_NULL_HANDLE; // Needs sampler
+
     VkWriteDescriptorSet descriptorWrite = {};
     descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     descriptorWrite.dstSet = vkCtx.descriptorSet;
     descriptorWrite.dstBinding = 0;
     descriptorWrite.descriptorCount = 1;
     descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    descriptorWrite.pImageInfo = &imageInfo;
 
-    // vkUpdateDescriptorSets(vkCtx.device, 1, &descriptorWrite, 0, nullptr);
+    vkUpdateDescriptorSets(vkCtx.device, 1, &descriptorWrite, 0, nullptr);
 
     // 2. Record Command Buffer
     VkCommandBufferBeginInfo beginInfo = {};

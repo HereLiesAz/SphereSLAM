@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <cmath>
 
 System::System(const std::string &strVocFile, const std::string &strSettingsFile, const eSensor sensor, const bool bUseViewer)
     : mSensor(sensor), mpDensifier(nullptr) {
@@ -103,6 +104,39 @@ void System::SaveMap(const std::string &filename) {
     }
 }
 
+// Helper for Rotation Matrix to Quaternion
+void toQuaternion(const cv::Mat& R, float& qx, float& qy, float& qz, float& qw) {
+    // Basic implementation for 3x3 CV_32F matrix
+    // Trace
+    float tr = R.at<float>(0,0) + R.at<float>(1,1) + R.at<float>(2,2);
+
+    if (tr > 0) {
+        float S = sqrt(tr+1.0) * 2; // S=4*qw
+        qw = 0.25 * S;
+        qx = (R.at<float>(2,1) - R.at<float>(1,2)) / S;
+        qy = (R.at<float>(0,2) - R.at<float>(2,0)) / S;
+        qz = (R.at<float>(1,0) - R.at<float>(0,1)) / S;
+    } else if ((R.at<float>(0,0) > R.at<float>(1,1))&(R.at<float>(0,0) > R.at<float>(2,2))) {
+        float S = sqrt(1.0 + R.at<float>(0,0) - R.at<float>(1,1) - R.at<float>(2,2)) * 2; // S=4*qx
+        qw = (R.at<float>(2,1) - R.at<float>(1,2)) / S;
+        qx = 0.25 * S;
+        qy = (R.at<float>(0,1) + R.at<float>(1,0)) / S;
+        qz = (R.at<float>(0,2) + R.at<float>(2,0)) / S;
+    } else if (R.at<float>(1,1) > R.at<float>(2,2)) {
+        float S = sqrt(1.0 + R.at<float>(1,1) - R.at<float>(0,0) - R.at<float>(2,2)) * 2; // S=4*qy
+        qw = (R.at<float>(0,2) - R.at<float>(2,0)) / S;
+        qx = (R.at<float>(0,1) + R.at<float>(1,0)) / S;
+        qy = 0.25 * S;
+        qz = (R.at<float>(1,2) + R.at<float>(2,1)) / S;
+    } else {
+        float S = sqrt(1.0 + R.at<float>(2,2) - R.at<float>(0,0) - R.at<float>(1,1)) * 2; // S=4*qz
+        qw = (R.at<float>(1,0) - R.at<float>(0,1)) / S;
+        qx = (R.at<float>(0,2) + R.at<float>(2,0)) / S;
+        qy = (R.at<float>(1,2) + R.at<float>(2,1)) / S;
+        qz = 0.25 * S;
+    }
+}
+
 void System::SaveTrajectoryTUM(const std::string &filename) {
     std::vector<KeyFrame*> vpKFs = mpMap->GetAllKeyFrames();
 
@@ -121,11 +155,13 @@ void System::SaveTrajectoryTUM(const std::string &filename) {
                 cv::Mat Rwc = Tcw.rowRange(0,3).colRange(0,3).t();
                 cv::Mat twc = -Rwc * Tcw.rowRange(0,3).col(3);
 
+                float qx, qy, qz, qw;
+                toQuaternion(Rwc, qx, qy, qz, qw);
+
                 // Write timestamp tx ty tz qx qy qz qw
-                // Placeholder for quaternion (0 0 0 1) as conversion is complex without full Eigen/Sophus
                 f << std::setprecision(6) << pKF->mTimeStamp << " "
                   << twc.at<float>(0) << " " << twc.at<float>(1) << " " << twc.at<float>(2) << " "
-                  << 0 << " " << 0 << " " << 0 << " " << 1 << std::endl;
+                  << qx << " " << qy << " " << qz << " " << qw << std::endl;
             }
         }
     }

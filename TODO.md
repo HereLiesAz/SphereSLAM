@@ -191,9 +191,9 @@ Instead of meshing, we use Gaussian Splats for visualization.
 * [x] **Input:** The single photosphere + Depth Map.
 * [x] **Generation:** Instead of optimization (training), we procedurally generate Gaussians.
 * **Position:** Unprojected pixel .
-* **Color:** Pixel RGB.
-* **Scale:** Derived from local depth gradient (larger scale for distant pixels).
-* **Opacity:** 1.0 initially.
+* [x] **Color:** Pixel RGB.
+* [x] **Scale:** Derived from local depth gradient (larger scale for distant pixels).
+* [x] **Opacity:** 1.0 initially.
 
 
 
