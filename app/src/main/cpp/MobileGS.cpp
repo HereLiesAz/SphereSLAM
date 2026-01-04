@@ -49,7 +49,7 @@ void main() {
 }
 )";
 
-MobileGS::MobileGS() : mWindow(nullptr), mUserOffset(0.0f), mUserRotation(0.0f) {
+MobileGS::MobileGS() : mWindow(nullptr), mUserOffset(0.0f), mUserRotation(0.0f), mBufferDirty(false) {
 }
 
 MobileGS::~MobileGS() {
@@ -59,37 +59,21 @@ void MobileGS::initialize() {
     __android_log_print(ANDROID_LOG_INFO, TAG, "Initializing MobileGS Renderer");
 
     // 1. Compile Shaders
-    // GLuint vs = glCreateShader(GL_VERTEX_SHADER);
-    // glShaderSource(vs, 1, &gsVertexShader, NULL);
-    // glCompileShader(vs);
-    // ... (Link Program)
-
-    // 2. Create Buffers (VAO/VBO)
-    // glGenVertexArrays(1, &vao);
-    // glGenBuffers(1, &vbo);
+    // ...
 }
 
 void MobileGS::setWindow(ANativeWindow* window) {
     mWindow = window;
     if (mWindow) {
-        // Initialize EGL Context here
-        // eglInitialize(...)
-        // eglCreateWindowSurface(...)
-        // eglMakeCurrent(...)
+        // Initialize EGL
         __android_log_print(ANDROID_LOG_INFO, TAG, "Window set for MobileGS");
     } else {
-        // Destroy Surface
         __android_log_print(ANDROID_LOG_INFO, TAG, "Window released");
     }
 }
 
 void MobileGS::updateCamera(const glm::mat4& viewMatrix, const glm::mat4& projectionMatrix) {
     // Apply user offset/rotation to viewMatrix here
-    // glm::mat4 finalView = glm::translate(viewMatrix, mUserOffset);
-    // ... apply rotation ...
-
-    // glUniformMatrix4fv(viewLoc, 1, GL_FALSE, &finalView[0][0]);
-    // glUniformMatrix4fv(projLoc, 1, GL_FALSE, &projectionMatrix[0][0]);
 }
 
 void MobileGS::handleInput(float dx, float dy) {
@@ -99,8 +83,9 @@ void MobileGS::handleInput(float dx, float dy) {
 }
 
 void MobileGS::addGaussians(const std::vector<Gaussian>& newGaussians) {
-    sceneGaussians.insert(sceneGaussians.end(), newGaussians.begin(), newGaussians.end());
-    // Update GPU VBO buffer logic here (glBufferSubData or MapBuffer)
+    std::unique_lock<std::mutex> lock(mMutexBuffer);
+    mBackBuffer.insert(mBackBuffer.end(), newGaussians.begin(), newGaussians.end());
+    mBufferDirty = true;
 }
 
 void MobileGS::addKeyFrameFrustum(const glm::mat4& pose) {
@@ -119,45 +104,52 @@ struct DepthSorter {
 void MobileGS::draw() {
     if (!mWindow) return;
 
+    // Swap Buffers Logic
+    {
+        std::unique_lock<std::mutex> lock(mMutexBuffer);
+        if (mBufferDirty) {
+            // Append BackBuffer to FrontBuffer or Swap
+            // Here we assume additive update, so we insert
+            if (!mBackBuffer.empty()) {
+                mFrontBuffer.insert(mFrontBuffer.end(), mBackBuffer.begin(), mBackBuffer.end());
+                mBackBuffer.clear();
+                // Update GPU VBO here with new size
+            }
+            mBufferDirty = false;
+        }
+    }
+
     // eglMakeCurrent(...)
+    // glClear(...)
 
-    // Clear screen
-    // glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-    // Draw Frustums (Helper)
     drawFrustums();
 
-    if (sceneGaussians.empty()) {
+    if (mFrontBuffer.empty()) {
         // eglSwapBuffers(...)
         return;
     }
 
     // 1. Sort Gaussians (CPU Fallback)
-    // In a real implementation, we get camPos from the inverse View Matrix
     glm::vec3 camPos(0, 0, 0);
-    std::sort(sceneGaussians.begin(), sceneGaussians.end(), DepthSorter{camPos});
+    std::sort(mFrontBuffer.begin(), mFrontBuffer.end(), DepthSorter{camPos});
 
     // 2. Upload Sorted Data to GPU
-    // glBufferData(GL_ARRAY_BUFFER, ... sceneGaussians.data() ...);
+    // glBufferData(GL_ARRAY_BUFFER, ... mFrontBuffer.data() ...);
 
     // 3. Draw
-    // glUseProgram(program);
-    // glBindVertexArray(vao);
-    // glDrawArrays(GL_POINTS, 0, sceneGaussians.size()); // Using Points expanded in Geometry shader or Billboards
+    // glDrawArrays(GL_POINTS, 0, mFrontBuffer.size());
 
     // eglSwapBuffers(...)
 }
 
 void MobileGS::drawFrustums() {
-    // Conceptually draw lines representing camera poses
-    // glLineWidth(2.0f);
-    // ...
+    // Conceptually draw lines
 }
 
 void MobileGS::sortGaussians() {
-    // Placeholder for GPU Radix Sort
+    // Placeholder
 }
 
 void MobileGS::cullTiles() {
-    // Placeholder for Compute Shader Culling
+    // Placeholder
 }

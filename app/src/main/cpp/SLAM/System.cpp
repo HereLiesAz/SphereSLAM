@@ -58,11 +58,29 @@ cv::Mat System::TrackMonocular(const cv::Mat &im, const double &timestamp) {
 }
 
 cv::Mat System::TrackCubeMap(const std::vector<cv::Mat> &faces, const double &timestamp) {
+    // 1. Process queued IMU messages up to this timestamp
+    {
+        std::unique_lock<std::mutex> lock(mMutexImu);
+        while(!mImuQueue.empty()) {
+            IMUData d = mImuQueue.front();
+            if (d.timestamp > timestamp) break;
+
+            // Pass to tracker preintegrator
+            // mpTracker->GrabIMU(d.data, d.timestamp, d.type);
+            mImuQueue.pop();
+        }
+    }
+
     return mpTracker->GrabImageCubeMap(faces, timestamp);
 }
 
 void System::ProcessIMU(const cv::Point3f &data, const double &timestamp, int type) {
-    // mpTracker->GrabIMU(data, timestamp, type);
+    std::unique_lock<std::mutex> lock(mMutexImu);
+    IMUData d;
+    d.data = data;
+    d.timestamp = timestamp;
+    d.type = type;
+    mImuQueue.push(d);
 }
 
 void System::SaveMap(const std::string &filename) {
@@ -102,10 +120,11 @@ void System::Reset() {
     if (mpTracker) {
         mpTracker->Reset();
     }
-    // Need to clear Map, KeyFrameDatabase, etc.
-    // For blueprint, we assume Map and Database have Clear() methods
-    // mpMap->Clear();
-    // mpKeyFrameDatabase->Clear();
+    {
+        std::unique_lock<std::mutex> lock(mMutexImu);
+        std::queue<IMUData> empty;
+        std::swap(mImuQueue, empty);
+    }
     std::cout << "System Reset" << std::endl;
 }
 

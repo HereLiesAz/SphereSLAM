@@ -6,6 +6,7 @@
 #include <opencv2/core/core.hpp>
 #include <vector>
 #include <mutex>
+#include <queue>
 
 #include "Tracking.h"
 #include "GeometricCamera.h"
@@ -26,6 +27,12 @@ public:
         RGBD = 2,
         IMU_MONOCULAR = 3,
         IMU_STEREO = 4
+    };
+
+    struct IMUData {
+        cv::Point3f data;
+        double timestamp;
+        int type; // 0: Accel, 1: Gyro
     };
 
     System(const std::string &strVocFile, const std::string &strSettingsFile, const eSensor sensor, const bool bUseViewer = true);
@@ -77,6 +84,10 @@ private:
     // Threads
     std::thread* mptLocalMapping;
     std::thread* mptLoopClosing;
+
+    // IMU Buffer
+    std::queue<IMUData> mImuQueue;
+    std::mutex mMutexImu;
 };
 
 #endif // SYSTEM_H

@@ -10,12 +10,14 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.media.Image
 import android.os.Bundle
+import android.os.PowerManager
 import android.util.Log
 import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.Window
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
@@ -43,6 +45,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        // Sustained Performance Mode
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+            window.setSustainedPerformanceMode(true)
+        }
 
         surfaceView = findViewById(R.id.surfaceView)
         surfaceView.holder.addCallback(this)
