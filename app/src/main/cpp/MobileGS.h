@@ -28,6 +28,9 @@ public:
     // Update the virtual camera pose
     void updateCamera(const glm::mat4& viewMatrix, const glm::mat4& projectionMatrix);
 
+    // Handle user input to offset the camera
+    void handleInput(float dx, float dy);
+
     // Add new gaussians to the scene
     void addGaussians(const std::vector<Gaussian>& newGaussians);
 
@@ -37,6 +40,9 @@ public:
 private:
     std::vector<Gaussian> sceneGaussians;
     ANativeWindow* mWindow;
+
+    glm::vec3 mUserOffset;
+    glm::vec3 mUserRotation;
 
     // OpenGL/Vulkan resources (buffers, shaders)
     // For blueprint, we assume these exist

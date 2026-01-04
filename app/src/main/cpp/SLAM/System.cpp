@@ -56,8 +56,15 @@ void System::ProcessIMU(const cv::Point3f &data, const double &timestamp, int ty
 
 void System::SaveMap(const std::string &filename) {
     if (mpMap) {
-        // mpMap->Serialize(filename);
+        mpMap->Serialize(filename);
     }
+}
+
+int System::GetTrackingState() {
+    if (mpTracker) {
+        return mpTracker->GetState();
+    }
+    return -1;
 }
 
 void System::Shutdown() {

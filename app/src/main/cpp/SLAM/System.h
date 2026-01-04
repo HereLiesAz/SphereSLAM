@@ -46,6 +46,8 @@ public:
     // New: Save Map
     void SaveMap(const std::string &filename);
 
+    int GetTrackingState();
+
     void Shutdown();
 
 private:

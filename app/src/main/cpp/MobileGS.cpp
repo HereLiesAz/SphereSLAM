@@ -49,7 +49,7 @@ void main() {
 }
 )";
 
-MobileGS::MobileGS() : mWindow(nullptr) {
+MobileGS::MobileGS() : mWindow(nullptr), mUserOffset(0.0f), mUserRotation(0.0f) {
 }
 
 MobileGS::~MobileGS() {
@@ -84,8 +84,18 @@ void MobileGS::setWindow(ANativeWindow* window) {
 }
 
 void MobileGS::updateCamera(const glm::mat4& viewMatrix, const glm::mat4& projectionMatrix) {
-    // glUniformMatrix4fv(viewLoc, 1, GL_FALSE, &viewMatrix[0][0]);
+    // Apply user offset/rotation to viewMatrix here
+    // glm::mat4 finalView = glm::translate(viewMatrix, mUserOffset);
+    // ... apply rotation ...
+
+    // glUniformMatrix4fv(viewLoc, 1, GL_FALSE, &finalView[0][0]);
     // glUniformMatrix4fv(projLoc, 1, GL_FALSE, &projectionMatrix[0][0]);
+}
+
+void MobileGS::handleInput(float dx, float dy) {
+    // Basic orbit/pan logic
+    mUserRotation.y += dx * 0.01f;
+    mUserRotation.x += dy * 0.01f;
 }
 
 void MobileGS::addGaussians(const std::vector<Gaussian>& newGaussians) {

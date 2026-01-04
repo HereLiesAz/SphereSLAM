@@ -115,10 +115,30 @@ Java_com_example_sphereslam_MainActivity_renderFrame(JNIEnv* env, jobject thiz) 
 
         // Convert cv::Mat to glm::mat4
         // Logic to convert Tcw to View Matrix
-        glm::mat4 viewMatrix(1.0f); // Identity placeholder
-        glm::mat4 projMatrix(1.0f); // Identity placeholder
+        // For Blueprint: Assuming pose is View Matrix or Inverse View Matrix
+        // Need to convert OpenCV coordinate system to OpenGL
+        glm::mat4 viewMatrix(1.0f);
+
+        // Populate viewMatrix from pose (stub)
+
+        glm::mat4 projMatrix(1.0f); // Identity placeholder or perspective setup
 
         renderer->updateCamera(viewMatrix, projMatrix);
         renderer->draw();
     }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_sphereslam_MainActivity_manipulateView(JNIEnv* env, jobject thiz, jfloat dx, jfloat dy) {
+    if (renderer) {
+        renderer->handleInput(dx, dy);
+    }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_example_sphereslam_MainActivity_getTrackingState(JNIEnv* env, jobject thiz) {
+    if (slamSystem) {
+        return slamSystem->GetTrackingState();
+    }
+    return -1;
 }

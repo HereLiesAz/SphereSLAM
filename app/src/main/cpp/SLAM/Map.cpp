@@ -1,4 +1,6 @@
 #include "Map.h"
+#include <fstream>
+#include <iostream>
 
 Map::Map() {
 }
@@ -29,5 +31,28 @@ void Map::SetReferenceMapPoints(const std::vector<MapPoint*> &vpMPs) {
 }
 
 void Map::Serialize(const std::string& filename) {
-    // Stub implementation
+    std::unique_lock<std::mutex> lock(mMutexMap);
+    std::ofstream f(filename);
+    if (!f.is_open()) return;
+
+    // Header
+    f << "Map v1.0" << std::endl;
+    f << "KeyFrames: " << mspKeyFrames.size() << std::endl;
+    f << "MapPoints: " << mspMapPoints.size() << std::endl;
+
+    // Save KeyFrames
+    for (auto kf : mspKeyFrames) {
+        cv::Mat Tcw = kf->GetPose();
+        f << "KF " << kf->mnId << " " << kf->mTimeStamp << std::endl;
+        // ... Save Pose ...
+    }
+
+    // Save MapPoints
+    for (auto mp : mspMapPoints) {
+        cv::Point3f pos = mp->GetWorldPos();
+        f << "MP " << mp->mnId << " " << pos.x << " " << pos.y << " " << pos.z << std::endl;
+    }
+
+    f.close();
+    std::cout << "Map serialized to " << filename << std::endl;
 }

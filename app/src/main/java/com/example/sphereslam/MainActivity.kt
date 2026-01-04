@@ -12,6 +12,7 @@ import android.media.Image
 import android.os.Bundle
 import android.util.Log
 import android.view.Choreographer
+import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -33,6 +34,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     private lateinit var fpsText: TextView
     private var lastFrameTime = 0L
 
+    // Touch handling
+    private var lastTouchX = 0f
+    private var lastTouchY = 0f
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -46,9 +51,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
 
         cameraManager = SphereCameraManager(this) { image ->
             // Callback from CameraManager with new frame
-            // In a real app, we would get the address of the ByteBuffer or Surface
-            // For this blueprint, we assume we pass the address of the underlying Mat or Buffer
-            // We use a timestamp as a proxy for verification
             processFrame(0L, image.timestamp.toDouble())
             image.close()
         }
@@ -87,6 +89,31 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         cameraManager.stopBackgroundThread()
         sensorManager.unregisterListener(this)
         super.onPause()
+    }
+
+    override fun onTouchEvent(event: MotionEvent?): Boolean {
+        event?.let {
+            val x = it.x
+            val y = it.y
+
+            when (it.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    lastTouchX = x
+                    lastTouchY = y
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = x - lastTouchX
+                    val dy = y - lastTouchY
+
+                    // Pass delta to native
+                    manipulateView(dx, dy)
+
+                    lastTouchX = x
+                    lastTouchY = y
+                }
+            }
+        }
+        return true
     }
 
     private fun startCamera() {
@@ -147,14 +174,19 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     override fun doFrame(frameTimeNanos: Long) {
         renderFrame()
 
-        // Simple FPS counter
-        if (lastFrameTime != 0L) {
-            val diff = frameTimeNanos - lastFrameTime
-            // val fps = 1_000_000_000 / diff
-            // fpsText.text = "FPS: $fps"
+        // Polling tracking state
+        val state = getTrackingState()
+        val stateStr = when(state) {
+            -1 -> "SYSTEM NOT READY"
+            0 -> "NO IMAGES"
+            1 -> "NOT INITIALIZED"
+            2 -> "TRACKING"
+            3 -> "LOST"
+            else -> "UNKNOWN"
         }
-        lastFrameTime = frameTimeNanos
+        fpsText.text = "State: $stateStr"
 
+        lastFrameTime = frameTimeNanos
         Choreographer.getInstance().postFrameCallback(this)
     }
 
@@ -165,6 +197,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     external fun processIMU(type: Int, x: Float, y: Float, z: Float, timestamp: Long)
     external fun setNativeWindow(surface: Surface?)
     external fun renderFrame()
+
+    // New methods
+    external fun manipulateView(dx: Float, dy: Float)
+    external fun getTrackingState(): Int
 
     companion object {
         init {
