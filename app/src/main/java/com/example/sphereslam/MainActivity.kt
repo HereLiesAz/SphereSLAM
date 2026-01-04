@@ -193,7 +193,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         fpsText.text = "State: $stateStr"
 
         // Update stats occasionally
-        if (frameTimeNanos % 60 == 0L) {
+        // Update stats every 30 frames for example
+        if (frameCount++ % 30 == 0) {
              statsText.text = getMapStats()
         }
 
