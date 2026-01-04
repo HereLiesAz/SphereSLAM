@@ -37,6 +37,9 @@ void LocalMapping::Run() {
             bool bStop = false;
             Optimizer::LocalBundleAdjustment(mlNewKeyFrames.empty() ? nullptr : mlNewKeyFrames.back(), &bStop, mpMap);
 
+            // Culling
+            KeyFrameCulling();
+
         } else {
             // Sleep to avoid busy wait
              usleep(3000);
@@ -86,6 +89,16 @@ void LocalMapping::MapPointCreation() {
 
 void LocalMapping::SearchInNeighbors() {
     // Stub
+}
+
+void LocalMapping::KeyFrameCulling() {
+    // Stub: Check redundant KeyFrames
+    // std::vector<KeyFrame*> vpLocalKeyFrames = ...;
+    // for(KeyFrame* pKF : vpLocalKeyFrames) {
+    //    if(pKF->Redundant()) {
+    //        pKF->SetBadFlag();
+    //    }
+    // }
 }
 
 void LocalMapping::RequestFinish() {

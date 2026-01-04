@@ -10,12 +10,15 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.media.Image
 import android.os.Bundle
+import android.os.PowerManager
 import android.util.Log
 import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.Window
+import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -32,6 +35,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
 
     private lateinit var surfaceView: SurfaceView
     private lateinit var fpsText: TextView
+    private lateinit var statsText: TextView
     private var lastFrameTime = 0L
 
     // Touch handling
@@ -42,15 +46,24 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // Sustained Performance Mode
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+            window.setSustainedPerformanceMode(true)
+        }
+
         surfaceView = findViewById(R.id.surfaceView)
         surfaceView.holder.addCallback(this)
         fpsText = findViewById(R.id.fpsText)
+        statsText = findViewById(R.id.statsText)
+
+        findViewById<Button>(R.id.resetButton).setOnClickListener {
+            resetSystem()
+        }
 
         // Initialize Native Systems
         initNative(assets)
 
         cameraManager = SphereCameraManager(this) { image ->
-            // Callback from CameraManager with new frame
             processFrame(0L, image.timestamp.toDouble())
             image.close()
         }
@@ -104,10 +117,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
                 MotionEvent.ACTION_MOVE -> {
                     val dx = x - lastTouchX
                     val dy = y - lastTouchY
-
-                    // Pass delta to native
                     manipulateView(dx, dy)
-
                     lastTouchX = x
                     lastTouchY = y
                 }
@@ -157,24 +167,20 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         // Do nothing
     }
 
-    // SurfaceHolder.Callback
     override fun surfaceCreated(holder: SurfaceHolder) {
         setNativeWindow(holder.surface)
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-        // Handle resize if needed
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         setNativeWindow(null)
     }
 
-    // Choreographer.FrameCallback
     override fun doFrame(frameTimeNanos: Long) {
         renderFrame()
 
-        // Polling tracking state
         val state = getTrackingState()
         val stateStr = when(state) {
             -1 -> "SYSTEM NOT READY"
@@ -185,6 +191,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
             else -> "UNKNOWN"
         }
         fpsText.text = "State: $stateStr"
+
+        // Update stats occasionally
+        if (frameTimeNanos % 60 == 0L) {
+             statsText.text = getMapStats()
+        }
 
         lastFrameTime = frameTimeNanos
         Choreographer.getInstance().postFrameCallback(this)
@@ -197,10 +208,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     external fun processIMU(type: Int, x: Float, y: Float, z: Float, timestamp: Long)
     external fun setNativeWindow(surface: Surface?)
     external fun renderFrame()
-
-    // New methods
     external fun manipulateView(dx: Float, dy: Float)
     external fun getTrackingState(): Int
+    external fun resetSystem()
+    external fun getMapStats(): String
 
     companion object {
         init {

@@ -5,6 +5,7 @@
 #include <GLES3/gl32.h>
 #include <glm/glm.hpp>
 #include <android/native_window.h>
+#include <mutex>
 
 // Structure for a 3D Gaussian
 struct Gaussian {
@@ -41,7 +42,12 @@ public:
     void draw();
 
 private:
-    std::vector<Gaussian> sceneGaussians;
+    // Double Buffer
+    std::vector<Gaussian> mFrontBuffer;
+    std::vector<Gaussian> mBackBuffer;
+    bool mBufferDirty;
+    std::mutex mMutexBuffer;
+
     std::vector<glm::mat4> keyFramePoses; // New: Store poses for visualization
     ANativeWindow* mWindow;
 

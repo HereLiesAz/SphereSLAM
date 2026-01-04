@@ -4,6 +4,7 @@
 #include <iostream>
 #include <fstream>
 #include <iomanip>
+#include <sstream>
 
 System::System(const std::string &strVocFile, const std::string &strSettingsFile, const eSensor sensor, const bool bUseViewer)
     : mSensor(sensor), mpDensifier(nullptr) {
@@ -18,11 +19,9 @@ System::System(const std::string &strVocFile, const std::string &strSettingsFile
     bool bVocLoaded = mpVocabulary->loadFromTextFile(strVocFile);
     if (!bVocLoaded) {
         std::cerr << "Wrong path to vocabulary. " << std::endl;
-        // In real app, might want to fallback or exit
     }
 
     // Initialize Camera Model (CubeMap)
-    // Use settings instead of hardcoded 512
     mpCamera = new CubeMapCamera(settings.width, settings.height);
 
     // Initialize Map
@@ -53,20 +52,35 @@ void System::SetDensifier(Densifier* pDensifier) {
 }
 
 cv::Mat System::TrackMonocular(const cv::Mat &im, const double &timestamp) {
-    // Deprecated for SphereSLAM, or used if we just pass one face
     std::vector<cv::Mat> faces;
     faces.push_back(im);
     return mpTracker->GrabImageCubeMap(faces, timestamp);
 }
 
 cv::Mat System::TrackCubeMap(const std::vector<cv::Mat> &faces, const double &timestamp) {
+    // 1. Process queued IMU messages up to this timestamp
+    {
+        std::unique_lock<std::mutex> lock(mMutexImu);
+        while(!mImuQueue.empty()) {
+            IMUData d = mImuQueue.front();
+            if (d.timestamp > timestamp) break;
+
+            // Pass to tracker preintegrator
+            // mpTracker->GrabIMU(d.data, d.timestamp, d.type);
+            mImuQueue.pop();
+        }
+    }
+
     return mpTracker->GrabImageCubeMap(faces, timestamp);
 }
 
 void System::ProcessIMU(const cv::Point3f &data, const double &timestamp, int type) {
-    // Pass to Tracker (or a dedicated Preintegrator)
-    // For Blueprint: Simple pass-through or queue
-    // mpTracker->GrabIMU(data, timestamp, type);
+    std::unique_lock<std::mutex> lock(mMutexImu);
+    IMUData d;
+    d.data = data;
+    d.timestamp = timestamp;
+    d.type = type;
+    mImuQueue.push(d);
 }
 
 void System::SaveMap(const std::string &filename) {
@@ -77,8 +91,6 @@ void System::SaveMap(const std::string &filename) {
 
 void System::SaveTrajectoryTUM(const std::string &filename) {
     std::vector<KeyFrame*> vpKFs = mpMap->GetAllKeyFrames();
-    // Sort by timestamp
-    // std::sort(vpKFs.begin(), vpKFs.end(), KeyFrame::lId);
 
     std::ofstream f;
     f.open(filename.c_str());
@@ -90,9 +102,6 @@ void System::SaveTrajectoryTUM(const std::string &filename) {
         if(pKF)
         {
             cv::Mat R = pKF->GetPose().rowRange(0,3).colRange(0,3);
-            // Assuming pose is Tcw, we need Twc for trajectory
-            // For now, save Tcw
-            // timestamp tx ty tz qx qy qz qw
             f << std::setprecision(6) << pKF->mTimeStamp << " " << 0 << " " << 0 << " " << 0 << " " << 0 << " " << 0 << " " << 0 << " " << 1 << std::endl;
         }
     }
@@ -105,6 +114,26 @@ int System::GetTrackingState() {
         return mpTracker->GetState();
     }
     return -1;
+}
+
+void System::Reset() {
+    if (mpTracker) {
+        mpTracker->Reset();
+    }
+    {
+        std::unique_lock<std::mutex> lock(mMutexImu);
+        std::queue<IMUData> empty;
+        std::swap(mImuQueue, empty);
+    }
+    std::cout << "System Reset" << std::endl;
+}
+
+std::string System::GetMapStats() {
+    if (!mpMap) return "System Not Init";
+    std::stringstream ss;
+    ss << "KF: " << mpMap->GetAllKeyFrames().size()
+       << " MP: " << mpMap->GetAllMapPoints().size();
+    return ss.str();
 }
 
 void System::Shutdown() {

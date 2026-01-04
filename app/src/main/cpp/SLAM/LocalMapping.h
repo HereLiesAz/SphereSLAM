@@ -33,6 +33,7 @@ protected:
     void ProcessNewKeyFrame();
     void MapPointCreation();
     void SearchInNeighbors();
+    void KeyFrameCulling(); // New: Culling
 
     bool CheckNewKeyFrames();
 

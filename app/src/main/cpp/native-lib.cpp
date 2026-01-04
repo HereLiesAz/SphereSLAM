@@ -69,8 +69,6 @@ Java_com_example_sphereslam_MainActivity_processFrame(JNIEnv* env, jobject thiz,
             std::unique_lock<std::mutex> lock(mMutexPose);
             if (!Tcw.empty()) {
                 mCurrentPose = Tcw.clone();
-                // Pass keyframe to renderer if it's new (Stub logic)
-                // renderer->addKeyFrameFrustum(glm_pose);
             }
         }
     }
@@ -80,12 +78,9 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_example_sphereslam_MainActivity_processIMU(JNIEnv* env, jobject thiz, jint type, jfloat x, jfloat y, jfloat z, jlong timestamp) {
     if (slamSystem) {
         // Type 1: Accel, Type 4: Gyro (Android constants)
-        // Timestamp is nanoseconds, convert to seconds if needed or keep consistent
         double t = (double)timestamp / 1e9;
         cv::Point3f data(x, y, z);
 
-        // Map Android Sensor Types to internal enum or separate methods
-        // 1 = ACCELEROMETER, 4 = GYROSCOPE
         if (type == 1) { // Accel
              slamSystem->ProcessIMU(data, t, 0); // 0 for Accel
         } else if (type == 4) { // Gyro
@@ -115,15 +110,8 @@ Java_com_example_sphereslam_MainActivity_renderFrame(JNIEnv* env, jobject thiz) 
             pose = mCurrentPose.clone();
         }
 
-        // Convert cv::Mat to glm::mat4
-        // Logic to convert Tcw to View Matrix
-        // For Blueprint: Assuming pose is View Matrix or Inverse View Matrix
-        // Need to convert OpenCV coordinate system to OpenGL
         glm::mat4 viewMatrix(1.0f);
-
-        // Populate viewMatrix from pose (stub)
-
-        glm::mat4 projMatrix(1.0f); // Identity placeholder or perspective setup
+        glm::mat4 projMatrix(1.0f);
 
         renderer->updateCamera(viewMatrix, projMatrix);
         renderer->draw();
@@ -143,4 +131,20 @@ Java_com_example_sphereslam_MainActivity_getTrackingState(JNIEnv* env, jobject t
         return slamSystem->GetTrackingState();
     }
     return -1;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_sphereslam_MainActivity_resetSystem(JNIEnv* env, jobject thiz) {
+    if (slamSystem) {
+        slamSystem->Reset();
+    }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_example_sphereslam_MainActivity_getMapStats(JNIEnv* env, jobject thiz) {
+    std::string stats = "System not ready";
+    if (slamSystem) {
+        stats = slamSystem->GetMapStats();
+    }
+    return env->NewStringUTF(stats.c_str());
 }

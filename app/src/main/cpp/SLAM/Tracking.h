@@ -8,6 +8,7 @@
 #include "ORBextractor.h"
 #include "Map.h"
 #include "LocalMapping.h"
+#include "Initializer.h"
 
 class System;
 
@@ -29,6 +30,8 @@ public:
     void SetState(eTrackingState state);
     eTrackingState GetState();
 
+    void Reset();
+
 public:
     eTrackingState mState;
 
@@ -49,6 +52,9 @@ public:
     Map* mpMap;
     LocalMapping* mpLocalMapper;
 
+    // Initializer
+    Initializer* mpInitializer;
+
     // Pose
     cv::Mat mVelocity;
 
@@ -60,6 +66,8 @@ private:
 
     void UpdateLastFrame();
     void CreateNewKeyFrame();
+
+    void MonocularInitialization();
 };
 
 #endif // TRACKING_H

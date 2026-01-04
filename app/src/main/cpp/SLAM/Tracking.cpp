@@ -4,7 +4,7 @@
 #include <iostream>
 
 Tracking::Tracking(System* pSys, GeometricCamera* pCam, Map* pMap, LocalMapping* pLM)
-    : mpSystem(pSys), mpCamera(pCam), mpMap(pMap), mpLocalMapper(pLM), mState(NO_IMAGES_YET) {
+    : mpSystem(pSys), mpCamera(pCam), mpMap(pMap), mpLocalMapper(pLM), mState(NO_IMAGES_YET), mpInitializer(nullptr) {
 
     // Initialize ORB Extractor
     // nFeatures, scaleFactor, nLevels, iniThFAST, minThFAST
@@ -29,13 +29,7 @@ void Tracking::Track() {
     }
 
     if (mState == NOT_INITIALIZED) {
-        // Initialization Logic
-        mCurrentFrame.SetPose(cv::Mat::eye(4, 4, CV_32F));
-
-        // Create initial KeyFrame
-        CreateNewKeyFrame();
-
-        mState = OK;
+        MonocularInitialization();
         return;
     }
 
@@ -47,17 +41,58 @@ void Tracking::Track() {
              mCurrentFrame.SetPose(cv::Mat::eye(4, 4, CV_32F));
         }
 
-        // Optimize Pose
+        // Track Local Map / Optimize Pose
         Optimizer::PoseOptimization(&mCurrentFrame);
+
+        // Check if lost (stub logic)
+        // if (tracking_failed) mState = LOST;
 
         // Simple Keyframe insertion policy (every 10 frames for blueprint)
         static int frameCount = 0;
         if (frameCount++ % 10 == 0) {
             CreateNewKeyFrame();
         }
+    } else if (mState == LOST) {
+        if (Relocalization()) {
+            mState = OK;
+        }
     }
 
     UpdateLastFrame();
+}
+
+void Tracking::MonocularInitialization() {
+    if (!mpInitializer) {
+        // Set Reference Frame
+        mpInitializer = new Initializer(mCurrentFrame, 1.0f, 200);
+        return;
+    }
+
+    // Try to initialize
+    std::vector<int> matches; // Stub matches
+    cv::Mat R, t;
+    std::vector<cv::Point3f> p3d;
+    std::vector<bool> triangulated;
+
+    // Fill dummy matches
+    matches.resize(100, 1);
+
+    if (mpInitializer->Initialize(mCurrentFrame, matches, R, t, p3d, triangulated)) {
+        // Success
+        mCurrentFrame.SetPose(cv::Mat::eye(4, 4, CV_32F));
+        CreateNewKeyFrame();
+        // Create MapPoints...
+
+        mState = OK;
+    }
+}
+
+bool Tracking::Relocalization() {
+    // Stub Relocalization
+    // Attempt to find matches with KeyFrameDatabase (Bag of Words)
+    // For blueprint, we auto-recover after 1 frame
+    // std::cout << "Tracking: Relocalization successful (Stub)" << std::endl;
+    return true;
 }
 
 void Tracking::UpdateLastFrame() {
@@ -68,4 +103,21 @@ void Tracking::UpdateLastFrame() {
 void Tracking::CreateNewKeyFrame() {
     KeyFrame* pKF = new KeyFrame(mCurrentFrame, mpMap, nullptr);
     mpLocalMapper->InsertKeyFrame(pKF);
+}
+
+void Tracking::Reset() {
+    mState = NO_IMAGES_YET;
+    if (mpInitializer) {
+        delete mpInitializer;
+        mpInitializer = nullptr;
+    }
+    // Clear other state...
+}
+
+eTrackingState Tracking::GetState() {
+    return mState;
+}
+
+void Tracking::SetState(eTrackingState state) {
+    mState = state;
 }
