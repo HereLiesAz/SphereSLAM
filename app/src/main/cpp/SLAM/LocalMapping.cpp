@@ -1,9 +1,14 @@
 #include "LocalMapping.h"
+#include "LoopClosing.h"
 #include <unistd.h>
 
 LocalMapping::LocalMapping(System* pSys, Map* pMap)
-    : mpSystem(pSys), mpMap(pMap), mbFinishRequested(false), mbFinished(true)
+    : mpSystem(pSys), mpMap(pMap), mpLoopCloser(nullptr), mbFinishRequested(false), mbFinished(true)
 {
+}
+
+void LocalMapping::SetLoopCloser(LoopClosing* pLoopCloser) {
+    mpLoopCloser = pLoopCloser;
 }
 
 void LocalMapping::Run() {
@@ -62,6 +67,11 @@ void LocalMapping::ProcessNewKeyFrame() {
     mpMap->AddKeyFrame(pKF);
 
     // 4. Update Connections
+
+    // 5. Send to LoopClosing
+    if (mpLoopCloser) {
+        mpLoopCloser->InsertKeyFrame(pKF);
+    }
 }
 
 void LocalMapping::MapPointCreation() {

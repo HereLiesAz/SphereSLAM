@@ -8,10 +8,14 @@
 #include <thread>
 
 class System;
+class LoopClosing;
 
 class LocalMapping {
 public:
     LocalMapping(System* pSys, Map* pMap);
+
+    // Set Loop Closer
+    void SetLoopCloser(LoopClosing* pLoopCloser);
 
     // Main loop
     void Run();
@@ -36,6 +40,7 @@ protected:
 
     Map* mpMap;
     System* mpSystem;
+    LoopClosing* mpLoopCloser;
 
     bool mbFinishRequested;
     bool mbFinished;

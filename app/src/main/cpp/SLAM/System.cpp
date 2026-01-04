@@ -13,14 +13,24 @@ System::System(const std::string &strVocFile, const std::string &strSettingsFile
     // Initialize Map
     mpMap = new Map();
 
+    // Initialize KeyFrame Database
+    mpKeyFrameDatabase = new KeyFrameDatabase();
+
     // Initialize Local Mapping
     mpLocalMapper = new LocalMapping(this, mpMap);
+
+    // Initialize Loop Closing
+    mpLoopCloser = new LoopClosing(this, mpMap, mpKeyFrameDatabase, false);
+
+    // Connect Modules
+    mpLocalMapper->SetLoopCloser(mpLoopCloser);
 
     // Initialize Tracking
     mpTracker = new Tracking(this, mpCamera, mpMap, mpLocalMapper);
 
     // Start Threads
     mptLocalMapping = new std::thread(&LocalMapping::Run, mpLocalMapper);
+    mptLoopClosing = new std::thread(&LoopClosing::Run, mpLoopCloser);
 }
 
 cv::Mat System::TrackMonocular(const cv::Mat &im, const double &timestamp) {
@@ -36,8 +46,12 @@ cv::Mat System::TrackCubeMap(const std::vector<cv::Mat> &faces, const double &ti
 
 void System::Shutdown() {
     mpLocalMapper->RequestFinish();
+    mpLoopCloser->RequestFinish();
 
     if (mptLocalMapping) {
         mptLocalMapping->join();
+    }
+    if (mptLoopClosing) {
+        mptLoopClosing->join();
     }
 }

@@ -9,6 +9,8 @@
 #include "GeometricCamera.h"
 #include "Map.h"
 #include "LocalMapping.h"
+#include "LoopClosing.h"
+#include "KeyFrameDatabase.h"
 
 class System {
 public:
@@ -37,12 +39,15 @@ private:
     // Modules
     Tracking* mpTracker;
     LocalMapping* mpLocalMapper;
+    LoopClosing* mpLoopCloser;
     Map* mpMap;
+    KeyFrameDatabase* mpKeyFrameDatabase;
 
     GeometricCamera* mpCamera;
 
     // Threads
     std::thread* mptLocalMapping;
+    std::thread* mptLoopClosing;
 };
 
 #endif // SYSTEM_H
