@@ -1,5 +1,6 @@
 #include "Tracking.h"
 #include "Optimizer.h"
+#include "Utils/Profiler.h"
 #include <iostream>
 
 Tracking::Tracking(System* pSys, GeometricCamera* pCam, Map* pMap, LocalMapping* pLM)
@@ -11,6 +12,8 @@ Tracking::Tracking(System* pSys, GeometricCamera* pCam, Map* pMap, LocalMapping*
 }
 
 cv::Mat Tracking::GrabImageCubeMap(const std::vector<cv::Mat>& faces, const double& timestamp) {
+    Profiler p("GrabImageCubeMap");
+
     // 1. Create Frame
     mCurrentFrame = Frame(faces, timestamp, mpORBextractor, mpCamera);
 

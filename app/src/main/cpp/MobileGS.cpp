@@ -103,6 +103,10 @@ void MobileGS::addGaussians(const std::vector<Gaussian>& newGaussians) {
     // Update GPU VBO buffer logic here (glBufferSubData or MapBuffer)
 }
 
+void MobileGS::addKeyFrameFrustum(const glm::mat4& pose) {
+    keyFramePoses.push_back(pose);
+}
+
 struct DepthSorter {
     glm::vec3 camPos;
     bool operator()(const Gaussian& a, const Gaussian& b) {
@@ -119,6 +123,9 @@ void MobileGS::draw() {
 
     // Clear screen
     // glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    // Draw Frustums (Helper)
+    drawFrustums();
 
     if (sceneGaussians.empty()) {
         // eglSwapBuffers(...)
@@ -139,6 +146,12 @@ void MobileGS::draw() {
     // glDrawArrays(GL_POINTS, 0, sceneGaussians.size()); // Using Points expanded in Geometry shader or Billboards
 
     // eglSwapBuffers(...)
+}
+
+void MobileGS::drawFrustums() {
+    // Conceptually draw lines representing camera poses
+    // glLineWidth(2.0f);
+    // ...
 }
 
 void MobileGS::sortGaussians() {

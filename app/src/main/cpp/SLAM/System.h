@@ -46,6 +46,9 @@ public:
     // New: Save Map
     void SaveMap(const std::string &filename);
 
+    // New: Save Trajectory
+    void SaveTrajectoryTUM(const std::string &filename);
+
     int GetTrackingState();
 
     void Shutdown();

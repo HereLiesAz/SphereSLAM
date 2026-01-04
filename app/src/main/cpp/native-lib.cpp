@@ -69,6 +69,8 @@ Java_com_example_sphereslam_MainActivity_processFrame(JNIEnv* env, jobject thiz,
             std::unique_lock<std::mutex> lock(mMutexPose);
             if (!Tcw.empty()) {
                 mCurrentPose = Tcw.clone();
+                // Pass keyframe to renderer if it's new (Stub logic)
+                // renderer->addKeyFrameFrustum(glm_pose);
             }
         }
     }

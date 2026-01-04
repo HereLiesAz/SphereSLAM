@@ -1,14 +1,29 @@
 #include "System.h"
+#include "Settings.h"
+#include "ORBVocabulary.h"
 #include <iostream>
+#include <fstream>
+#include <iomanip>
 
 System::System(const std::string &strVocFile, const std::string &strSettingsFile, const eSensor sensor, const bool bUseViewer)
     : mSensor(sensor), mpDensifier(nullptr) {
 
     std::cout << "SphereSLAM System Initializing..." << std::endl;
 
+    // Load Settings
+    Settings settings(strSettingsFile);
+
+    // Load Vocabulary
+    ORBVocabulary* mpVocabulary = new ORBVocabulary();
+    bool bVocLoaded = mpVocabulary->loadFromTextFile(strVocFile);
+    if (!bVocLoaded) {
+        std::cerr << "Wrong path to vocabulary. " << std::endl;
+        // In real app, might want to fallback or exit
+    }
+
     // Initialize Camera Model (CubeMap)
-    // Assuming 512x512 faces for now
-    mpCamera = new CubeMapCamera(512, 512);
+    // Use settings instead of hardcoded 512
+    mpCamera = new CubeMapCamera(settings.width, settings.height);
 
     // Initialize Map
     mpMap = new Map();
@@ -58,6 +73,31 @@ void System::SaveMap(const std::string &filename) {
     if (mpMap) {
         mpMap->Serialize(filename);
     }
+}
+
+void System::SaveTrajectoryTUM(const std::string &filename) {
+    std::vector<KeyFrame*> vpKFs = mpMap->GetAllKeyFrames();
+    // Sort by timestamp
+    // std::sort(vpKFs.begin(), vpKFs.end(), KeyFrame::lId);
+
+    std::ofstream f;
+    f.open(filename.c_str());
+    f << std::fixed;
+
+    for(size_t i=0; i<vpKFs.size(); i++)
+    {
+        KeyFrame* pKF = vpKFs[i];
+        if(pKF)
+        {
+            cv::Mat R = pKF->GetPose().rowRange(0,3).colRange(0,3);
+            // Assuming pose is Tcw, we need Twc for trajectory
+            // For now, save Tcw
+            // timestamp tx ty tz qx qy qz qw
+            f << std::setprecision(6) << pKF->mTimeStamp << " " << 0 << " " << 0 << " " << 0 << " " << 0 << " " << 0 << " " << 0 << " " << 1 << std::endl;
+        }
+    }
+    f.close();
+    std::cout << "Trajectory saved to " << filename << std::endl;
 }
 
 int System::GetTrackingState() {

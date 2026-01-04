@@ -34,11 +34,15 @@ public:
     // Add new gaussians to the scene
     void addGaussians(const std::vector<Gaussian>& newGaussians);
 
+    // Visualize KeyFrames
+    void addKeyFrameFrustum(const glm::mat4& pose);
+
     // Render the scene
     void draw();
 
 private:
     std::vector<Gaussian> sceneGaussians;
+    std::vector<glm::mat4> keyFramePoses; // New: Store poses for visualization
     ANativeWindow* mWindow;
 
     glm::vec3 mUserOffset;
@@ -49,6 +53,7 @@ private:
 
     void sortGaussians(); // Radix sort on GPU
     void cullTiles();     // Tile-based culling
+    void drawFrustums();  // New: Helper to draw lines
 };
 
 #endif // MOBILE_GS_H
