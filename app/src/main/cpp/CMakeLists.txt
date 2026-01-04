@@ -42,6 +42,7 @@ add_library( # Sets the name of the library.
              SLAM/LocalMapping.cpp
              SLAM/LoopClosing.cpp
              SLAM/KeyFrameDatabase.cpp
+             SLAM/Optimizer.cpp
              )
 
 # Searches for a specified prebuilt library and stores the path as a

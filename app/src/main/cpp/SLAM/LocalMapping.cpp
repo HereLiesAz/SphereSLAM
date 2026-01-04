@@ -1,5 +1,6 @@
 #include "LocalMapping.h"
 #include "LoopClosing.h"
+#include "Optimizer.h"
 #include <unistd.h>
 
 LocalMapping::LocalMapping(System* pSys, Map* pMap)
@@ -31,6 +32,11 @@ void LocalMapping::Run() {
 
             // Search neighbors
             SearchInNeighbors();
+
+            // Local Bundle Adjustment
+            bool bStop = false;
+            Optimizer::LocalBundleAdjustment(mlNewKeyFrames.empty() ? nullptr : mlNewKeyFrames.back(), &bStop, mpMap);
+
         } else {
             // Sleep to avoid busy wait
              usleep(3000);

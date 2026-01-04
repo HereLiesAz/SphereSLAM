@@ -1,4 +1,5 @@
 #include "Tracking.h"
+#include "Optimizer.h"
 #include <iostream>
 
 Tracking::Tracking(System* pSys, GeometricCamera* pCam, Map* pMap, LocalMapping* pLM)
@@ -36,12 +37,15 @@ void Tracking::Track() {
     }
 
     if (mState == OK) {
-        // Stub: Just propagate pose
+        // Propagate pose (Motion Model)
         if (!mLastFrame.mTcw.empty()) {
             mCurrentFrame.SetPose(mLastFrame.mTcw);
         } else {
              mCurrentFrame.SetPose(cv::Mat::eye(4, 4, CV_32F));
         }
+
+        // Optimize Pose
+        Optimizer::PoseOptimization(&mCurrentFrame);
 
         // Simple Keyframe insertion policy (every 10 frames for blueprint)
         static int frameCount = 0;

@@ -1,4 +1,5 @@
 #include "LoopClosing.h"
+#include "Optimizer.h"
 #include <unistd.h>
 
 LoopClosing::LoopClosing(System* pSys, Map* pMap, KeyFrameDatabase* pDB, bool bFixScale)
@@ -72,4 +73,6 @@ bool LoopClosing::ComputeSim3() {
 
 void LoopClosing::CorrectLoop() {
     // Stub
+    bool bStop = false;
+    Optimizer::GlobalBundleAdjustment(mpMap, 20, &bStop, 0, false);
 }
