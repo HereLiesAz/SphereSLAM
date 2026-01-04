@@ -1,92 +1,48 @@
-#ifndef OPENCV_CORE_HPP
-#define OPENCV_CORE_HPP
+/*M///////////////////////////////////////////////////////////////////////////////////////
+//
+//  IMPORTANT: READ BEFORE DOWNLOADING, COPYING, INSTALLING OR USING.
+//
+//  By downloading, copying, installing or using the software you agree to this license.
+//  If you do not agree to this license, do not download, install,
+//  copy or use the software.
+//
+//
+//                          License Agreement
+//                For Open Source Computer Vision Library
+//
+// Copyright (C) 2000-2008, Intel Corporation, all rights reserved.
+// Copyright (C) 2009, Willow Garage Inc., all rights reserved.
+// Copyright (C) 2013, OpenCV Foundation, all rights reserved.
+// Third party copyrights are property of their respective owners.
+//
+// Redistribution and use in source and binary forms, with or without modification,
+// are permitted provided that the following conditions are met:
+//
+//   * Redistribution's of source code must retain the above copyright notice,
+//     this list of conditions and the following disclaimer.
+//
+//   * Redistribution's in binary form must reproduce the above copyright notice,
+//     this list of conditions and the following disclaimer in the documentation
+//     and/or other materials provided with the distribution.
+//
+//   * The name of the copyright holders may not be used to endorse or promote products
+//     derived from this software without specific prior written permission.
+//
+// This software is provided by the copyright holders and contributors "as is" and
+// any express or implied warranties, including, but not limited to, the implied
+// warranties of merchantability and fitness for a particular purpose are disclaimed.
+// In no event shall the Intel Corporation or contributors be liable for any direct,
+// indirect, incidental, special, exemplary, or consequential damages
+// (including, but not limited to, procurement of substitute goods or services;
+// loss of use, data, or profits; or business interruption) however caused
+// and on any theory of liability, whether in contract, strict liability,
+// or tort (including negligence or otherwise) arising in any way out of
+// the use of this software, even if advised of the possibility of such damage.
+//
+//M*/
 
-#include <vector>
-#include <iostream>
-
-namespace cv {
-
-class Mat {
-public:
-    int rows, cols;
-
-    // Stub data storage to allow .at() to work without crashing immediately in tests
-    // In reality this would be managed memory
-    float stub_data[16];
-
-    Mat() : rows(0), cols(0) {}
-    Mat(int r, int c, int type) : rows(r), cols(c) {
-        for(int i=0; i<16; ++i) stub_data[i] = 0;
-    }
-
-    static Mat eye(int rows, int cols, int type) {
-        Mat m(rows, cols, type);
-        for(int i=0; i<std::min(rows,cols) && i<4; ++i) m.at<float>(i,i) = 1.0f;
-        return m;
-    }
-
-    static Mat zeros(int rows, int cols, int type) { return Mat(rows, cols, type); }
-
-    Mat clone() const { return *this; }
-    bool empty() const { return rows == 0 || cols == 0; }
-
-    template<typename T>
-    T& at(int r, int c) {
-        // Safe-ish stub access for 4x4 matrices
-        int idx = r * cols + c;
-        if (idx >= 0 && idx < 16) return (T&)stub_data[idx];
-        static T dummy; return dummy;
-    }
-
-    template<typename T>
-    const T& at(int r, int c) const {
-        int idx = r * cols + c;
-        if (idx >= 0 && idx < 16) return (const T&)stub_data[idx];
-        static T dummy; return dummy;
-    }
-
-    Mat rowRange(int start, int end) const { return *this; } // Stub returns self
-    Mat colRange(int start, int end) const { return *this; } // Stub returns self
-    Mat col(int c) const { return *this; } // Stub returns self
-    Mat t() const { return *this; } // Stub returns self (Identity transpose is Identity)
-
-    void copyTo(Mat m) const {}
-
-    // Stub multiplication
-    Mat operator*(const Mat& other) const { return *this; }
-    Mat operator-() const { return *this; }
-};
-
-class Point2f {
-public:
-    float x, y;
-    Point2f(float _x, float _y) : x(_x), y(_y) {}
-};
-
-class Point3f {
-public:
-    float x, y, z;
-    Point3f() : x(0), y(0), z(0) {}
-    Point3f(float _x, float _y, float _z) : x(_x), y(_y), z(_z) {}
-};
-
-class KeyPoint {
-public:
-    float pt_x, pt_y;
-    float size;
-    float angle;
-    float response;
-    int octave;
-    int class_id;
-
-    KeyPoint() : pt_x(0), pt_y(0), size(0), angle(-1), response(0), octave(0), class_id(-1) {}
-    KeyPoint(float x, float y, float _size, float _angle=-1, float _response=0, int _octave=0, int _class_id=-1)
-        : pt_x(x), pt_y(y), size(_size), angle(_angle), response(_response), octave(_octave), class_id(_class_id) {}
-};
-
-#define CV_32F 5
-#define CV_8U 0
-
-}
-
+#ifdef __OPENCV_BUILD
+#error this is a compatibility header which should not be used inside the OpenCV library
 #endif
+
+#include "opencv2/core.hpp"
