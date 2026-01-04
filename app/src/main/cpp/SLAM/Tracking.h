@@ -6,6 +6,8 @@
 #include "Frame.h"
 #include "GeometricCamera.h"
 #include "ORBextractor.h"
+#include "Map.h"
+#include "LocalMapping.h"
 
 class System;
 
@@ -19,7 +21,7 @@ public:
         LOST=3
     };
 
-    Tracking(System* pSys, GeometricCamera* pCam);
+    Tracking(System* pSys, GeometricCamera* pCam, Map* pMap, LocalMapping* pLM);
 
     // Main tracking function for CubeMap
     cv::Mat GrabImageCubeMap(const std::vector<cv::Mat>& faces, const double& timestamp);
@@ -43,6 +45,10 @@ public:
     // System
     System* mpSystem;
 
+    // Map
+    Map* mpMap;
+    LocalMapping* mpLocalMapper;
+
     // Pose
     cv::Mat mVelocity;
 
@@ -53,6 +59,7 @@ private:
     bool Relocalization();
 
     void UpdateLastFrame();
+    void CreateNewKeyFrame();
 };
 
 #endif // TRACKING_H

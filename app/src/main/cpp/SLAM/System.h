@@ -7,6 +7,8 @@
 
 #include "Tracking.h"
 #include "GeometricCamera.h"
+#include "Map.h"
+#include "LocalMapping.h"
 
 class System {
 public:
@@ -34,7 +36,13 @@ private:
 
     // Modules
     Tracking* mpTracker;
+    LocalMapping* mpLocalMapper;
+    Map* mpMap;
+
     GeometricCamera* mpCamera;
+
+    // Threads
+    std::thread* mptLocalMapping;
 };
 
 #endif // SYSTEM_H
