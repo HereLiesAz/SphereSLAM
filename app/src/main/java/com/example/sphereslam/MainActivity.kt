@@ -61,7 +61,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         }
 
         // Initialize Native Systems
-        initNative(assets)
+        initNative(assets, cacheDir.absolutePath)
 
         cameraManager = SphereCameraManager(this) { image ->
             processFrame(0L, image.timestamp.toDouble())
