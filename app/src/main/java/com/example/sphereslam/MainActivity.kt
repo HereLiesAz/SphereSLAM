@@ -61,7 +61,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         }
 
         // Initialize Native Systems
-        initNative(assets)
+        initNative(assets, cacheDir.absolutePath)
 
         cameraManager = SphereCameraManager(this) { image ->
             processFrame(0L, image.timestamp.toDouble())
@@ -193,7 +193,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         fpsText.text = "State: $stateStr"
 
         // Update stats occasionally
-        if (frameTimeNanos % 60 == 0L) {
+        // Update stats every 30 frames for example
+        if (frameCount++ % 30 == 0) {
              statsText.text = getMapStats()
         }
 
@@ -217,6 +218,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         init {
             System.loadLibrary("sphereslam")
         }
-        private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        // Removed WRITE_EXTERNAL_STORAGE as it's not in Manifest anymore
+        private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
     }
 }

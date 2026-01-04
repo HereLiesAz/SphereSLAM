@@ -47,6 +47,20 @@ System::System(const std::string &strVocFile, const std::string &strSettingsFile
     mptLoopClosing = new std::thread(&LoopClosing::Run, mpLoopCloser);
 }
 
+System::~System() {
+    Shutdown();
+
+    if (mpTracker) delete mpTracker;
+    if (mpLocalMapper) delete mpLocalMapper;
+    if (mpLoopCloser) delete mpLoopCloser;
+    if (mpMap) delete mpMap;
+    if (mpKeyFrameDatabase) delete mpKeyFrameDatabase;
+    if (mpCamera) delete mpCamera;
+
+    if (mptLocalMapping) delete mptLocalMapping;
+    if (mptLoopClosing) delete mptLoopClosing;
+}
+
 void System::SetDensifier(Densifier* pDensifier) {
     mpDensifier = pDensifier;
 }
@@ -137,13 +151,13 @@ std::string System::GetMapStats() {
 }
 
 void System::Shutdown() {
-    mpLocalMapper->RequestFinish();
-    mpLoopCloser->RequestFinish();
+    if (mpLocalMapper) mpLocalMapper->RequestFinish();
+    if (mpLoopCloser) mpLoopCloser->RequestFinish();
 
-    if (mptLocalMapping) {
+    if (mptLocalMapping && mptLocalMapping->joinable()) {
         mptLocalMapping->join();
     }
-    if (mptLoopClosing) {
+    if (mptLoopClosing && mptLoopClosing->joinable()) {
         mptLoopClosing->join();
     }
 }

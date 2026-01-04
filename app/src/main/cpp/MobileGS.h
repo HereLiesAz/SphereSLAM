@@ -51,6 +51,9 @@ private:
     std::vector<glm::mat4> keyFramePoses; // New: Store poses for visualization
     ANativeWindow* mWindow;
 
+    // Camera State
+    glm::mat4 mViewMatrix;
+    glm::mat4 mProjMatrix;
     glm::vec3 mUserOffset;
     glm::vec3 mUserRotation;
 

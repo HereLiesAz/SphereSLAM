@@ -33,38 +33,56 @@ Java_com_example_sphereslam_MainActivity_stringFromJNI(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_example_sphereslam_MainActivity_initNative(JNIEnv* env, jobject thiz, jobject assetManager) {
+Java_com_example_sphereslam_MainActivity_initNative(JNIEnv* env, jobject thiz, jobject assetManager, jstring cacheDir) {
     AAssetManager* mgr = AAssetManager_fromJava(env, assetManager);
+
+    // Convert cacheDir to string
+    const char *path = env->GetStringUTFChars(cacheDir, 0);
+    std::string strCacheDir(path);
+    env->ReleaseStringUTFChars(cacheDir, path);
 
     // Initialize Subsystems
     vulkanCompute = new VulkanCompute(mgr);
     vulkanCompute->initialize();
 
     depthEstimator = new DepthAnyCamera(mgr);
-    // depthEstimator->initialize(); // Uncomment when model is available
+    // Pass cache dir for model extraction
+    // depthEstimator->initialize(strCacheDir); // Update signature
 
     renderer = new MobileGS();
     renderer->initialize();
 
     // Initialize SLAM System
-    // VocFile and SettingsFile would be paths to assets extracted to cache
-    slamSystem = new System("", "", System::IMU_MONOCULAR, false); // Enable IMU mode
+    slamSystem = new System("", "", System::IMU_MONOCULAR, false);
 
-    __android_log_print(ANDROID_LOG_INFO, TAG, "Native Systems Initialized");
+    __android_log_print(ANDROID_LOG_INFO, TAG, "Native Systems Initialized with Cache Dir: %s", strCacheDir.c_str());
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_example_sphereslam_MainActivity_processFrame(JNIEnv* env, jobject thiz, jlong matAddr, jdouble timestamp) {
     if (slamSystem && vulkanCompute) {
+        // Pipeline: Input -> Vulkan (Equirect to Cubemap) -> SLAM
+
+        // 1. Process Input Image on GPU
+        // In a real implementation, matAddr might be a AHardwareBuffer or TextureID
+        vulkanCompute->processImage((void*)matAddr, 3840, 1920); // Assume 4K equirect input
+
+        // 2. Retrieve Output Faces
+        // Conceptual: Get 6 cv::Mat or buffers from VulkanCompute output
         std::vector<cv::Mat> faces;
+        // Mocking the output:
+        // for(int i=0; i<6; ++i) faces.push_back(vulkanCompute->getOutputFace(i));
+
+        // For Blueprint: If matAddr is valid, we push it as a dummy face to keep pipeline moving
         if (matAddr != 0) {
             cv::Mat* pMat = (cv::Mat*)matAddr;
-            // faces.push_back(*pMat);
+            faces.push_back(*pMat);
         }
 
+        // 3. Track
         cv::Mat Tcw = slamSystem->TrackCubeMap(faces, timestamp);
 
-        // Update Pose for Renderer
+        // 4. Update Pose for Renderer
         {
             std::unique_lock<std::mutex> lock(mMutexPose);
             if (!Tcw.empty()) {
@@ -77,14 +95,13 @@ Java_com_example_sphereslam_MainActivity_processFrame(JNIEnv* env, jobject thiz,
 extern "C" JNIEXPORT void JNICALL
 Java_com_example_sphereslam_MainActivity_processIMU(JNIEnv* env, jobject thiz, jint type, jfloat x, jfloat y, jfloat z, jlong timestamp) {
     if (slamSystem) {
-        // Type 1: Accel, Type 4: Gyro (Android constants)
         double t = (double)timestamp / 1e9;
         cv::Point3f data(x, y, z);
 
         if (type == 1) { // Accel
-             slamSystem->ProcessIMU(data, t, 0); // 0 for Accel
+             slamSystem->ProcessIMU(data, t, 0);
         } else if (type == 4) { // Gyro
-             slamSystem->ProcessIMU(data, t, 1); // 1 for Gyro
+             slamSystem->ProcessIMU(data, t, 1);
         }
     }
 }
@@ -103,7 +120,6 @@ Java_com_example_sphereslam_MainActivity_setNativeWindow(JNIEnv* env, jobject th
 extern "C" JNIEXPORT void JNICALL
 Java_com_example_sphereslam_MainActivity_renderFrame(JNIEnv* env, jobject thiz) {
     if (renderer) {
-        // Get latest pose
         cv::Mat pose;
         {
             std::unique_lock<std::mutex> lock(mMutexPose);

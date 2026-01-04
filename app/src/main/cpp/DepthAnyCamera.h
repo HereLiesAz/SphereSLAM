@@ -11,12 +11,24 @@ namespace tflite {
     class FlatBufferModel;
 }
 
+// Mock TFLite C API Types
+typedef struct TfLiteModel TfLiteModel;
+typedef struct TfLiteInterpreterOptions TfLiteInterpreterOptions;
+typedef struct TfLiteInterpreter TfLiteInterpreter;
+typedef struct TfLiteTensor TfLiteTensor;
+
+struct DacState {
+    TfLiteModel* model = nullptr;
+    TfLiteInterpreter* interpreter = nullptr;
+    TfLiteInterpreterOptions* options = nullptr;
+};
+
 class DepthAnyCamera {
 public:
     DepthAnyCamera(AAssetManager* assetManager);
     ~DepthAnyCamera();
 
-    bool initialize();
+    bool initialize(const std::string& cacheDir);
 
     // Run inference on an equirectangular image
     // Input: RGB byte buffer (or AHardwareBuffer)
@@ -25,8 +37,7 @@ public:
 
 private:
     AAssetManager* assetManager;
-    // std::unique_ptr<tflite::FlatBufferModel> model;
-    // std::unique_ptr<tflite::Interpreter> interpreter;
+    DacState dacCtx;
 
     const std::string MODEL_FILENAME = "dac_360_int8.tflite";
 };

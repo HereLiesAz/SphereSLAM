@@ -53,9 +53,19 @@ void Frame::SetPose(cv::Mat Tcw) {
 
 cv::Mat Frame::GetPoseInverse() {
     // Rigid body transformation inverse
-    // R^T | -R^T * t
-    // 0   | 1
+    // T = [R | t]
+    // T_inv = [R^T | -R^T * t]
 
-    // Stub:
-    return cv::Mat::eye(4,4, CV_32F);
+    if (mTcw.empty()) return cv::Mat::eye(4,4, CV_32F);
+
+    cv::Mat Rwc = mTcw.rowRange(0,3).colRange(0,3).t();
+    cv::Mat twc = -Rwc * mTcw.rowRange(0,3).col(3);
+
+    cv::Mat Twc = cv::Mat::eye(4,4, CV_32F);
+    // Copy Rwc
+    Rwc.copyTo(Twc.rowRange(0,3).colRange(0,3));
+    // Copy twc
+    twc.copyTo(Twc.rowRange(0,3).col(3));
+
+    return Twc;
 }

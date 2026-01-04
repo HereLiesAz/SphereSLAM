@@ -10,8 +10,6 @@ public:
     virtual ~GeometricCamera() {}
     virtual cv::Point2f Project(const cv::Point3f &p3D) = 0;
     virtual cv::Point3f Unproject(const cv::Point2f &p2D) = 0;
-
-    // Additional methods for Jacobians etc. would go here
 };
 
 class CubeMapCamera : public GeometricCamera {
@@ -24,7 +22,7 @@ public:
         cy = h / 2.0f;
     }
 
-    // 0: Right, 1: Left, 2: Top, 3: Bottom, 4: Front, 5: Back
+    // 0: Right (+X), 1: Left (-X), 2: Top (+Y), 3: Bottom (-Y), 4: Front (+Z), 5: Back (-Z)
     int GetFace(const cv::Point3f &p3D) {
         float absX = std::abs(p3D.x);
         float absY = std::abs(p3D.y);
@@ -43,30 +41,38 @@ public:
         // 1. Determine Face
         int face = GetFace(p3D);
 
-        // 2. Rotate to Face Local Frame
+        // 2. Rotate to Face Local Frame (OpenGL Cubemap convention)
+        // Note: OpenGL cubemap convention:
+        // +X (0): sc=-z, tc=-y, ma=x
+        // -X (1): sc=z,  tc=-y, ma=abs(x)
+        // +Y (2): sc=x,  tc=z,  ma=y
+        // -Y (3): sc=x,  tc=-z, ma=abs(y)
+        // +Z (4): sc=x,  tc=-y, ma=z
+        // -Z (5): sc=-x, tc=-y, ma=abs(z)
+
         cv::Point3f pLocal;
-        if (face == 0) pLocal = cv::Point3f(-p3D.z, -p3D.y, p3D.x);       // +X (Right)
-        else if (face == 1) pLocal = cv::Point3f(p3D.z, -p3D.y, -p3D.x);  // -X (Left)
-        else if (face == 2) pLocal = cv::Point3f(p3D.x, p3D.z, p3D.y);    // +Y (Top)
-        else if (face == 3) pLocal = cv::Point3f(p3D.x, -p3D.z, -p3D.y);  // -Y (Bottom)
-        else if (face == 4) pLocal = cv::Point3f(p3D.x, -p3D.y, p3D.z);   // +Z (Front)
-        else if (face == 5) pLocal = cv::Point3f(-p3D.x, -p3D.y, -p3D.z); // -Z (Back)
+        if (face == 0)      pLocal = cv::Point3f(-p3D.z, -p3D.y, p3D.x);
+        else if (face == 1) pLocal = cv::Point3f(p3D.z,  -p3D.y, -p3D.x);
+        else if (face == 2) pLocal = cv::Point3f(p3D.x,  p3D.z,  p3D.y);
+        else if (face == 3) pLocal = cv::Point3f(p3D.x,  -p3D.z, -p3D.y);
+        else if (face == 4) pLocal = cv::Point3f(p3D.x,  -p3D.y, p3D.z);
+        else if (face == 5) pLocal = cv::Point3f(-p3D.x, -p3D.y, -p3D.z);
 
         // 3. Pinhole Projection
-        float invZ = 1.0f / pLocal.z;
-        float u = fx * pLocal.x * invZ + cx;
-        float v = fy * pLocal.y * invZ + cy;
+        // pLocal.z here corresponds to the major axis 'ma' in OpenGL terms
+        // pLocal.x corresponds to 'sc', pLocal.y corresponds to 'tc'
+        // But in pinhole math: u = fx * (x/z) + cx.
+        // So we treat pLocal.x as x, pLocal.y as y, pLocal.z as depth (z).
+        float invZ = 1.0f / std::abs(pLocal.z);
 
-        return cv::Point2f(u, v); // Note: This u,v is local to the face.
-                                  // In a real system, we might need to encode face ID in the point
-                                  // or handle it externally.
+        float u = fx * (pLocal.x * invZ) + cx;
+        float v = fy * (pLocal.y * invZ) + cy;
+
+        return cv::Point2f(u, v);
     }
 
     cv::Point3f Unproject(const cv::Point2f &p2D) override {
-        // Need Face ID to unproject.
-        // This signature assumes single image.
-        // For CubeMap, we usually pass face ID or have 6 cameras.
-        // This is a simplification.
+        // Need Face ID context, default stub
         return cv::Point3f(0,0,0);
     }
 
@@ -74,19 +80,31 @@ public:
         float u = p2D.x;
         float v = p2D.y;
 
+        // Normalized device coordinates (-1 to 1 approx, scaled by focal length)
+        // x = (u - cx) / fx
+        // y = (v - cy) / fy
         float x = (u - cx) / fx;
         float y = (v - cy) / fy;
-        float z = 1.0f;
+        float z = 1.0f; // Represents the major axis plane distance
 
-        cv::Point3f pLocal(x, y, z);
+        // Inverse of the Face Rotation
+        // We need to map (x, y, z) back to global (X, Y, Z)
+        // Based on the Project mapping:
+        // 0 (+X): x=-Z, y=-Y, z=X -> X=z, Y=-y, Z=-x
+        // 1 (-X): x=Z, y=-Y, z=-X -> X=-z, Y=-y, Z=x
+        // 2 (+Y): x=X, y=Z, z=Y   -> X=x, Y=z, Z=y
+        // 3 (-Y): x=X, y=-Z, z=-Y -> X=x, Y=-z, Z=-y
+        // 4 (+Z): x=X, y=-Y, z=Z  -> X=x, Y=-y, Z=z
+        // 5 (-Z): x=-X, y=-Y, z=-Z-> X=-x, Y=-y, Z=-z
+
         cv::Point3f pGlobal;
 
-        if (face == 0) pGlobal = cv::Point3f(pLocal.z, -pLocal.y, -pLocal.x);
-        else if (face == 1) pGlobal = cv::Point3f(-pLocal.z, -pLocal.y, pLocal.x);
-        else if (face == 2) pGlobal = cv::Point3f(pLocal.x, pLocal.z, -pLocal.y); // Check rotation
-        else if (face == 3) pGlobal = cv::Point3f(pLocal.x, -pLocal.z, -pLocal.y); // Check rotation
-        else if (face == 4) pGlobal = cv::Point3f(pLocal.x, -pLocal.y, pLocal.z);
-        else if (face == 5) pGlobal = cv::Point3f(-pLocal.x, -pLocal.y, -pLocal.z);
+        if (face == 0)      pGlobal = cv::Point3f(z, -y, -x);
+        else if (face == 1) pGlobal = cv::Point3f(-z, -y, x);
+        else if (face == 2) pGlobal = cv::Point3f(x, z, y);
+        else if (face == 3) pGlobal = cv::Point3f(x, -z, -y);
+        else if (face == 4) pGlobal = cv::Point3f(x, -y, z);
+        else if (face == 5) pGlobal = cv::Point3f(-x, -y, -z);
 
         // Normalize to unit sphere
         float norm = std::sqrt(pGlobal.x*pGlobal.x + pGlobal.y*pGlobal.y + pGlobal.z*pGlobal.z);

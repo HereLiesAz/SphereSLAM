@@ -50,6 +50,8 @@ void main() {
 )";
 
 MobileGS::MobileGS() : mWindow(nullptr), mUserOffset(0.0f), mUserRotation(0.0f), mBufferDirty(false) {
+    mViewMatrix = glm::mat4(1.0f);
+    mProjMatrix = glm::mat4(1.0f);
 }
 
 MobileGS::~MobileGS() {
@@ -73,7 +75,8 @@ void MobileGS::setWindow(ANativeWindow* window) {
 }
 
 void MobileGS::updateCamera(const glm::mat4& viewMatrix, const glm::mat4& projectionMatrix) {
-    // Apply user offset/rotation to viewMatrix here
+    mViewMatrix = viewMatrix;
+    mProjMatrix = projectionMatrix;
 }
 
 void MobileGS::handleInput(float dx, float dy) {
@@ -95,9 +98,9 @@ void MobileGS::addKeyFrameFrustum(const glm::mat4& pose) {
 struct DepthSorter {
     glm::vec3 camPos;
     bool operator()(const Gaussian& a, const Gaussian& b) {
-        float distA = glm::distance(a.position, camPos);
-        float distB = glm::distance(b.position, camPos);
-        return distA > distB; // Back-to-front
+        float distASq = glm::dot(a.position - camPos, a.position - camPos);
+        float distBSq = glm::dot(b.position - camPos, b.position - camPos);
+        return distASq > distBSq; // Back-to-front
     }
 };
 
@@ -130,7 +133,24 @@ void MobileGS::draw() {
     }
 
     // 1. Sort Gaussians (CPU Fallback)
-    glm::vec3 camPos(0, 0, 0);
+    // Extract camera position from inverse View Matrix
+    // ViewMatrix maps World -> Camera. Inverse maps Camera -> World.
+    // The translation part of Inverse View Matrix is the Camera Position in World Space.
+    // Assuming mViewMatrix is 4x4 float
+    // Inverse calculation is expensive, ideally pass Camera Position directly.
+    // For now, assume simplified view matrix structure (Rotation + Translation)
+    // C = -R^T * t
+
+    // Conceptual inverse for sorting
+    // glm::mat4 invView = glm::inverse(mViewMatrix);
+    // glm::vec3 camPos = glm::vec3(invView[3]);
+
+    // Optimization: If mViewMatrix is rigid body:
+    // camPos = -transpose(R) * t
+    glm::mat3 R = glm::mat3(mViewMatrix);
+    glm::vec3 t = glm::vec3(mViewMatrix[3]);
+    glm::vec3 camPos = -glm::transpose(R) * t;
+
     std::sort(mFrontBuffer.begin(), mFrontBuffer.end(), DepthSorter{camPos});
 
     // 2. Upload Sorted Data to GPU
@@ -143,15 +163,13 @@ void MobileGS::draw() {
 }
 
 void MobileGS::drawFrustums() {
-    // Conceptually draw lines representing camera poses
-    // glLineWidth(2.0f);
-    // ...
+    // Conceptually draw lines
 }
 
 void MobileGS::sortGaussians() {
-    // Placeholder for GPU Radix Sort
+    // Placeholder
 }
 
 void MobileGS::cullTiles() {
-    // Placeholder for Compute Shader Culling
+    // Placeholder
 }

@@ -56,7 +56,7 @@ Once dependencies are resolved:
 
 ## Usage
 
-1.  **Grant Permissions:** Allow Camera and Storage access.
+1.  **Grant Permissions:** Allow Camera access.
 2.  **Start Scanning:** The app will automatically start processing frames.
 3.  **Visualization:**
     *   The screen displays the real-time Gaussian Splat rendering of the map.
@@ -66,4 +66,4 @@ Once dependencies are resolved:
 
 ## License
 
-[License Information Here]
+This project is licensed under the [MIT License](LICENSE).

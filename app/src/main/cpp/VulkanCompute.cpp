@@ -3,7 +3,6 @@
 #include <vector>
 #include <stdexcept>
 #include <cstring>
-#include <vulkan/vulkan.h>
 
 #define TAG "VulkanCompute"
 
@@ -16,29 +15,11 @@
         } \
     } while (0)
 
-struct VulkanContext {
-    VkInstance instance;
-    VkPhysicalDevice physicalDevice;
-    VkDevice device;
-    VkQueue queue;
-    uint32_t queueFamilyIndex;
-    VkCommandPool commandPool;
-    VkCommandBuffer commandBuffer;
-
-    VkDescriptorSetLayout descriptorSetLayout;
-    VkPipelineLayout pipelineLayout;
-    VkPipeline pipeline;
-    VkDescriptorPool descriptorPool;
-    VkDescriptorSet descriptorSet;
-};
-
-VulkanContext vkCtx;
-
 VulkanCompute::VulkanCompute(AAssetManager* assetManager) : assetManager(assetManager) {
+    memset(&vkCtx, 0, sizeof(vkCtx));
 }
 
 VulkanCompute::~VulkanCompute() {
-    // Cleanup (simplified)
     if (vkCtx.device) {
         vkDeviceWaitIdle(vkCtx.device);
         vkDestroyPipeline(vkCtx.device, vkCtx.pipeline, nullptr);
@@ -74,7 +55,12 @@ void VulkanCompute::initialize() {
     vkEnumeratePhysicalDevices(vkCtx.instance, &deviceCount, nullptr);
     std::vector<VkPhysicalDevice> devices(deviceCount);
     vkEnumeratePhysicalDevices(vkCtx.instance, &deviceCount, devices.data());
-    vkCtx.physicalDevice = devices[0]; // Just pick the first one
+    if (deviceCount > 0) {
+        vkCtx.physicalDevice = devices[0];
+    } else {
+        __android_log_print(ANDROID_LOG_ERROR, TAG, "No Vulkan devices found");
+        return;
+    }
 
     // 3. Find Compute Queue
     uint32_t queueFamilyCount = 0;
@@ -127,10 +113,6 @@ void VulkanCompute::initialize() {
     __android_log_print(ANDROID_LOG_INFO, TAG, "Vulkan Compute Initialized Successfully");
 }
 
-void VulkanCompute::loadShader(const std::string& filename) {
-    // Helper used inside createComputePipeline
-}
-
 void VulkanCompute::createComputePipeline() {
     // A. Create Descriptor Set Layout
     VkDescriptorSetLayoutBinding bindings[2] = {};
@@ -162,32 +144,41 @@ void VulkanCompute::createComputePipeline() {
     VK_CHECK(vkCreatePipelineLayout(vkCtx.device, &pipelineLayoutInfo, nullptr, &vkCtx.pipelineLayout));
 
     // C. Load Shader Module
-    // Note: In production we load SPIR-V. Here we assume we have a buffer.
-    // For this blueprint, we skip the actual shader module creation since we only have GLSL source
-    // and no runtime compiler (shaderc) linked.
-    // We will simulate success to keep the logic valid.
+    AAsset* file = AAssetManager_open(assetManager, "shaders/equirect_to_cubemap.spv", AASSET_MODE_BUFFER);
+    if (file) {
+        size_t fileLength = AAsset_getLength(file);
+        char* fileContent = new char[fileLength];
+        AAsset_read(file, fileContent, fileLength);
+        AAsset_close(file);
 
-    /*
-    VkShaderModule shaderModule;
-    VkShaderModuleCreateInfo createInfo = {};
-    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    createInfo.codeSize = codeSize;
-    createInfo.pCode = (uint32_t*)codeBuffer;
-    vkCreateShaderModule(vkCtx.device, &createInfo, nullptr, &shaderModule);
+        VkShaderModule shaderModule;
+        VkShaderModuleCreateInfo createInfo = {};
+        createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        createInfo.codeSize = fileLength;
+        createInfo.pCode = reinterpret_cast<const uint32_t*>(fileContent);
 
-    VkPipelineShaderStageCreateInfo shaderStageInfo = {};
-    shaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    shaderStageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    shaderStageInfo.module = shaderModule;
-    shaderStageInfo.pName = "main";
+        if (vkCreateShaderModule(vkCtx.device, &createInfo, nullptr, &shaderModule) == VK_SUCCESS) {
+             VkPipelineShaderStageCreateInfo shaderStageInfo = {};
+            shaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            shaderStageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+            shaderStageInfo.module = shaderModule;
+            shaderStageInfo.pName = "main";
 
-    VkComputePipelineCreateInfo pipelineInfo = {};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    pipelineInfo.layout = vkCtx.pipelineLayout;
-    pipelineInfo.stage = shaderStageInfo;
+            VkComputePipelineCreateInfo pipelineInfo = {};
+            pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            pipelineInfo.layout = vkCtx.pipelineLayout;
+            pipelineInfo.stage = shaderStageInfo;
 
-    vkCreateComputePipelines(vkCtx.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &vkCtx.pipeline);
-    */
+            VK_CHECK(vkCreateComputePipelines(vkCtx.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &vkCtx.pipeline));
+
+            vkDestroyShaderModule(vkCtx.device, shaderModule, nullptr);
+        } else {
+             __android_log_print(ANDROID_LOG_ERROR, TAG, "Failed to create shader module");
+        }
+        delete[] fileContent;
+    } else {
+        __android_log_print(ANDROID_LOG_WARN, TAG, "Shader file not found (Blueprint mode)");
+    }
 }
 
 void VulkanCompute::createDescriptorSets() {
@@ -217,10 +208,24 @@ void VulkanCompute::createDescriptorSets() {
 }
 
 void VulkanCompute::processImage(void* inputBuffer, int width, int height) {
-    // This is the hot loop.
-    // 1. Update Descriptor Sets with the new inputBuffer (wrapped in VkImageView)
-    // 2. Record Command Buffer
+    if (!vkCtx.pipeline) return;
 
+    // This is the hot loop.
+
+    // 1. Update Descriptor Sets with the new inputBuffer (wrapped in VkImageView)
+    // We would need to create a VkImageView from inputBuffer and update vkCtx.descriptorSet
+
+    // Stub call to update sets (conceptual)
+    VkWriteDescriptorSet descriptorWrite = {};
+    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite.dstSet = vkCtx.descriptorSet;
+    descriptorWrite.dstBinding = 0;
+    descriptorWrite.descriptorCount = 1;
+    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+
+    // vkUpdateDescriptorSets(vkCtx.device, 1, &descriptorWrite, 0, nullptr);
+
+    // 2. Record Command Buffer
     VkCommandBufferBeginInfo beginInfo = {};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -231,7 +236,6 @@ void VulkanCompute::processImage(void* inputBuffer, int width, int height) {
     vkCmdBindDescriptorSets(vkCtx.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, vkCtx.pipelineLayout, 0, 1, &vkCtx.descriptorSet, 0, nullptr);
 
     // Dispatch: 6 faces. Workgroup size 16x16.
-    // Assuming output is e.g. 512x512 per face.
     vkCmdDispatch(vkCtx.commandBuffer, 512 / 16, 512 / 16, 6);
 
     vkEndCommandBuffer(vkCtx.commandBuffer);
@@ -244,6 +248,8 @@ void VulkanCompute::processImage(void* inputBuffer, int width, int height) {
 
     vkQueueSubmit(vkCtx.queue, 1, &submitInfo, VK_NULL_HANDLE);
     vkQueueWaitIdle(vkCtx.queue);
+}
 
-    // __android_log_print(ANDROID_LOG_INFO, TAG, "Compute Dispatched");
+void VulkanCompute::loadShader(const std::string& filename) {
+    // Helper used inside createComputePipeline
 }

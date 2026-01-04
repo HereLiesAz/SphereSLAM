@@ -6,7 +6,7 @@ KeyFrame::KeyFrame(Frame &F, Map* pMap, KeyFrameDatabase* pKFDB)
     mnId = F.mnId; // Using same ID for simplicity in blueprint
     mTcw = F.mTcw.clone();
 
-    mvpMapPoints = std::vector<MapPoint*>(F.N, static_cast<MapPoint*>(NULL));
+    mvpMapPoints = std::vector<MapPoint*>(F.N, nullptr);
 }
 
 void KeyFrame::SetPose(const cv::Mat &Tcw) {

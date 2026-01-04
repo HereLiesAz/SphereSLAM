@@ -1,18 +1,14 @@
 #include "DepthAnyCamera.h"
 #include <android/log.h>
 #include <vector>
+#include <cstdio>
+#include <fstream>
 
 // Note: In a real environment, we would include the TFLite C API headers
 // #include "tensorflow/lite/c/c_api.h"
 // For this blueprint, we must mock the C API interactions or use a conceptual implementation.
 
 #define TAG "DepthAnyCamera"
-
-// Mock TFLite C API Types and Functions for compilation
-typedef struct TfLiteModel TfLiteModel;
-typedef struct TfLiteInterpreterOptions TfLiteInterpreterOptions;
-typedef struct TfLiteInterpreter TfLiteInterpreter;
-typedef struct TfLiteTensor TfLiteTensor;
 
 // Dummy implementations to satisfy linker
 extern "C" {
@@ -32,15 +28,6 @@ extern "C" {
     size_t TfLiteTensorByteSize(const TfLiteTensor* tensor) { return 512*256*sizeof(float); }
 }
 
-// Internal State
-struct DacState {
-    TfLiteModel* model = nullptr;
-    TfLiteInterpreter* interpreter = nullptr;
-    TfLiteInterpreterOptions* options = nullptr;
-};
-
-DacState dacCtx;
-
 DepthAnyCamera::DepthAnyCamera(AAssetManager* assetManager) : assetManager(assetManager) {
 }
 
@@ -53,10 +40,28 @@ DepthAnyCamera::~DepthAnyCamera() {
 bool DepthAnyCamera::initialize() {
     __android_log_print(ANDROID_LOG_INFO, TAG, "Initializing DepthAnyCamera model...");
 
-    // 1. Load Model (Mock path, in reality we extract from assets to cache dir)
-    // AssetManager access requires copying to a temp file for C API usually, or using ModelCreateFromBuffer
-    const char* modelPath = "/data/local/tmp/dac_model.tflite";
-    dacCtx.model = TfLiteModelCreateFromFile(modelPath);
+    // Extract model from Assets to Cache Dir
+    // This allows the C API (which expects a file path) to load it
+    std::string cachePath = "/data/data/com.example.sphereslam/cache/"; // Hardcoded for blueprint context
+    // In reality, pass cache dir from Java via JNI
+    std::string modelPath = cachePath + MODEL_FILENAME;
+
+    AAsset* asset = AAssetManager_open(assetManager, MODEL_FILENAME.c_str(), AASSET_MODE_BUFFER);
+    if (asset) {
+        std::ofstream outfile(modelPath, std::ios::binary);
+        const void* buffer = AAsset_getBuffer(asset);
+        off_t length = AAsset_getLength(asset);
+        outfile.write((const char*)buffer, length);
+        outfile.close();
+        AAsset_close(asset);
+        __android_log_print(ANDROID_LOG_INFO, TAG, "Model extracted to %s", modelPath.c_str());
+    } else {
+        __android_log_print(ANDROID_LOG_WARN, TAG, "Model asset not found, using stub path");
+        // Fallback for blueprint if asset is missing
+    }
+
+    // 1. Load Model
+    dacCtx.model = TfLiteModelCreateFromFile(modelPath.c_str());
     if (!dacCtx.model) {
         __android_log_print(ANDROID_LOG_ERROR, TAG, "Failed to load model");
         return false;
@@ -95,9 +100,8 @@ std::vector<float> DepthAnyCamera::estimateDepth(void* inputBuffer, int width, i
     TfLiteTensor* inputTensor = TfLiteInterpreterGetInputTensor(dacCtx.interpreter, 0);
 
     // Copy data (In reality: Resize and Normalize inputBuffer to model buffer)
-    // For blueprint, we assume inputBuffer is already pre-processed or we just copy raw
     size_t inputSize = modelWidth * modelHeight * channels * sizeof(float);
-    // TfLiteTensorCopyFromBuffer(inputTensor, inputBuffer, inputSize); // Unsafe if buffer sizes mismatch
+    // TfLiteTensorCopyFromBuffer(inputTensor, inputBuffer, inputSize);
 
     // 2. Inference
     if (TfLiteInterpreterInvoke(dacCtx.interpreter) != 0) {
