@@ -31,6 +31,7 @@ add_library( # Sets the name of the library.
              native-lib.cpp
              VulkanCompute.cpp
              DepthAnyCamera.cpp
+             Densifier.cpp
              MobileGS.cpp
              SLAM/System.cpp
              SLAM/Tracking.cpp

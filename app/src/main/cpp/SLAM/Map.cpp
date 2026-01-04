@@ -27,3 +27,7 @@ void Map::SetReferenceMapPoints(const std::vector<MapPoint*> &vpMPs) {
     std::unique_lock<std::mutex> lock(mMutexMap);
     mvpReferenceMapPoints = vpMPs;
 }
+
+void Map::Serialize(const std::string& filename) {
+    // Stub implementation
+}

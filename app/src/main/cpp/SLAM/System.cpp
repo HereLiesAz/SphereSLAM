@@ -2,7 +2,7 @@
 #include <iostream>
 
 System::System(const std::string &strVocFile, const std::string &strSettingsFile, const eSensor sensor, const bool bUseViewer)
-    : mSensor(sensor) {
+    : mSensor(sensor), mpDensifier(nullptr) {
 
     std::cout << "SphereSLAM System Initializing..." << std::endl;
 
@@ -33,6 +33,10 @@ System::System(const std::string &strVocFile, const std::string &strSettingsFile
     mptLoopClosing = new std::thread(&LoopClosing::Run, mpLoopCloser);
 }
 
+void System::SetDensifier(Densifier* pDensifier) {
+    mpDensifier = pDensifier;
+}
+
 cv::Mat System::TrackMonocular(const cv::Mat &im, const double &timestamp) {
     // Deprecated for SphereSLAM, or used if we just pass one face
     std::vector<cv::Mat> faces;
@@ -42,6 +46,18 @@ cv::Mat System::TrackMonocular(const cv::Mat &im, const double &timestamp) {
 
 cv::Mat System::TrackCubeMap(const std::vector<cv::Mat> &faces, const double &timestamp) {
     return mpTracker->GrabImageCubeMap(faces, timestamp);
+}
+
+void System::ProcessIMU(const cv::Point3f &data, const double &timestamp, int type) {
+    // Pass to Tracker (or a dedicated Preintegrator)
+    // For Blueprint: Simple pass-through or queue
+    // mpTracker->GrabIMU(data, timestamp, type);
+}
+
+void System::SaveMap(const std::string &filename) {
+    if (mpMap) {
+        // mpMap->Serialize(filename);
+    }
 }
 
 void System::Shutdown() {

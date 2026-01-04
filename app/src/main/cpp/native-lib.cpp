@@ -48,7 +48,7 @@ Java_com_example_sphereslam_MainActivity_initNative(JNIEnv* env, jobject thiz, j
 
     // Initialize SLAM System
     // VocFile and SettingsFile would be paths to assets extracted to cache
-    slamSystem = new System("", "", System::MONOCULAR, false);
+    slamSystem = new System("", "", System::IMU_MONOCULAR, false); // Enable IMU mode
 
     __android_log_print(ANDROID_LOG_INFO, TAG, "Native Systems Initialized");
 }
@@ -70,6 +70,24 @@ Java_com_example_sphereslam_MainActivity_processFrame(JNIEnv* env, jobject thiz,
             if (!Tcw.empty()) {
                 mCurrentPose = Tcw.clone();
             }
+        }
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_sphereslam_MainActivity_processIMU(JNIEnv* env, jobject thiz, jint type, jfloat x, jfloat y, jfloat z, jlong timestamp) {
+    if (slamSystem) {
+        // Type 1: Accel, Type 4: Gyro (Android constants)
+        // Timestamp is nanoseconds, convert to seconds if needed or keep consistent
+        double t = (double)timestamp / 1e9;
+        cv::Point3f data(x, y, z);
+
+        // Map Android Sensor Types to internal enum or separate methods
+        // 1 = ACCELEROMETER, 4 = GYROSCOPE
+        if (type == 1) { // Accel
+             slamSystem->ProcessIMU(data, t, 0); // 0 for Accel
+        } else if (type == 4) { // Gyro
+             slamSystem->ProcessIMU(data, t, 1); // 1 for Gyro
         }
     }
 }

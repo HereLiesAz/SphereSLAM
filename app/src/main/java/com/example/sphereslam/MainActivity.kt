@@ -120,8 +120,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
 
     override fun onSensorChanged(event: SensorEvent?) {
         event?.let {
-            // Pass sensor data to native
-            // processSensor(it.sensor.type, it.values, it.timestamp)
+            if (it.sensor.type == Sensor.TYPE_ACCELEROMETER || it.sensor.type == Sensor.TYPE_GYROSCOPE) {
+                processIMU(it.sensor.type, it.values[0], it.values[1], it.values[2], it.timestamp)
+            }
         }
     }
 
@@ -161,6 +162,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     external fun stringFromJNI(): String
     external fun initNative(assetManager: AssetManager)
     external fun processFrame(matAddr: Long, timestamp: Double)
+    external fun processIMU(type: Int, x: Float, y: Float, z: Float, timestamp: Long)
     external fun setNativeWindow(surface: Surface?)
     external fun renderFrame()
 
