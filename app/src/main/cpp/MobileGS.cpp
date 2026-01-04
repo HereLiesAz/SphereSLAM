@@ -143,13 +143,15 @@ void MobileGS::draw() {
 }
 
 void MobileGS::drawFrustums() {
-    // Conceptually draw lines
+    // Conceptually draw lines representing camera poses
+    // glLineWidth(2.0f);
+    // ...
 }
 
 void MobileGS::sortGaussians() {
-    // Placeholder
+    // Placeholder for GPU Radix Sort
 }
 
 void MobileGS::cullTiles() {
-    // Placeholder
+    // Placeholder for Compute Shader Culling
 }
