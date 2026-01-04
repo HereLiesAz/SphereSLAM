@@ -46,7 +46,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // Sustained Performance Mode
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
             window.setSustainedPerformanceMode(true)
         }
@@ -60,7 +59,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
             resetSystem()
         }
 
-        // Initialize Native Systems
+        // Initialize Native Systems with Cache Dir
         initNative(assets, cacheDir.absolutePath)
 
         cameraManager = SphereCameraManager(this) { image ->
@@ -102,6 +101,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         cameraManager.stopBackgroundThread()
         sensorManager.unregisterListener(this)
         super.onPause()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        destroyNative()
     }
 
     override fun onTouchEvent(event: MotionEvent?): Boolean {
@@ -192,9 +196,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         }
         fpsText.text = "State: $stateStr"
 
-        // Update stats occasionally
-        // Update stats every 30 frames for example
-        if (frameCount++ % 30 == 0) {
+        if (frameTimeNanos % 60 == 0L) {
              statsText.text = getMapStats()
         }
 
@@ -204,7 +206,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
 
     // Native Methods Declaration
     external fun stringFromJNI(): String
-    external fun initNative(assetManager: AssetManager)
+    external fun initNative(assetManager: AssetManager, cacheDir: String)
+    external fun destroyNative()
     external fun processFrame(matAddr: Long, timestamp: Double)
     external fun processIMU(type: Int, x: Float, y: Float, z: Float, timestamp: Long)
     external fun setNativeWindow(surface: Surface?)
@@ -218,7 +221,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         init {
             System.loadLibrary("sphereslam")
         }
-        // Removed WRITE_EXTERNAL_STORAGE as it's not in Manifest anymore
         private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
     }
 }

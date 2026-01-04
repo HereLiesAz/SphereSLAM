@@ -53,9 +53,31 @@ Java_com_example_sphereslam_MainActivity_initNative(JNIEnv* env, jobject thiz, j
     renderer->initialize();
 
     // Initialize SLAM System
-    slamSystem = new System("", "", System::IMU_MONOCULAR, false);
+    // VocFile and SettingsFile would be paths to assets extracted to cache
+    slamSystem = new System("", "", System::IMU_MONOCULAR, false); // Enable IMU mode
 
     __android_log_print(ANDROID_LOG_INFO, TAG, "Native Systems Initialized with Cache Dir: %s", strCacheDir.c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_sphereslam_MainActivity_destroyNative(JNIEnv* env, jobject thiz) {
+    if (slamSystem) {
+        delete slamSystem;
+        slamSystem = nullptr;
+    }
+    if (vulkanCompute) {
+        delete vulkanCompute;
+        vulkanCompute = nullptr;
+    }
+    if (depthEstimator) {
+        delete depthEstimator;
+        depthEstimator = nullptr;
+    }
+    if (renderer) {
+        delete renderer;
+        renderer = nullptr;
+    }
+    __android_log_print(ANDROID_LOG_INFO, TAG, "Native Systems Destroyed");
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -95,13 +117,17 @@ Java_com_example_sphereslam_MainActivity_processFrame(JNIEnv* env, jobject thiz,
 extern "C" JNIEXPORT void JNICALL
 Java_com_example_sphereslam_MainActivity_processIMU(JNIEnv* env, jobject thiz, jint type, jfloat x, jfloat y, jfloat z, jlong timestamp) {
     if (slamSystem) {
+        // Type 1: Accel, Type 4: Gyro (Android constants)
+        // Timestamp is nanoseconds, convert to seconds if needed or keep consistent
         double t = (double)timestamp / 1e9;
         cv::Point3f data(x, y, z);
 
+        // Map Android Sensor Types to internal enum or separate methods
+        // 1 = ACCELEROMETER, 4 = GYROSCOPE
         if (type == 1) { // Accel
-             slamSystem->ProcessIMU(data, t, 0);
+             slamSystem->ProcessIMU(data, t, 0); // 0 for Accel
         } else if (type == 4) { // Gyro
-             slamSystem->ProcessIMU(data, t, 1);
+             slamSystem->ProcessIMU(data, t, 1); // 1 for Gyro
         }
     }
 }
@@ -120,14 +146,35 @@ Java_com_example_sphereslam_MainActivity_setNativeWindow(JNIEnv* env, jobject th
 extern "C" JNIEXPORT void JNICALL
 Java_com_example_sphereslam_MainActivity_renderFrame(JNIEnv* env, jobject thiz) {
     if (renderer) {
+        // Get latest pose
         cv::Mat pose;
         {
             std::unique_lock<std::mutex> lock(mMutexPose);
             pose = mCurrentPose.clone();
         }
 
+        // Convert cv::Mat Tcw to glm::mat4 viewMatrix
+        // OpenCV is row-major, GLM is column-major. Transpose is needed?
+        // Typically glm::mat4 constructor from float* expects column-major.
+        // OpenCV Mat is row-major.
+        // We need to check pose dimensions. Assuming 4x4.
+
         glm::mat4 viewMatrix(1.0f);
-        glm::mat4 projMatrix(1.0f);
+
+        if (!pose.empty() && pose.rows == 4 && pose.cols == 4) {
+            // Transfer data
+            // pose.at<float>(row, col)
+            // viewMatrix[col][row]
+            for(int i=0; i<4; ++i) {
+                for(int j=0; j<4; ++j) {
+                    viewMatrix[j][i] = pose.at<float>(i, j);
+                }
+            }
+        }
+
+        glm::mat4 projMatrix(1.0f); // Should be set based on screen aspect ratio
+        // Example perspective:
+        // projMatrix = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 100.0f);
 
         renderer->updateCamera(viewMatrix, projMatrix);
         renderer->draw();

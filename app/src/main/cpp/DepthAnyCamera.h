@@ -28,7 +28,7 @@ public:
     DepthAnyCamera(AAssetManager* assetManager);
     ~DepthAnyCamera();
 
-    bool initialize(const std::string& cacheDir);
+    bool initialize(const std::string& cachePath);
 
     // Run inference on an equirectangular image
     // Input: RGB byte buffer (or AHardwareBuffer)

@@ -37,14 +37,11 @@ DepthAnyCamera::~DepthAnyCamera() {
     if (dacCtx.model) TfLiteModelDelete(dacCtx.model);
 }
 
-bool DepthAnyCamera::initialize() {
+bool DepthAnyCamera::initialize(const std::string& cachePath) {
     __android_log_print(ANDROID_LOG_INFO, TAG, "Initializing DepthAnyCamera model...");
 
     // Extract model from Assets to Cache Dir
-    // This allows the C API (which expects a file path) to load it
-    std::string cachePath = "/data/data/com.example.sphereslam/cache/"; // Hardcoded for blueprint context
-    // In reality, pass cache dir from Java via JNI
-    std::string modelPath = cachePath + MODEL_FILENAME;
+    std::string modelPath = cachePath + "/" + MODEL_FILENAME;
 
     AAsset* asset = AAssetManager_open(assetManager, MODEL_FILENAME.c_str(), AASSET_MODE_BUFFER);
     if (asset) {
@@ -57,7 +54,6 @@ bool DepthAnyCamera::initialize() {
         __android_log_print(ANDROID_LOG_INFO, TAG, "Model extracted to %s", modelPath.c_str());
     } else {
         __android_log_print(ANDROID_LOG_WARN, TAG, "Model asset not found, using stub path");
-        // Fallback for blueprint if asset is missing
     }
 
     // 1. Load Model

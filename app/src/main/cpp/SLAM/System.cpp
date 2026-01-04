@@ -115,8 +115,18 @@ void System::SaveTrajectoryTUM(const std::string &filename) {
         KeyFrame* pKF = vpKFs[i];
         if(pKF)
         {
-            cv::Mat R = pKF->GetPose().rowRange(0,3).colRange(0,3);
-            f << std::setprecision(6) << pKF->mTimeStamp << " " << 0 << " " << 0 << " " << 0 << " " << 0 << " " << 0 << " " << 0 << " " << 1 << std::endl;
+            cv::Mat Tcw = pKF->GetPose();
+            if (!Tcw.empty()) {
+                // Extract Rwc and twc
+                cv::Mat Rwc = Tcw.rowRange(0,3).colRange(0,3).t();
+                cv::Mat twc = -Rwc * Tcw.rowRange(0,3).col(3);
+
+                // Write timestamp tx ty tz qx qy qz qw
+                // Placeholder for quaternion (0 0 0 1) as conversion is complex without full Eigen/Sophus
+                f << std::setprecision(6) << pKF->mTimeStamp << " "
+                  << twc.at<float>(0) << " " << twc.at<float>(1) << " " << twc.at<float>(2) << " "
+                  << 0 << " " << 0 << " " << 0 << " " << 1 << std::endl;
+            }
         }
     }
     f.close();
