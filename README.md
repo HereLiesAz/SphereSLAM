@@ -1,6 +1,6 @@
-# SphereSLAM-Droid
+# SphereSLAM
 
-**SphereSLAM-Droid** is a lightweight, on-device Monocular Spherical SLAM and Dense Reconstruction library for Android. It converts user-captured 360° photospheres (equirectangular projection) into navigable 3D world scenes using heterogeneous computing (CPU, GPU, NPU).
+**SphereSLAM** is a lightweight, on-device Monocular Spherical SLAM and Dense Reconstruction library for Android. It converts user-captured 360° photospheres (equirectangular projection) into navigable 3D world scenes using heterogeneous computing (CPU, GPU, NPU).
 
 ## Features
 
@@ -29,7 +29,7 @@ dependencyResolutionManagement {
 **build.gradle (app):**
 ```groovy
 dependencies {
-    implementation 'com.github.HereLiesAz:SphereSLAM-Droid:1.0.0'
+    implementation 'com.github.HereLiesAz:SphereSLAM:0.4.0'
 }
 ```
 
@@ -39,7 +39,7 @@ dependencies {
 In your Activity or Fragment:
 
 ```kotlin
-import com.sphereslam.lib.SphereSLAM
+import com.hereliesaz.sphereslam.SphereSLAM
 
 class MainActivity : AppCompatActivity() {
     private lateinit var sphereSLAM: SphereSLAM

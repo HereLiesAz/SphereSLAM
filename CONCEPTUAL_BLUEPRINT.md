@@ -1,22 +1,22 @@
-# **Architectural Blueprint: SphereSLAM-Droid – A Lightweight Monocular Spherical SLAM and Dense Reconstruction System for Android**
+# **Architectural Blueprint: SphereSLAM – A Lightweight Monocular Spherical SLAM and Dense Reconstruction System for Android**
 
 ## **1\. Executive Overview: The Convergence of Edge Computing and Spherical Vision**
 
 The domain of computer vision is currently witnessing a paradigm shift, transitioning from server-centric photogrammetry pipelines to real-time, edge-resident reconstruction systems. This transition is driven by the exponential growth in mobile processing power, specifically the heterogeneous computing capabilities of modern System-on-Chip (SoC) architectures like the Qualcomm Snapdragon 8 Gen 3 and Gen 4, which integrate powerful CPUs, GPUs, and dedicated Neural Processing Units (NPUs).1 Within this context, the user requirement to design a lightweight tool on Android for converting user-created photospheres into navigable 3D world scenes represents a sophisticated engineering challenge at the intersection of simultaneous localization and mapping (SLAM), deep monocular depth estimation, and neural rendering.
 
-Traditional approaches to 3D reconstruction from 360-degree imagery have historically relied on offline processing due to the immense computational cost of bundle adjustment and dense matching over large spherical buffers. However, the reliance on cloud connectivity introduces latency, privacy concerns, and bandwidth costs that hinder ubiquitous adoption. The proposed system, herein referred to as **SphereSLAM-Droid**, addresses these limitations by proposing a hybrid architecture that executes entirely on-device. This system leverages a modified **CubeMap-SLAM** backend for robust camera tracking 3, integrates **Depth Any Camera (DAC)** foundation models for zero-shot metric scale recovery 5, and employs **Mobile-GS** (Gaussian Splatting) for real-time, photo-realistic volumetric rendering.7
+Traditional approaches to 3D reconstruction from 360-degree imagery have historically relied on offline processing due to the immense computational cost of bundle adjustment and dense matching over large spherical buffers. However, the reliance on cloud connectivity introduces latency, privacy concerns, and bandwidth costs that hinder ubiquitous adoption. The proposed system, herein referred to as **SphereSLAM**, addresses these limitations by proposing a hybrid architecture that executes entirely on-device. This system leverages a modified **CubeMap-SLAM** backend for robust camera tracking 3, integrates **Depth Any Camera (DAC)** foundation models for zero-shot metric scale recovery 5, and employs **Mobile-GS** (Gaussian Splatting) for real-time, photo-realistic volumetric rendering.7
 
-The architectural philosophy of SphereSLAM-Droid prioritizes resource efficiency without compromising geometric fidelity. It navigates the inherent constraints of mobile hardware—specifically thermal throttling and shared memory bandwidth—by distributing workloads across the available hardware accelerators. Feature extraction is offloaded to the Digital Signal Processor (DSP), dense depth inference is delegated to the NPU, and volumetric rasterization is handled by the GPU via Vulkan compute shaders. This report provides an exhaustive technical analysis of the system's design, detailing the mathematical foundations of spherical geometry, the adaptation of sparse SLAM algorithms for Android, the integration of deep learning models for dense reconstruction, and the software engineering required to stitch these components into a cohesive application.
+The architectural philosophy of SphereSLAM prioritizes resource efficiency without compromising geometric fidelity. It navigates the inherent constraints of mobile hardware—specifically thermal throttling and shared memory bandwidth—by distributing workloads across the available hardware accelerators. Feature extraction is offloaded to the Digital Signal Processor (DSP), dense depth inference is delegated to the NPU, and volumetric rasterization is handled by the GPU via Vulkan compute shaders. This report provides an exhaustive technical analysis of the system's design, detailing the mathematical foundations of spherical geometry, the adaptation of sparse SLAM algorithms for Android, the integration of deep learning models for dense reconstruction, and the software engineering required to stitch these components into a cohesive application.
 
 ### **1.1 The Shift to Spherical Input Modalities**
 
 The choice of user-created photospheres (equirectangular projection) as the primary input modality fundamentally alters the geometric assumptions found in standard pinhole-based SLAM systems. Equirectangular images provide a complete $360^{\\circ} \\times 180^{\\circ}$ field of view (FoV), capturing the entire environmental context in a single frame. This wide FoV offers significant advantages for SLAM, such as increased resilience to rapid rotation and the ability to maintain feature tracking over longer durations.9 However, it also introduces severe non-linear distortions, particularly at the polar regions, which degrade the performance of traditional feature descriptors like ORB (Oriented FAST and Rotated BRIEF).
 
-SphereSLAM-Droid mitigates these issues by implementing a piecewise-pinhole model, converting the spherical input into a CubeMap representation. This allows the system to reuse highly optimized planar SLAM algorithms while maintaining the benefits of omnidirectional visibility. Furthermore, the system addresses the critical limitation of monocular setups—scale ambiguity—by fusing the sparse SLAM map with dense metric depth maps generated by NPU-accelerated deep learning models. This fusion creates a metric-accurate 3D representation where virtual units correspond to physical meters, a prerequisite for meaningful AR/VR applications.
+SphereSLAM mitigates these issues by implementing a piecewise-pinhole model, converting the spherical input into a CubeMap representation. This allows the system to reuse highly optimized planar SLAM algorithms while maintaining the benefits of omnidirectional visibility. Furthermore, the system addresses the critical limitation of monocular setups—scale ambiguity—by fusing the sparse SLAM map with dense metric depth maps generated by NPU-accelerated deep learning models. This fusion creates a metric-accurate 3D representation where virtual units correspond to physical meters, a prerequisite for meaningful AR/VR applications.
 
 ### **1.2 System Architecture High-Level Design**
 
-The SphereSLAM-Droid architecture is composed of four tightly coupled subsystems, designed to operate asynchronously to maximize throughput and minimize UI latency.
+The SphereSLAM architecture is composed of four tightly coupled subsystems, designed to operate asynchronously to maximize throughput and minimize UI latency.
 
 | Subsystem | Primary Function | Hardware Target | Key Algorithms/Models |
 | :---- | :---- | :---- | :---- |
@@ -29,7 +29,7 @@ The following sections will dissect each of these components, providing a bluepr
 
 ## **2\. Geometric Foundations and Input Preprocessing**
 
-The integrity of any SLAM system rests on the validity of its geometric model. For SphereSLAM-Droid, the challenge lies in reconciling the spherical nature of the input data with the planar assumptions of efficient computer vision algorithms. The raw input from the Android camera API or file system is typically an equirectangular panorama, a $2:1$ aspect ratio image where the x-axis represents longitude ($\\theta \\in \[-\\pi, \\pi\]$) and the y-axis represents latitude ($\\phi \\in \[-\\pi/2, \\pi/2\]$).
+The integrity of any SLAM system rests on the validity of its geometric model. For SphereSLAM, the challenge lies in reconciling the spherical nature of the input data with the planar assumptions of efficient computer vision algorithms. The raw input from the Android camera API or file system is typically an equirectangular panorama, a $2:1$ aspect ratio image where the x-axis represents longitude ($\\theta \\in \[-\\pi, \\pi\]$) and the y-axis represents latitude ($\\phi \\in \[-\\pi/2, \\pi/2\]$).
 
 ### **2.1 The Mathematical Challenge of Equirectangular Projection**
 
@@ -59,7 +59,7 @@ The transformation from a 3D point $\\mathbf{X}$ to a pixel coordinate $\\mathbf
 $$\\mathbf{u}\_f \= \\mathbf{K} \\cdot \\mathbf{P}\_{face} \\cdot \\mathbf{X}$$  
 where $\\mathbf{K}$ is the intrinsic matrix common to all faces, and $\\mathbf{P}\_{face}$ is the rigid transformation (rotation) from the sphere center to the canonical orientation of face $f$ (Front, Back, Left, Right, Up, Down).3
 
-This piecewise-pinhole formulation allows SphereSLAM-Droid to utilize the standard OpenCV ORB implementation, which is highly optimized for ARM NEON and DSP architectures. The distortion within each $90^{\\circ}$ face is minimal (comparable to a standard wide-angle lens), ensuring that standard descriptors remain discriminative.
+This piecewise-pinhole formulation allows SphereSLAM to utilize the standard OpenCV ORB implementation, which is highly optimized for ARM NEON and DSP architectures. The distortion within each $90^{\\circ}$ face is minimal (comparable to a standard wide-angle lens), ensuring that standard descriptors remain discriminative.
 
 #### **2.3.1 GPU-Accelerated CubeMap Generation**
 
@@ -76,19 +76,19 @@ The fragment shader logic reverses the projection. For every pixel $(u, v)$ in t
 
 The resulting CubeMap faces are stored in AHardwareBuffer memory objects, allowing them to be consumed directly by the SLAM thread (via OpenCV) or the Neural Inference thread (via NNAPI) without CPU copy overhead.16
 
-## **3\. The Sparse SLAM Engine: SphereSLAM-Droid**
+## **3\. The Sparse SLAM Engine: SphereSLAM**
 
-The core tracking module, **SphereSLAM-Droid**, is a lightweight derivative of the state-of-the-art ORB-SLAM3 system. While ORB-SLAM3 supports fisheye models, its generic implementation is too resource-intensive for sustained mobile operation alongside dense reconstruction networks. SphereSLAM-Droid strips away non-essential components (such as the ROS interface and heavy atlas management) and introduces Android-specific optimizations.9
+The core tracking module, **SphereSLAM**, is a lightweight derivative of the state-of-the-art ORB-SLAM3 system. While ORB-SLAM3 supports fisheye models, its generic implementation is too resource-intensive for sustained mobile operation alongside dense reconstruction networks. SphereSLAM strips away non-essential components (such as the ROS interface and heavy atlas management) and introduces Android-specific optimizations.9
 
 ### **3.1 Architecture Adaptation for Mobile**
 
-The standard ORB-SLAM3 architecture employs three parallel threads: Tracking, Local Mapping, and Loop Closing. On a mobile device, running three heavy C++ threads simultaneously often triggers the Android OS thermal throttling mechanisms, reducing the clock speed of the CPU big cores. SphereSLAM-Droid mitigates this through architectural pruning and hardware offloading.
+The standard ORB-SLAM3 architecture employs three parallel threads: Tracking, Local Mapping, and Loop Closing. On a mobile device, running three heavy C++ threads simultaneously often triggers the Android OS thermal throttling mechanisms, reducing the clock speed of the CPU big cores. SphereSLAM mitigates this through architectural pruning and hardware offloading.
 
 The **Tracking Thread** is the only component that requires hard real-time execution. It processes incoming CubeMap frames, extracts features, and estimates the camera pose relative to the local map. The **Local Mapping** thread, which performs new point triangulation and local Bundle Adjustment (BA), is throttled to run only when significant parallax is detected or when a new photosphere is captured. This "Keyframe-Only" mapping strategy is particularly well-suited for user-created photospheres, which are discrete events rather than a continuous 30fps video stream.3
 
 ### **3.2 DSP-Accelerated Feature Extraction**
 
-Feature extraction typically consumes 30-40% of the frontend's processing time. SphereSLAM-Droid offloads this task to the Qualcomm Hexagon DSP using the FastCV SDK or the OpenCL framework. The DSP is a vector processor optimized for low-power image processing operations. By moving the FAST corner detection and BRIEF descriptor computation to the DSP, the system frees up the CPU for the complex logic of tracking and optimization.2
+Feature extraction typically consumes 30-40% of the frontend's processing time. SphereSLAM offloads this task to the Qualcomm Hexagon DSP using the FastCV SDK or the OpenCL framework. The DSP is a vector processor optimized for low-power image processing operations. By moving the FAST corner detection and BRIEF descriptor computation to the DSP, the system frees up the CPU for the complex logic of tracking and optimization.2
 
 The pipeline operates as follows:
 
@@ -102,7 +102,7 @@ This heterogeneous approach reduces the energy consumption of the frontend by ap
 
 ### **3.3 The Multi-Pinhole Camera Model**
 
-SphereSLAM-Droid treats the Android device not as a single camera, but as a rigid multi-camera rig consisting of six cameras (the cube faces) sharing a uniform optical center. This simplifies the mathematical formulation of the projection functions and Jacobians used in the optimization backend.
+SphereSLAM treats the Android device not as a single camera, but as a rigid multi-camera rig consisting of six cameras (the cube faces) sharing a uniform optical center. This simplifies the mathematical formulation of the projection functions and Jacobians used in the optimization backend.
 
 The projection function $\\pi\_{cube}(\\mathbf{X})$ determines which face $f$ a 3D point $\\mathbf{X}$ projects onto based on the dominant component of the vector $\\mathbf{X}$ (e.g., if $|X| \> |Y|$ and $|X| \> |Z|$, it projects to the Front or Back face). Once the face is determined, the standard pinhole projection is applied.
 
@@ -113,19 +113,19 @@ where $\\mathbf{R}\_{fc}$ is the fixed rotation from the body frame to the face 
 
 ### **3.4 Handling Pure Rotation and Panorama Fusion**
 
-A common behavior in photosphere capture is "pure rotation," where the user pivots the camera without translating. In standard monocular SLAM, this is a degenerate case because depth cannot be triangulated without translation (parallax). SphereSLAM-Droid detects this condition by monitoring the baseline between keyframes. If the translation is negligible but rotation is significant, the system enters a **Panorama Fusion Mode**.
+A common behavior in photosphere capture is "pure rotation," where the user pivots the camera without translating. In standard monocular SLAM, this is a degenerate case because depth cannot be triangulated without translation (parallax). SphereSLAM detects this condition by monitoring the baseline between keyframes. If the translation is negligible but rotation is significant, the system enters a **Panorama Fusion Mode**.
 
 In this mode, new features are not triangulated as 3D points. Instead, they are fused onto a spherical manifold at infinity (or a fixed radius). This effectively stitches the incoming visual data into the background of the current keyframe, improving the robustness of rotation tracking without corrupting the map with ill-conditioned 3D points.4 Once the user translates again, the system resumes standard triangulation.
 
 ### **3.5 Loop Closure with Reduced Vocabulary**
 
-Loop closure is critical for correcting drift over long trajectories. However, the standard ORB-SLAM3 vocabulary (ORBvoc.txt) is over 140MB, which is prohibitively large for the RAM constraints of many Android devices. SphereSLAM-Droid employs a binary, quantized vocabulary or a lighter alternative like FBoW (Fast Bag of Words), which reduces the memory footprint to under 20MB.
+Loop closure is critical for correcting drift over long trajectories. However, the standard ORB-SLAM3 vocabulary (ORBvoc.txt) is over 140MB, which is prohibitively large for the RAM constraints of many Android devices. SphereSLAM employs a binary, quantized vocabulary or a lighter alternative like FBoW (Fast Bag of Words), which reduces the memory footprint to under 20MB.
 
 Loop detection is performed on the aggregated bag-of-words vector from all six CubeMap faces. This global descriptor provides a robust signature of the location, invariant to the specific orientation of the camera (since the union of the faces covers the full sphere).11 When a loop is detected, a 6-DoF pose graph optimization is triggered to distribute the accumulated error across the trajectory.
 
 ## **4\. Dense Metric Recovery: Integrating Depth Foundation Models**
 
-While the sparse point cloud generated by SLAM is sufficient for tracking, it fails to meet the user's requirement for a "3D World Scene." A sparse cloud is an abstraction; a world scene requires dense geometry. Furthermore, monocular SLAM suffers from scale ambiguity—the map is internally consistent but lacks real-world dimensions (meters). SphereSLAM-Droid resolves both issues by integrating **Depth Any Camera (DAC)**.5
+While the sparse point cloud generated by SLAM is sufficient for tracking, it fails to meet the user's requirement for a "3D World Scene." A sparse cloud is an abstraction; a world scene requires dense geometry. Furthermore, monocular SLAM suffers from scale ambiguity—the map is internally consistent but lacks real-world dimensions (meters). SphereSLAM resolves both issues by integrating **Depth Any Camera (DAC)**.5
 
 ### **4.1 The Role of Depth Any Camera (DAC)**
 
@@ -138,7 +138,7 @@ By feeding the equirectangular image into DAC, the system obtains a dense depth 
 
 ### **4.2 Optimizing DAC for Android Inference**
 
-The standard DAC model is based on a large Vision Transformer (ViT-Large) architecture, which is too computationally heavy for real-time mobile inference. To enable on-device execution, SphereSLAM-Droid employs a distilled, quantized version of the model.
+The standard DAC model is based on a large Vision Transformer (ViT-Large) architecture, which is too computationally heavy for real-time mobile inference. To enable on-device execution, SphereSLAM employs a distilled, quantized version of the model.
 
 **Model Distillation:** A smaller "Student" network, based on a mobile-friendly backbone like MobileNetV3 or EfficientNet-Lite, is trained to mimic the output of the massive "Teacher" DAC model. This significantly reduces the parameter count and FLOPs (Floating Point Operations) required for inference.21
 
@@ -154,7 +154,7 @@ The conversion process from PyTorch to TFLite involves several steps to ensure c
 
 ### **4.3 Indoor Structural Understanding: Bi-Layout Estimation**
 
-For indoor scenarios, users often prefer a structured "room model" over a raw point cloud. SphereSLAM-Droid integrates a **Bi-Layout** estimation module, a lightweight CNN specialized in detecting wall-floor and wall-ceiling boundaries in 360 images.12
+For indoor scenarios, users often prefer a structured "room model" over a raw point cloud. SphereSLAM integrates a **Bi-Layout** estimation module, a lightweight CNN specialized in detecting wall-floor and wall-ceiling boundaries in 360 images.12
 
 The Bi-Layout model predicts two types of layout boundaries:
 
@@ -167,7 +167,7 @@ By reconciling these two predictions, the system can generate a clean, simplifie
 
 The final stage of the pipeline is the visualization of the captured world. Traditional mesh generation techniques (like Poisson Surface Reconstruction) often fail to capture thin structures (cables, plants) and semi-transparent objects (glass, smoke). **3D Gaussian Splatting (3DGS)** has emerged as the superior alternative, offering photorealistic quality and real-time rendering speeds. However, the standard 3DGS implementation is memory-intensive and relies on a global sorting step that bottlenecks mobile CPUs.7
 
-SphereSLAM-Droid implements **Mobile-GS**, a highly optimized variant of Gaussian Splatting tailored for the constraints of the Android ecosystem.
+SphereSLAM implements **Mobile-GS**, a highly optimized variant of Gaussian Splatting tailored for the constraints of the Android ecosystem.
 
 ### **5.1 The Mathematical Model of 3DGS**
 
@@ -202,7 +202,7 @@ Standard 3DGS uses degree-3 Spherical Harmonics, requiring 48 floating-point val
 
 ### **5.3 Instant Visualization with Splatter Image**
 
-To provide immediate feedback to the user, SphereSLAM-Droid incorporates the **Splatter Image** technique. Instead of waiting for the SLAM system to build a sparse map and then densifying it, Splatter Image uses a U-Net architecture to predict a 3D Gaussian for *every pixel* of the input photosphere in a single forward pass.
+To provide immediate feedback to the user, SphereSLAM incorporates the **Splatter Image** technique. Instead of waiting for the SLAM system to build a sparse map and then densifying it, Splatter Image uses a U-Net architecture to predict a 3D Gaussian for *every pixel* of the input photosphere in a single forward pass.
 
 This network outputs a multi-channel image where each pixel contains the parameters (offset, scale, opacity, rotation) for a 3D Gaussian at that location. This allows the system to instantly "pop" the 2D photosphere into a volumetric 3D representation. As the user captures more data, these initial "Splatter" Gaussians are aligned using the SLAM poses and refined (merged or pruned) in a background process.34 This ensures the tool feels responsive and interactive from the very first second of use.
 
@@ -212,7 +212,7 @@ The successful deployment of these complex algorithms requires a robust software
 
 ### **6.1 The JNI and NDK Architecture**
 
-The core of SphereSLAM-Droid is built as a native library using the Android NDK (Native Development Kit).
+The core of SphereSLAM is built as a native library using the Android NDK (Native Development Kit).
 
 * **Java/Kotlin Layer:** Handles the UI, Camera2 API configuration, and sensor lifecycle management. It captures frames and passes pointers to the native layer.  
 * **JNI (Java Native Interface):** Acts as the bridge. To minimize latency, data copying is strictly avoided. The GetPrimitiveArrayCritical function is used to access Java byte arrays directly from C++, or preferably, AHardwareBuffer is used to share image memory between the Camera hardware, the GPU (for CubeMap generation), and the NPU (for depth inference) without CPU intervention.
@@ -234,7 +234,7 @@ Continuous operation of the Camera, GPU, NPU, and CPU Big cores will rapidly hea
 
 ## **7\. Performance Benchmarking and Future Outlook**
 
-Based on the performance profiles of the constituent technologies (ORB-SLAM3, TFLite Int8, Mobile-GS), SphereSLAM-Droid is projected to achieve the following performance metrics on a reference device (Snapdragon 8 Gen 3):
+Based on the performance profiles of the constituent technologies (ORB-SLAM3, TFLite Int8, Mobile-GS), SphereSLAM is projected to achieve the following performance metrics on a reference device (Snapdragon 8 Gen 3):
 
 | Metric | Target | Bottleneck | Mitigation Strategy |
 | :---- | :---- | :---- | :---- |
@@ -250,7 +250,7 @@ The trajectory of mobile hardware development heavily favors this architecture. 
 
 ### **7.2 Conclusion**
 
-SphereSLAM-Droid represents a comprehensive blueprint for bringing high-end 3D reconstruction to the Android ecosystem. By synthesizing the geometric robustness of CubeMap-SLAM, the semantic understanding of foundation depth models, and the efficiency of neural rendering, it overcomes the traditional barriers of mobile photogrammetry. The system architecture strictly adheres to the principles of heterogeneous computing, ensuring that every watt of power is utilized efficiently by the most appropriate hardware accelerator. This design enables a new class of user-generated content, transforming the smartphone from a passive capture device into an active tool for 3D world creation.
+SphereSLAM represents a comprehensive blueprint for bringing high-end 3D reconstruction to the Android ecosystem. By synthesizing the geometric robustness of CubeMap-SLAM, the semantic understanding of foundation depth models, and the efficiency of neural rendering, it overcomes the traditional barriers of mobile photogrammetry. The system architecture strictly adheres to the principles of heterogeneous computing, ensuring that every watt of power is utilized efficiently by the most appropriate hardware accelerator. This design enables a new class of user-generated content, transforming the smartphone from a passive capture device into an active tool for 3D world creation.
 
 ---
 

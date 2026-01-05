@@ -1,4 +1,4 @@
-package com.sphereslam.lib
+package com.hereliesaz.sphereslam
 
 import android.content.Context
 import android.content.res.AssetManager
