@@ -12,6 +12,6 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "SphereSLAM-Droid"
+rootProject.name = "SphereSLAM"
 include ':app'
 include ':sphereslam'
