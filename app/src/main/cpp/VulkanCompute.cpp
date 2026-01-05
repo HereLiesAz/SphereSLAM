@@ -144,7 +144,9 @@ void VulkanCompute::createComputePipeline() {
     VK_CHECK(vkCreatePipelineLayout(vkCtx.device, &pipelineLayoutInfo, nullptr, &vkCtx.pipelineLayout));
 
     // C. Load Shader Module
-    AAsset* file = AAssetManager_open(assetManager, "shaders/equirect_to_cubemap.spv", AASSET_MODE_BUFFER);
+    // TODO: Compile 'equirect_to_cubemap.comp' to SPIR-V using glslc.
+    // Currently loading source code, which will cause vkCreateShaderModule to return an error (handled below).
+    AAsset* file = AAssetManager_open(assetManager, "shaders/equirect_to_cubemap.comp", AASSET_MODE_BUFFER);
     if (file) {
         size_t fileLength = AAsset_getLength(file);
         char* fileContent = new char[fileLength];

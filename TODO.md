@@ -52,9 +52,10 @@ dependencies {
 
 * [x] **OpenCV 4.10 Android SDK:** Download pre-built Android SDK. Extract to `libs/opencv`.
 * [x] **Eigen 3.4.0:** Header-only. Copy to `app/src/main/cpp/Thirdparty/eigen`.
-* [x] **Sophus:** Clone commit `a621ff` (template-based Lie Algebra). Copy to `Thirdparty`.
-* [x] **DBoW2:** Clone standard repo. Modify `CMakeLists.txt` to remove `march=native` (causes SIGILL on Android). Build static library.
-* [x] **g2o:** Clone standard repo. Critical modification: In `g2o/core/sparse_block_matrix.h`, ensure `Eigen::aligned_allocator` is used to prevent memory misalignment crashes on ARM64.
+* [x] **GLM 1.0.1:** Header-only. Copy to `app/src/main/cpp/Thirdparty/glm`.
+* [ ] **Sophus:** Clone commit `a621ff` (template-based Lie Algebra). Copy to `Thirdparty`.
+* [ ] **DBoW2:** Clone standard repo. Modify `CMakeLists.txt` to remove `march=native` (causes SIGILL on Android). Build static library.
+* [ ] **g2o:** Clone standard repo. Critical modification: In `g2o/core/sparse_block_matrix.h`, ensure `Eigen::aligned_allocator` is used to prevent memory misalignment crashes on ARM64.
 
 ---
 
@@ -174,9 +175,9 @@ torch.onnx.export(model, dummy_input, "dac_360.onnx", opset_version=17)
 
 
 
-* [x] **Scale Alignment:** Calculate the scale factor  by comparing SLAM feature depths with Model depths.
+* [x] **Scale Alignment:** Calculate the scale factor `s` by comparing SLAM feature depths with Model depths.
 *
-* Scale the entire SLAM trajectory by  to get real-world meters.
+* Scale the entire SLAM trajectory by `s` to get real-world meters.
 
 
 
