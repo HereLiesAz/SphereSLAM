@@ -44,7 +44,7 @@ bool DepthAnyCamera::initialize(const std::string& cachePath) {
 
     // 2. Create Options
     dacCtx.options = TfLiteInterpreterOptionsCreate();
-    TfLiteInterpreterOptionsSetNumThreads(dacCtx.options, 4); // Use 4 threads (Big cores)
+    TfLiteInterpreterOptionsSetNumThreads(dacCtx.options, std::thread::hardware_concurrency()); // Use available cores
 
     // 3. Create Interpreter
     dacCtx.interpreter = TfLiteInterpreterCreate(dacCtx.model, dacCtx.options);
