@@ -1,7 +1,11 @@
 #ifndef PLATFORM_WEB_H
 #define PLATFORM_WEB_H
 
+<<<<<<< HEAD
+#include "../../core/include/Platform.h"
+=======
 #include "Platform.h"
+>>>>>>> origin/platform-modules-12313376745933906235
 #include <iostream>
 #include <fstream>
 

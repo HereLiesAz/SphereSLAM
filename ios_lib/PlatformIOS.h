@@ -1,7 +1,11 @@
 #ifndef PLATFORM_IOS_H
 #define PLATFORM_IOS_H
 
+<<<<<<< HEAD
+#include "../../core/include/Platform.h"
+=======
 #include "Platform.h"
+>>>>>>> origin/platform-modules-12313376745933906235
 #import <Foundation/Foundation.h>
 
 class PlatformIOS : public Platform {
