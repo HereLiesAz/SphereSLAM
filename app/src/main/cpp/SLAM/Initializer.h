@@ -1,0 +1,24 @@
+#ifndef INITIALIZER_H
+#define INITIALIZER_H
+
+#include <vector>
+#include <opencv2/core/core.hpp>
+#include "Frame.h"
+
+class Initializer {
+public:
+    Initializer(const Frame &ReferenceFrame, float sigma, int iterations);
+
+    // Returns true if initialization is successful
+    bool Initialize(const Frame &CurrentFrame, const std::vector<int> &vMatches12,
+                    cv::Mat &R21, cv::Mat &t21, std::vector<cv::Point3f> &vP3D,
+                    std::vector<bool> &vbTriangulated);
+
+private:
+    // Stub members
+    Frame mInitialFrame;
+    float mSigma;
+    int mMaxIterations;
+};
+
+#endif // INITIALIZER_H
