@@ -1,10 +1,11 @@
 import UIKit
 import AVFoundation
 
-// Conceptual Bridge to C++
-// In a real app, you would have an Obj-C++ wrapper (PlatformIOS) linking to the static lib
+// Note: To use the Objective-C++ bridge, you must add "ios_lib/SphereSLAMBridge.h" to the bridging header.
 
 class ViewController: UIViewController {
+
+    var slamBridge: SphereSLAMBridge?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -12,13 +13,29 @@ class ViewController: UIViewController {
         // Setup Camera
         setupCamera()
 
-        // Initialize SLAM System (Native call placeholder)
-        print("Initializing SphereSLAM...")
-        // NativeBridge.initSystem()
+        // Initialize SLAM System
+        // In a real app, these paths would point to Bundle resources
+        let vocPath = Bundle.main.path(forResource: "ORBvoc", ofType: "txt") ?? ""
+        let settingsPath = Bundle.main.path(forResource: "Settings", ofType: "yaml") ?? ""
+
+        print("Initializing SphereSLAM with \(vocPath)...")
+        slamBridge = SphereSLAMBridge(vocFile: vocPath, settingsFile: settingsPath)
+
+        print("Initial State: \(slamBridge?.getTrackingState() ?? -1)")
     }
 
     func setupCamera() {
         // AVFoundation setup code would go here
-        // sending frames to the C++ bridge
+    }
+
+    func processSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
+        // Conceptual frame processing
+        // Get pixel buffer, convert to Data, pass to bridge
+        /*
+         let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
+         if let data = ... {
+             slamBridge?.processFrame(data, width: 640, height: 480, timestamp: timestamp)
+         }
+        */
     }
 }
