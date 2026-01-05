@@ -1,6 +1,6 @@
-# SphereSLAM-Droid
+# SphereSLAM
 
-**SphereSLAM-Droid** is a lightweight, on-device Monocular Spherical SLAM and Dense Reconstruction library for Android. It converts user-captured 360° photospheres (equirectangular projection) into navigable 3D world scenes using heterogeneous computing (CPU, GPU, NPU).
+**SphereSLAM** is a lightweight, on-device Monocular Spherical SLAM and Dense Reconstruction library for Android. It converts user-captured 360° photospheres (equirectangular projection) into navigable 3D world scenes using heterogeneous computing (CPU, GPU, NPU).
 
 ## Features
 
