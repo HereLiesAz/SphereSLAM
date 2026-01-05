@@ -13,7 +13,7 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/SLAM
     ${CMAKE_SOURCE_DIR}/Thirdparty/eigen
     ${CMAKE_SOURCE_DIR}/Thirdparty/glm
-    ${CMAKE_SOURCE_DIR}/../../../../libs/opencv/sdk/native/jni/include # Adjust path as needed
+    ${CMAKE_SOURCE_DIR}/../../../../libs/opencv-4.12.0/sdk/native/jni/include # Adjust path as needed
 )
 
 # Creates and names a library, sets it as either STATIC

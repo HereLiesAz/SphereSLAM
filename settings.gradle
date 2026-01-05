@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "SphereSLAM-Droid"
 include ':app'
+include ':sphereslam'
