@@ -175,9 +175,9 @@ torch.onnx.export(model, dummy_input, "dac_360.onnx", opset_version=17)
 
 
 
-* [x] **Scale Alignment:** Calculate the scale factor  by comparing SLAM feature depths with Model depths.
+* [x] **Scale Alignment:** Calculate the scale factor `s` by comparing SLAM feature depths with Model depths.
 *
-* Scale the entire SLAM trajectory by  to get real-world meters.
+* Scale the entire SLAM trajectory by `s` to get real-world meters.
 
 
 
