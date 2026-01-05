@@ -29,7 +29,7 @@ dependencyResolutionManagement {
 **build.gradle (app):**
 ```groovy
 dependencies {
-    implementation 'com.github.User:SphereSLAM-Droid:1.0.0' // Replace 'User' with correct GitHub username
+    implementation 'com.github.HereLiesAz:SphereSLAM-Droid:1.0.0'
 }
 ```
 

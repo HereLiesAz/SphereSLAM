@@ -64,7 +64,7 @@ afterEvaluate {
         publications {
             release(MavenPublication) {
                 from components.release
-                groupId = 'com.github.User'
+                groupId = 'com.github.HereLiesAz'
                 artifactId = 'SphereSLAM-Droid'
                 version = '1.0.0'
             }
