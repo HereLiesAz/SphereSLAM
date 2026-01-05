@@ -116,7 +116,7 @@ void toQuaternion(const cv::Mat& R, float& qx, float& qy, float& qz, float& qw) 
         qx = (R.at<float>(2,1) - R.at<float>(1,2)) / S;
         qy = (R.at<float>(0,2) - R.at<float>(2,0)) / S;
         qz = (R.at<float>(1,0) - R.at<float>(0,1)) / S;
-    } else if ((R.at<float>(0,0) > R.at<float>(1,1)) && (R.at<float>(0,0) > R.at<float>(2,2))) {
+    } else if ((R.at<float>(0,0) > R.at<float>(1,1))&(R.at<float>(0,0) > R.at<float>(2,2))) {
         float S = sqrt(1.0 + R.at<float>(0,0) - R.at<float>(1,1) - R.at<float>(2,2)) * 2; // S=4*qx
         qw = (R.at<float>(2,1) - R.at<float>(1,2)) / S;
         qx = 0.25 * S;

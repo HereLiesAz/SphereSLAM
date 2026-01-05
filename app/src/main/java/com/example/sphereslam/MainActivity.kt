@@ -37,6 +37,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     private lateinit var fpsText: TextView
     private lateinit var statsText: TextView
     private var lastFrameTime = 0L
+    private var statsTextUpdateFrameCounter: Int = 0
 
     // Touch handling
     private var lastTouchX = 0f
@@ -196,7 +197,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         }
         fpsText.text = "State: $stateStr"
 
-        if (frameTimeNanos % 60 == 0L) {
+        statsTextUpdateFrameCounter++
+        if (statsTextUpdateFrameCounter % 60 == 0) {
              statsText.text = getMapStats()
         }
 

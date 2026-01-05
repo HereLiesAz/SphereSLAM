@@ -76,6 +76,11 @@ void VulkanCompute::initialize() {
         }
     }
 
+    if (vkCtx.queueFamilyIndex == -1) {
+        __android_log_print(ANDROID_LOG_ERROR, TAG, "No compute queue family found");
+        return;
+    }
+
     // 4. Create Logical Device
     float queuePriority = 1.0f;
     VkDeviceQueueCreateInfo queueCreateInfo = {};
@@ -144,42 +149,51 @@ void VulkanCompute::createComputePipeline() {
     VK_CHECK(vkCreatePipelineLayout(vkCtx.device, &pipelineLayoutInfo, nullptr, &vkCtx.pipelineLayout));
 
     // C. Load Shader Module
-    // TODO: Compile 'equirect_to_cubemap.comp' to SPIR-V using glslc.
-    // Currently loading source code, which will cause vkCreateShaderModule to return an error (handled below).
-    AAsset* file = AAssetManager_open(assetManager, "shaders/equirect_to_cubemap.comp", AASSET_MODE_BUFFER);
+    // Load precompiled SPIR-V for the compute shader. Ensure the asset is compiled with e.g.:
+    //   glslc equirect_to_cubemap.comp -o equirect_to_cubemap.comp.spv
+    AAsset* file = AAssetManager_open(assetManager, "shaders/equirect_to_cubemap.comp.spv", AASSET_MODE_BUFFER);
     if (file) {
         size_t fileLength = AAsset_getLength(file);
-        char* fileContent = new char[fileLength];
-        AAsset_read(file, fileContent, fileLength);
-        AAsset_close(file);
 
-        VkShaderModule shaderModule;
-        VkShaderModuleCreateInfo createInfo = {};
-        createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        createInfo.codeSize = fileLength;
-        createInfo.pCode = reinterpret_cast<const uint32_t*>(fileContent);
+        // SPIR-V is defined in 32-bit words; reject invalid sizes.
+        if (fileLength > 0 && fileLength % sizeof(uint32_t) == 0) {
+            const size_t wordCount = fileLength / sizeof(uint32_t);
+            std::vector<uint32_t> spirv(wordCount);
 
-        if (vkCreateShaderModule(vkCtx.device, &createInfo, nullptr, &shaderModule) == VK_SUCCESS) {
-             VkPipelineShaderStageCreateInfo shaderStageInfo = {};
-            shaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            shaderStageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-            shaderStageInfo.module = shaderModule;
-            shaderStageInfo.pName = "main";
+            // Read the raw bytes into the aligned uint32_t buffer.
+            AAsset_read(file, spirv.data(), fileLength);
+            AAsset_close(file);
 
-            VkComputePipelineCreateInfo pipelineInfo = {};
-            pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-            pipelineInfo.layout = vkCtx.pipelineLayout;
-            pipelineInfo.stage = shaderStageInfo;
+            VkShaderModule shaderModule;
+            VkShaderModuleCreateInfo createInfo = {};
+            createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            createInfo.codeSize = fileLength;
+            createInfo.pCode = spirv.data();
 
-            VK_CHECK(vkCreateComputePipelines(vkCtx.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &vkCtx.pipeline));
+            if (vkCreateShaderModule(vkCtx.device, &createInfo, nullptr, &shaderModule) == VK_SUCCESS) {
+                VkPipelineShaderStageCreateInfo shaderStageInfo = {};
+                shaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+                shaderStageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+                shaderStageInfo.module = shaderModule;
+                shaderStageInfo.pName = "main";
 
-            vkDestroyShaderModule(vkCtx.device, shaderModule, nullptr);
+                VkComputePipelineCreateInfo pipelineInfo = {};
+                pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+                pipelineInfo.layout = vkCtx.pipelineLayout;
+                pipelineInfo.stage = shaderStageInfo;
+
+                VK_CHECK(vkCreateComputePipelines(vkCtx.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &vkCtx.pipeline));
+
+                vkDestroyShaderModule(vkCtx.device, shaderModule, nullptr);
+            } else {
+                __android_log_print(ANDROID_LOG_ERROR, TAG, "Failed to create shader module");
+            }
         } else {
-             __android_log_print(ANDROID_LOG_ERROR, TAG, "Failed to create shader module");
+            __android_log_print(ANDROID_LOG_ERROR, TAG, "Invalid SPIR-V size or alignment");
+            AAsset_close(file);
         }
-        delete[] fileContent;
     } else {
-        __android_log_print(ANDROID_LOG_WARN, TAG, "Shader file not found (Blueprint mode)");
+        __android_log_print(ANDROID_LOG_WARN, TAG, "Shader file not found: shaders/equirect_to_cubemap.comp.spv");
     }
 }
 
