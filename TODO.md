@@ -291,7 +291,7 @@ The current codebase contains structural skeletons for several key components. T
     *   Implement `ComputeSim3`.
 * [ ] **Densifier:**
     *   Implement the logic to convert KeyFrames to Gaussian Splats in `Densifier.cpp`.
-* [ ] **Library Refactor:**
-    *   Refactor the project into an Android Library (AAR) for easy import.
-    *   Expose a clean public API (`SphereSLAM` class).
-    *   Support JitPack publication.
+* [x] **Library Refactor:**
+    *   [x] Refactor the project into an Android Library (AAR) for easy import.
+    *   [x] Expose a clean public API (`SphereSLAM` class).
+    *   [x] Support JitPack publication.
