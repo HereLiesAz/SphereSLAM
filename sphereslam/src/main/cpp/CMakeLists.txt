@@ -10,10 +10,11 @@ project("sphereslam")
 # Include directories
 include_directories(
     ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/SLAM
-    ${CMAKE_SOURCE_DIR}/Thirdparty/eigen
-    ${CMAKE_SOURCE_DIR}/Thirdparty/glm
-    ${CMAKE_SOURCE_DIR}/../../../../libs/opencv/sdk/native/jni/include # Adjust path as needed
+    ${CMAKE_SOURCE_DIR}/../../../../core/include
+    ${CMAKE_SOURCE_DIR}/../../../../core/src
+    ${CMAKE_SOURCE_DIR}/../../../../core/Thirdparty/eigen
+    ${CMAKE_SOURCE_DIR}/../../../../core/Thirdparty/glm
+    ${CMAKE_SOURCE_DIR}/../../../../libs/opencv-4.12.0/sdk/native/jni/include # Adjust path as needed
 )
 
 # Creates and names a library, sets it as either STATIC
@@ -33,19 +34,19 @@ add_library( # Sets the name of the library.
              DepthAnyCamera.cpp
              Densifier.cpp
              MobileGS.cpp
-             SLAM/System.cpp
-             SLAM/Tracking.cpp
-             SLAM/Frame.cpp
-             SLAM/ORBextractor.cpp
-             SLAM/MapPoint.cpp
-             SLAM/KeyFrame.cpp
-             SLAM/Map.cpp
-             SLAM/LocalMapping.cpp
-             SLAM/LoopClosing.cpp
-             SLAM/KeyFrameDatabase.cpp
-             SLAM/Optimizer.cpp
-             SLAM/Settings.cpp
-             SLAM/Initializer.cpp
+             ../../../../core/src/SLAM/System.cpp
+             ../../../../core/src/SLAM/Tracking.cpp
+             ../../../../core/src/SLAM/Frame.cpp
+             ../../../../core/src/SLAM/ORBextractor.cpp
+             ../../../../core/src/SLAM/MapPoint.cpp
+             ../../../../core/src/SLAM/KeyFrame.cpp
+             ../../../../core/src/SLAM/Map.cpp
+             ../../../../core/src/SLAM/LocalMapping.cpp
+             ../../../../core/src/SLAM/LoopClosing.cpp
+             ../../../../core/src/SLAM/KeyFrameDatabase.cpp
+             ../../../../core/src/SLAM/Optimizer.cpp
+             ../../../../core/src/SLAM/Settings.cpp
+             ../../../../core/src/SLAM/Initializer.cpp
              )
 
 # Searches for a specified prebuilt library and stores the path as a

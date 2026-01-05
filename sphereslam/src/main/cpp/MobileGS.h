@@ -6,15 +6,7 @@
 #include <glm/glm.hpp>
 #include <android/native_window.h>
 #include <mutex>
-
-// Structure for a 3D Gaussian
-struct Gaussian {
-    glm::vec3 position;
-    glm::quat rotation;
-    glm::vec3 scale;
-    float opacity;
-    glm::vec3 color_sh; // Simplification: just DC component
-};
+#include "Gaussian.h"
 
 class MobileGS {
 public:

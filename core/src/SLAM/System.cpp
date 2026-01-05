@@ -7,10 +7,14 @@
 #include <sstream>
 #include <cmath>
 
-System::System(const std::string &strVocFile, const std::string &strSettingsFile, const eSensor sensor, const bool bUseViewer)
-    : mSensor(sensor), mpDensifier(nullptr) {
+System::System(const std::string &strVocFile, const std::string &strSettingsFile, const eSensor sensor, Platform* pPlatform, const bool bUseViewer)
+    : mSensor(sensor), mpDensifier(nullptr), mpPlatform(pPlatform) {
 
-    std::cout << "SphereSLAM System Initializing..." << std::endl;
+    if (mpPlatform) {
+        mpPlatform->Log(LogLevel::INFO, "System", "SphereSLAM System Initializing...");
+    } else {
+        std::cout << "SphereSLAM System Initializing..." << std::endl;
+    }
 
     // Load Settings
     Settings settings(strSettingsFile);
@@ -19,7 +23,8 @@ System::System(const std::string &strVocFile, const std::string &strSettingsFile
     ORBVocabulary* mpVocabulary = new ORBVocabulary();
     bool bVocLoaded = mpVocabulary->loadFromTextFile(strVocFile);
     if (!bVocLoaded) {
-        std::cerr << "Wrong path to vocabulary. " << std::endl;
+        if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "Wrong path to vocabulary.");
+        else std::cerr << "Wrong path to vocabulary. " << std::endl;
     }
 
     // Initialize Camera Model (CubeMap)
@@ -163,7 +168,11 @@ void System::SaveTrajectoryTUM(const std::string &filename) {
         }
     }
     f.close();
-    std::cout << "Trajectory saved to " << filename << std::endl;
+    if (mpPlatform) {
+        mpPlatform->Log(LogLevel::INFO, "System", "Trajectory saved to " + filename);
+    } else {
+        std::cout << "Trajectory saved to " << filename << std::endl;
+    }
 }
 
 int System::GetTrackingState() {
@@ -182,7 +191,8 @@ void System::Reset() {
         std::queue<IMUData> empty;
         std::swap(mImuQueue, empty);
     }
-    std::cout << "System Reset" << std::endl;
+    if (mpPlatform) mpPlatform->Log(LogLevel::INFO, "System", "System Reset");
+    else std::cout << "System Reset" << std::endl;
 }
 
 std::string System::GetMapStats() {

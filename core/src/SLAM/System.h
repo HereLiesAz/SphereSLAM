@@ -14,6 +14,7 @@
 #include "LocalMapping.h"
 #include "LoopClosing.h"
 #include "KeyFrameDatabase.h"
+#include "Platform.h"
 
 // New forward declaration
 class Densifier;
@@ -35,7 +36,7 @@ public:
         int type; // 0: Accel, 1: Gyro
     };
 
-    System(const std::string &strVocFile, const std::string &strSettingsFile, const eSensor sensor, const bool bUseViewer = true);
+    System(const std::string &strVocFile, const std::string &strSettingsFile, const eSensor sensor, Platform* pPlatform, const bool bUseViewer = true);
 
     ~System();
 
@@ -67,6 +68,8 @@ public:
     std::string GetMapStats();
 
     void Shutdown();
+
+    Platform* mpPlatform; // Made public or accessor needed? Keeping public for internal modules ease for now.
 
 private:
     eSensor mSensor;
