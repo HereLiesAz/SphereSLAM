@@ -1,7 +1,7 @@
 #ifndef PLATFORM_WEB_H
 #define PLATFORM_WEB_H
 
-#include "../../core/include/Platform.h"
+#include "Platform.h"
 #include <iostream>
 #include <fstream>
 
