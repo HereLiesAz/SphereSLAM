@@ -1,4 +1,4 @@
-package com.example.sphereslam
+package com.hereliesaz.sphereslam
 
 import android.Manifest
 import android.content.Context
@@ -18,8 +18,8 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import com.sphereslam.lib.SphereCameraManager
-import com.sphereslam.lib.SphereSLAM
+import com.hereliesaz.sphereslam.SphereCameraManager
+import com.hereliesaz.sphereslam.SphereSLAM
 
 class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Callback, Choreographer.FrameCallback {
 

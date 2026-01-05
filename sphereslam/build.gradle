@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace 'com.sphereslam.lib'
+    namespace 'com.hereliesaz.sphereslam'
     compileSdk 34
 
     defaultConfig {
