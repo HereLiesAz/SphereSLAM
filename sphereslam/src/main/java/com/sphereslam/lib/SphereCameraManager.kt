@@ -37,7 +37,7 @@ class SphereCameraManager(
 
     fun startBackgroundThread() {
         backgroundThread = HandlerThread("CameraBackground").also { it.start() }
-        backgroundHandler = Handler(backgroundThread!!.looper)
+        backgroundHandler = backgroundThread?.looper?.let(::Handler)
     }
 
     fun stopBackgroundThread() {
