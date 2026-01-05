@@ -26,27 +26,20 @@ The system is built as a standard Android application with a heavy native C++ ba
 
 ## Prerequisites & Build Instructions
 
-**Important:** This repository contains **Mock/Stub Headers** for external dependencies to allow the project structure to be compiled and reviewed without downloading gigabytes of binary SDKs. To build a functional application, you must replace these mocks with the actual libraries.
+**Important:** This repository requires the installation of third-party libraries (OpenCV, Eigen, GLM) to compile. The dependencies are git-ignored to prevent repository bloat. Follow the instructions below to install them.
 
 ### 1. OpenCV Android SDK
-*   **Current State:** `libs/opencv` contains a stub `core.hpp` to satisfy the compiler.
 *   **Action Required:**
-    1.  Download the **OpenCV 4.x Android SDK**.
-    2.  Extract it.
-    3.  Replace the `libs/opencv` folder (or update `CMakeLists.txt` paths) with the actual SDK content.
-    4.  Ensure `libopencv_java4.so` is available for linking.
+    1.  Download the **OpenCV 4.10 Android SDK**.
+    2.  Extract `OpenCV-android-sdk` to `libs/opencv` (so that `libs/opencv/sdk/native` exists).
 
 ### 2. Eigen & GLM
-*   **Current State:** `app/src/main/cpp/Thirdparty` contains stub headers for `Eigen` and `glm`.
 *   **Action Required:**
-    1.  Download **Eigen 3.4.0** and **GLM 0.9.9**.
-    2.  Replace the contents of `app/src/main/cpp/Thirdparty/eigen` and `app/src/main/cpp/Thirdparty/glm` with the real headers.
+    1.  Download **Eigen 3.4.0** and extract to `app/src/main/cpp/Thirdparty/eigen` (header-only).
+    2.  Download **GLM 1.0.1** and extract to `app/src/main/cpp/Thirdparty/glm` (header-only).
 
 ### 3. TensorFlow Lite (LiteRT)
-*   **Current State:** `DepthAnyCamera.cpp` contains stub implementations of the TFLite C API to prevent linker errors.
-*   **Action Required:**
-    1.  Remove the `extern "C"` stubs in `DepthAnyCamera.cpp`.
-    2.  Add the official TensorFlow Lite AAR or C API dependencies to your `build.gradle` and `CMakeLists.txt` (via Prefab or manual linking).
+*   **Status:** Configured via Gradle Prefab. `DepthAnyCamera` uses the real C API.
 
 ### 4. Building
 Once dependencies are resolved:
