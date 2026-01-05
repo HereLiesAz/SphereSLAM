@@ -37,6 +37,8 @@ public:
 
     System(const std::string &strVocFile, const std::string &strSettingsFile, const eSensor sensor, const bool bUseViewer = true);
 
+    ~System();
+
     // Process a new image
     // Returns the camera pose (Tcw)
     cv::Mat TrackMonocular(const cv::Mat &im, const double &timestamp);

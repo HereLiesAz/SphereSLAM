@@ -273,3 +273,25 @@ void onDrawFrame() {
 1. **SIGILL at startup:** Check your DBoW2/g2o compilation flags. Ensure `EPnP` solver uses aligned memory.
 2. **Drift:** Verify IMU timestamps. Plot IMU accel norm; it should equal ~9.81 when static. If not, your scale or bias init is wrong.
 3. **Thermal Throttling:** If FPS drops after 30s, reduce the "Active Map" size in ORB-SLAM3 or throttle the Dense Reconstruction thread.
+
+## **Phase 8: Future Implementation (Missing Algorithms)**
+
+The current codebase contains structural skeletons for several key components. The following must be implemented to achieve full functionality:
+
+* [ ] **Optimizer Implementation:**
+    *   Implement `PoseOptimization` using g2o (Graph Optimization).
+    *   Implement `LocalBundleAdjustment`.
+    *   Implement `GlobalBundleAdjustment`.
+    *   Implement `OptimizeSim3`.
+* [ ] **Tracking Logic:**
+    *   Implement real feature matching in `MonocularInitialization`.
+    *   Implement actual `Relocalization` logic (currently a stub).
+* [ ] **Loop Closing:**
+    *   Implement `DetectLoop` using DBoW2.
+    *   Implement `ComputeSim3`.
+* [ ] **Densifier:**
+    *   Implement the logic to convert KeyFrames to Gaussian Splats in `Densifier.cpp`.
+* [ ] **Library Refactor:**
+    *   Refactor the project into an Android Library (AAR) for easy import.
+    *   Expose a clean public API (`SphereSLAM` class).
+    *   Support JitPack publication.

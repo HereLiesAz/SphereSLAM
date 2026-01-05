@@ -1,4 +1,4 @@
-package com.example.sphereslam
+package com.sphereslam.lib
 
 import android.content.Context
 import android.graphics.ImageFormat
@@ -37,7 +37,7 @@ class SphereCameraManager(
 
     fun startBackgroundThread() {
         backgroundThread = HandlerThread("CameraBackground").also { it.start() }
-        backgroundHandler = Handler(backgroundThread?.looper)
+        backgroundHandler = Handler(backgroundThread!!.looper)
     }
 
     fun stopBackgroundThread() {
