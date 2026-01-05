@@ -4,12 +4,12 @@ plugins {
 }
 
 android {
-    namespace 'com.example.sphereslam'
-    compileSdk 34
+    namespace 'com.hereliesaz.sphereslam'
+    compileSdk 36
     ndkVersion "29.0.14206865"
 
     defaultConfig {
-        applicationId "com.example.sphereslam"
+        applicationId "com.hereliesaz.sphereslam"
         minSdk 29
         targetSdk 34
         versionCode 1
