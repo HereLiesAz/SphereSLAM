@@ -12,6 +12,7 @@
 #include "DepthAnyCamera.h"
 #include "MobileGS.h"
 #include "Densifier.h"
+#include "PlatformAndroid.h"
 
 #define TAG "SphereSLAM-Native"
 
@@ -20,6 +21,7 @@ System* slamSystem = nullptr;
 VulkanCompute* vulkanCompute = nullptr;
 DepthAnyCamera* depthEstimator = nullptr;
 MobileGS* renderer = nullptr;
+PlatformAndroid* platformAndroid = nullptr;
 
 // Thread safety for Pose
 std::mutex mMutexPose;
@@ -34,6 +36,9 @@ Java_com_hereliesaz_sphereslam_SphereSLAM_initNative(JNIEnv* env, jobject thiz, 
     std::string strCacheDir(path);
     env->ReleaseStringUTFChars(cacheDir, path);
 
+    // Initialize Platform Layer
+    platformAndroid = new PlatformAndroid(mgr);
+
     // Initialize Subsystems
     vulkanCompute = new VulkanCompute(mgr);
     vulkanCompute->initialize();
@@ -47,7 +52,7 @@ Java_com_hereliesaz_sphereslam_SphereSLAM_initNative(JNIEnv* env, jobject thiz, 
 
     // Initialize SLAM System
     // VocFile and SettingsFile would be paths to assets extracted to cache
-    slamSystem = new System("", "", System::IMU_MONOCULAR, false); // Enable IMU mode
+    slamSystem = new System("", "", System::IMU_MONOCULAR, platformAndroid, false); // Enable IMU mode
 
     // Wire up Densifier
     Densifier* densifier = new Densifier(depthEstimator);
@@ -73,6 +78,10 @@ Java_com_hereliesaz_sphereslam_SphereSLAM_destroyNative(JNIEnv* env, jobject thi
     if (renderer) {
         delete renderer;
         renderer = nullptr;
+    }
+    if (platformAndroid) {
+        delete platformAndroid;
+        platformAndroid = nullptr;
     }
     __android_log_print(ANDROID_LOG_INFO, TAG, "Native Systems Destroyed");
 }
