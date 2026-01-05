@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "SphereSLAM"
-include ':app'
-include ':sphereslam'
+include(":app")
+include(":sphereslam")

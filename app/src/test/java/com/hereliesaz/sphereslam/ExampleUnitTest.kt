@@ -1,4 +1,4 @@
-package com.example.sphereslam
+package com.hereliesaz.sphereslam
 
 import org.junit.Test
 import org.junit.Assert.*

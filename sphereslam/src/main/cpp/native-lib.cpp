@@ -26,7 +26,7 @@ std::mutex mMutexPose;
 cv::Mat mCurrentPose = cv::Mat::eye(4, 4, CV_32F);
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_sphereslam_lib_SphereSLAM_initNative(JNIEnv* env, jobject thiz, jobject assetManager, jstring cacheDir) {
+Java_com_hereliesaz_sphereslam_SphereSLAM_initNative(JNIEnv* env, jobject thiz, jobject assetManager, jstring cacheDir) {
     AAssetManager* mgr = AAssetManager_fromJava(env, assetManager);
 
     // Convert cacheDir to string
@@ -57,7 +57,7 @@ Java_com_sphereslam_lib_SphereSLAM_initNative(JNIEnv* env, jobject thiz, jobject
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_sphereslam_lib_SphereSLAM_destroyNative(JNIEnv* env, jobject thiz) {
+Java_com_hereliesaz_sphereslam_SphereSLAM_destroyNative(JNIEnv* env, jobject thiz) {
     if (slamSystem) {
         delete slamSystem;
         slamSystem = nullptr;
@@ -78,7 +78,7 @@ Java_com_sphereslam_lib_SphereSLAM_destroyNative(JNIEnv* env, jobject thiz) {
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_sphereslam_lib_SphereSLAM_processFrame(JNIEnv* env, jobject thiz, jlong matAddr, jdouble timestamp) {
+Java_com_hereliesaz_sphereslam_SphereSLAM_processFrame(JNIEnv* env, jobject thiz, jlong matAddr, jdouble timestamp) {
     if (slamSystem && vulkanCompute) {
         // Pipeline: Input -> Vulkan (Equirect to Cubemap) -> SLAM
 
@@ -112,7 +112,7 @@ Java_com_sphereslam_lib_SphereSLAM_processFrame(JNIEnv* env, jobject thiz, jlong
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_sphereslam_lib_SphereSLAM_processIMU(JNIEnv* env, jobject thiz, jint type, jfloat x, jfloat y, jfloat z, jlong timestamp) {
+Java_com_hereliesaz_sphereslam_SphereSLAM_processIMU(JNIEnv* env, jobject thiz, jint type, jfloat x, jfloat y, jfloat z, jlong timestamp) {
     if (slamSystem) {
         // Type 1: Accel, Type 4: Gyro (Android constants)
         // Timestamp is nanoseconds, convert to seconds if needed or keep consistent
@@ -130,7 +130,7 @@ Java_com_sphereslam_lib_SphereSLAM_processIMU(JNIEnv* env, jobject thiz, jint ty
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_sphereslam_lib_SphereSLAM_setNativeWindow(JNIEnv* env, jobject thiz, jobject surface) {
+Java_com_hereliesaz_sphereslam_SphereSLAM_setNativeWindow(JNIEnv* env, jobject thiz, jobject surface) {
     if (renderer) {
         ANativeWindow* window = nullptr;
         if (surface != nullptr) {
@@ -141,7 +141,7 @@ Java_com_sphereslam_lib_SphereSLAM_setNativeWindow(JNIEnv* env, jobject thiz, jo
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_sphereslam_lib_SphereSLAM_renderFrame(JNIEnv* env, jobject thiz) {
+Java_com_hereliesaz_sphereslam_SphereSLAM_renderFrame(JNIEnv* env, jobject thiz) {
     if (renderer) {
         // Get latest pose
         cv::Mat pose;
@@ -190,14 +190,14 @@ Java_com_sphereslam_lib_SphereSLAM_renderFrame(JNIEnv* env, jobject thiz) {
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_sphereslam_lib_SphereSLAM_manipulateView(JNIEnv* env, jobject thiz, jfloat dx, jfloat dy) {
+Java_com_hereliesaz_sphereslam_SphereSLAM_manipulateView(JNIEnv* env, jobject thiz, jfloat dx, jfloat dy) {
     if (renderer) {
         renderer->handleInput(dx, dy);
     }
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_sphereslam_lib_SphereSLAM_getTrackingState(JNIEnv* env, jobject thiz) {
+Java_com_hereliesaz_sphereslam_SphereSLAM_getTrackingState(JNIEnv* env, jobject thiz) {
     if (slamSystem) {
         return slamSystem->GetTrackingState();
     }
@@ -205,14 +205,14 @@ Java_com_sphereslam_lib_SphereSLAM_getTrackingState(JNIEnv* env, jobject thiz) {
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_sphereslam_lib_SphereSLAM_resetSystem(JNIEnv* env, jobject thiz) {
+Java_com_hereliesaz_sphereslam_SphereSLAM_resetSystem(JNIEnv* env, jobject thiz) {
     if (slamSystem) {
         slamSystem->Reset();
     }
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_sphereslam_lib_SphereSLAM_getMapStats(JNIEnv* env, jobject thiz) {
+Java_com_hereliesaz_sphereslam_SphereSLAM_getMapStats(JNIEnv* env, jobject thiz) {
     std::string stats = "System not ready";
     if (slamSystem) {
         stats = slamSystem->GetMapStats();
