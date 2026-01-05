@@ -114,7 +114,7 @@ void Tracking::Reset() {
     // Clear other state...
 }
 
-eTrackingState Tracking::GetState() {
+Tracking::eTrackingState Tracking::GetState() {
     return mState;
 }
 

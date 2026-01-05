@@ -49,7 +49,7 @@ void main() {
 }
 )";
 
-MobileGS::MobileGS() : mWindow(nullptr), mUserOffset(0.0f), mUserRotation(0.0f), mBufferDirty(false) {
+MobileGS::MobileGS() : mWindow(nullptr), mUserOffset(glm::vec3(0.0f, 0.0f, 0.0f)), mUserRotation(glm::vec3(0.0f, 0.0f, 0.0f)), mBufferDirty(false) {
     mViewMatrix = glm::mat4(1.0f);
     mProjMatrix = glm::mat4(1.0f);
 }
@@ -148,8 +148,8 @@ void MobileGS::draw() {
     // Optimization: If mViewMatrix is rigid body:
     // camPos = -transpose(R) * t
     glm::mat3 R = glm::mat3(mViewMatrix);
-    glm::vec3 t = glm::vec3(mViewMatrix[3]);
-    glm::vec3 camPos = -glm::transpose(R) * t;
+    glm::vec3 t = glm::vec3(mViewMatrix[3].x, mViewMatrix[3].y, mViewMatrix[3].z);
+    glm::vec3 camPos = glm::transpose(R) * (-t);
 
     std::sort(mFrontBuffer.begin(), mFrontBuffer.end(), DepthSorter{camPos});
 

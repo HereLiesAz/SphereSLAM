@@ -37,9 +37,6 @@ System::System(const std::string &strVocFile, const std::string &strSettingsFile
     // Initialize Loop Closing
     mpLoopCloser = new LoopClosing(this, mpMap, mpKeyFrameDatabase, false);
 
-    // Connect Modules
-    mpLocalMapper->SetLoopCloser(mpLoopCloser);
-
     // Initialize Tracking
     mpTracker = new Tracking(this, mpCamera, mpMap, mpLocalMapper);
 
@@ -160,7 +157,7 @@ void System::SaveTrajectoryTUM(const std::string &filename) {
 
                 // Write timestamp tx ty tz qx qy qz qw
                 f << std::setprecision(6) << pKF->mTimeStamp << " "
-                  << twc.at<float>(0) << " " << twc.at<float>(1) << " " << twc.at<float>(2) << " "
+                  << twc.at<float>(0,0) << " " << twc.at<float>(1,0) << " " << twc.at<float>(2,0) << " "
                   << qx << " " << qy << " " << qz << " " << qw << std::endl;
             }
         }

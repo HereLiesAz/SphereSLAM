@@ -3,32 +3,29 @@ package com.example.sphereslam
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
-import android.content.res.AssetManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
-import android.media.Image
 import android.os.Bundle
-import android.os.PowerManager
-import android.util.Log
 import android.view.Choreographer
 import android.view.MotionEvent
-import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
-import android.view.Window
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.sphereslam.lib.SphereCameraManager
+import com.sphereslam.lib.SphereSLAM
 
 class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Callback, Choreographer.FrameCallback {
 
     private val CAMERA_PERMISSION_REQUEST_CODE = 100
     private lateinit var cameraManager: SphereCameraManager
+    private lateinit var sphereSLAM: SphereSLAM
     private lateinit var sensorManager: SensorManager
     private var accelerometer: Sensor? = null
     private var gyroscope: Sensor? = null
@@ -57,14 +54,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         statsText = findViewById(R.id.statsText)
 
         findViewById<Button>(R.id.resetButton).setOnClickListener {
-            resetSystem()
+            sphereSLAM.resetSystem()
         }
 
-        // Initialize Native Systems with Cache Dir
-        initNative(assets, cacheDir.absolutePath)
+        // Initialize SphereSLAM Library
+        sphereSLAM = SphereSLAM(this)
 
         cameraManager = SphereCameraManager(this) { image ->
-            processFrame(0L, image.timestamp.toDouble())
+            sphereSLAM.processFrame(0L, image.timestamp.toDouble())
             image.close()
         }
 
@@ -106,7 +103,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
 
     override fun onDestroy() {
         super.onDestroy()
-        destroyNative()
+        sphereSLAM.cleanup()
     }
 
     override fun onTouchEvent(event: MotionEvent?): Boolean {
@@ -122,7 +119,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
                 MotionEvent.ACTION_MOVE -> {
                     val dx = x - lastTouchX
                     val dy = y - lastTouchY
-                    manipulateView(dx, dy)
+                    sphereSLAM.manipulateView(dx, dy)
                     lastTouchX = x
                     lastTouchY = y
                 }
@@ -163,7 +160,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     override fun onSensorChanged(event: SensorEvent?) {
         event?.let {
             if (it.sensor.type == Sensor.TYPE_ACCELEROMETER || it.sensor.type == Sensor.TYPE_GYROSCOPE) {
-                processIMU(it.sensor.type, it.values[0], it.values[1], it.values[2], it.timestamp)
+                sphereSLAM.processIMU(it.sensor.type, it.values[0], it.values[1], it.values[2], it.timestamp)
             }
         }
     }
@@ -173,20 +170,20 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
-        setNativeWindow(holder.surface)
+        sphereSLAM.setNativeWindow(holder.surface)
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
-        setNativeWindow(null)
+        sphereSLAM.setNativeWindow(null)
     }
 
     override fun doFrame(frameTimeNanos: Long) {
-        renderFrame()
+        sphereSLAM.renderFrame()
 
-        val state = getTrackingState()
+        val state = sphereSLAM.getTrackingState()
         val stateStr = when(state) {
             -1 -> "SYSTEM NOT READY"
             0 -> "NO IMAGES"
@@ -199,30 +196,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
 
         statsTextUpdateFrameCounter++
         if (statsTextUpdateFrameCounter % 60 == 0) {
-             statsText.text = getMapStats()
+             statsText.text = sphereSLAM.getMapStats()
         }
 
         lastFrameTime = frameTimeNanos
         Choreographer.getInstance().postFrameCallback(this)
     }
 
-    // Native Methods Declaration
-    external fun stringFromJNI(): String
-    external fun initNative(assetManager: AssetManager, cacheDir: String)
-    external fun destroyNative()
-    external fun processFrame(matAddr: Long, timestamp: Double)
-    external fun processIMU(type: Int, x: Float, y: Float, z: Float, timestamp: Long)
-    external fun setNativeWindow(surface: Surface?)
-    external fun renderFrame()
-    external fun manipulateView(dx: Float, dy: Float)
-    external fun getTrackingState(): Int
-    external fun resetSystem()
-    external fun getMapStats(): String
-
     companion object {
-        init {
-            System.loadLibrary("sphereslam")
-        }
         private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
     }
 }
