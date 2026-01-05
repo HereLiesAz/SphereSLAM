@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace 'com.hereliesaz.sphereslam.lib'
+    namespace 'com.hereliesaz.sphereslam'
     compileSdk 36
     ndkVersion "29.0.14206865"
 
