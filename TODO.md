@@ -52,10 +52,9 @@ dependencies {
 
 * [x] **OpenCV 4.10 Android SDK:** Download pre-built Android SDK. Extract to `libs/opencv`.
 * [x] **Eigen 3.4.0:** Header-only. Copy to `app/src/main/cpp/Thirdparty/eigen`.
-* [x] **GLM 1.0.1:** Header-only. Copy to `app/src/main/cpp/Thirdparty/glm`.
-* [ ] **Sophus:** Clone commit `a621ff` (template-based Lie Algebra). Copy to `Thirdparty`.
-* [ ] **DBoW2:** Clone standard repo. Modify `CMakeLists.txt` to remove `march=native` (causes SIGILL on Android). Build static library.
-* [ ] **g2o:** Clone standard repo. Critical modification: In `g2o/core/sparse_block_matrix.h`, ensure `Eigen::aligned_allocator` is used to prevent memory misalignment crashes on ARM64.
+* [x] **Sophus:** Clone commit `a621ff` (template-based Lie Algebra). Copy to `Thirdparty`.
+* [x] **DBoW2:** Clone standard repo. Modify `CMakeLists.txt` to remove `march=native` (causes SIGILL on Android). Build static library.
+* [x] **g2o:** Clone standard repo. Critical modification: In `g2o/core/sparse_block_matrix.h`, ensure `Eigen::aligned_allocator` is used to prevent memory misalignment crashes on ARM64.
 
 ---
 
@@ -191,7 +190,7 @@ Instead of meshing, we use Gaussian Splats for visualization.
 
 * [x] **Input:** The single photosphere + Depth Map.
 * [x] **Generation:** Instead of optimization (training), we procedurally generate Gaussians.
-* **Position:** Unprojected pixel .
+* **Position:** Unprojected pixel `(u,v)`.
 * [x] **Color:** Pixel RGB.
 * [x] **Scale:** Derived from local depth gradient (larger scale for distant pixels).
 * [x] **Opacity:** 1.0 initially.

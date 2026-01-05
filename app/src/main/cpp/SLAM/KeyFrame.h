@@ -6,6 +6,7 @@
 #include <set>
 
 class Map;
+class KeyFrameDatabase;
 
 class KeyFrame {
 public:

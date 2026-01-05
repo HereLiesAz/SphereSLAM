@@ -1,29 +1,33 @@
+# For more information about using CMake with Android Studio, read the
+# documentation: https://d.android.com/studio/projects/add-native-code.html
+
+# Sets the minimum version of CMake required to build the native library.
 cmake_minimum_required(VERSION 3.22.1)
 
+# Declares and names the project.
 project("sphereslam")
 
-# --- LiteRT (via Prefab) ---
-find_package(litert REQUIRED CONFIG)
-find_package(litert-gpu REQUIRED CONFIG)
-
-# --- OpenCV ---
-# CMAKE_SOURCE_DIR is app/src/main/cpp
-# libs is at app/src/main/cpp/../../../../libs
-set(OPENCV_ROOT ${CMAKE_SOURCE_DIR}/../../../../libs/opencv/sdk/native)
-include_directories(${OPENCV_ROOT}/jni/include)
-
-add_library(lib_opencv SHARED IMPORTED)
-set_target_properties(lib_opencv PROPERTIES IMPORTED_LOCATION ${OPENCV_ROOT}/libs/${ANDROID_ABI}/libopencv_java4.so)
-
-# --- Include Directories ---
+# Include directories
 include_directories(
     ${CMAKE_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/SLAM
     ${CMAKE_SOURCE_DIR}/Thirdparty/eigen
     ${CMAKE_SOURCE_DIR}/Thirdparty/glm
+    ${CMAKE_SOURCE_DIR}/../../../../libs/opencv/sdk/native/jni/include # Adjust path as needed
 )
 
-add_library(sphereslam SHARED
+# Creates and names a library, sets it as either STATIC
+# or SHARED, and provides the relative paths to its source code.
+# You can define multiple libraries, and CMake builds them for you.
+# Gradle automatically packages shared libraries with your APK.
+
+add_library( # Sets the name of the library.
+             sphereslam
+
+             # Sets the library as a shared library.
+             SHARED
+
+             # Provides a relative path to your source file(s).
              native-lib.cpp
              VulkanCompute.cpp
              DepthAnyCamera.cpp
@@ -44,19 +48,40 @@ add_library(sphereslam SHARED
              SLAM/Initializer.cpp
              )
 
-find_library(log-lib log)
-find_library(android-lib android)
-find_library(android-asset android)
+# Searches for a specified prebuilt library and stores the path as a
+# variable. Because CMake includes system libraries in the search path by
+# default, you only need to specify the name of the public NDK library
+# you want to add. CMake verifies that the library exists before
+# completing its build.
 
-target_link_libraries(sphereslam
+find_library( # Sets the name of the path variable.
+              log-lib
+
+              # Specifies the name of the NDK library that
+              # you want CMake to locate.
+              log )
+
+find_library( # Android native window library
+              android-lib
+              android )
+
+find_library( # AAssetManager
+              android-asset
+              android )
+
+# Specifies libraries CMake should link to your target library. You
+# can link multiple libraries, such as libraries you define in this
+# build script, prebuilt third-party libraries, or system libraries.
+
+target_link_libraries( # Specifies the target library.
+                       sphereslam
+
+                       # Links the target library to the log library
+                       # included in the NDK.
                        ${log-lib}
                        ${android-lib}
                        ${android-asset}
                        android
                        EGL
                        GLESv3
-                       vulkan
-                       lib_opencv
-                       litert::litert
-                       litert::litert-gpu
-                       )
+                       vulkan )
