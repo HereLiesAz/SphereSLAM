@@ -229,28 +229,25 @@ Java_com_hereliesaz_sphereslam_SphereSLAM_getMapStats(JNIEnv* env, jobject thiz)
     return env->NewStringUTF(stats.c_str());
 }
 
+namespace {
+void executeWithFilePath(JNIEnv* env, jstring jpath, void (System::*func)(const std::string&)) {
+    if (!slamSystem) return;
+    const char* path_str = env->GetStringUTFChars(jpath, nullptr);
+    if (!path_str) {
+        return; // An exception has been thrown by GetStringUTFChars
+    }
+    std::string path(path_str);
+    env->ReleaseStringUTFChars(jpath, path_str);
+    (slamSystem->*func)(path);
+}
+} // namespace
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_hereliesaz_sphereslam_SphereSLAM_saveMap(JNIEnv* env, jobject thiz, jstring filePath) {
-    if (slamSystem) {
-        const char *path = env->GetStringUTFChars(filePath, 0);
-        if (path == nullptr) {
-            return;
-        }
-        std::string strPath(path);
-        env->ReleaseStringUTFChars(filePath, path);
-        slamSystem->SaveMap(strPath);
-    }
+    executeWithFilePath(env, filePath, &System::SaveMap);
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_hereliesaz_sphereslam_SphereSLAM_savePhotosphere(JNIEnv* env, jobject thiz, jstring filePath) {
-    if (slamSystem) {
-        const char *path = env->GetStringUTFChars(filePath, 0);
-        if (path == nullptr) {
-            return;
-        }
-        std::string strPath(path);
-        env->ReleaseStringUTFChars(filePath, path);
-        slamSystem->SavePhotosphere(strPath);
-    }
+    executeWithFilePath(env, filePath, &System::SavePhotosphere);
 }

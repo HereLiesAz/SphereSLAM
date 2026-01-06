@@ -158,22 +158,29 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         try {
             val bitmap = Bitmap.createBitmap(surfaceView.width, surfaceView.height, Bitmap.Config.ARGB_8888)
             PixelCopy.request(surfaceView, bitmap, { copyResult ->
-                try {
-                    if (copyResult == PixelCopy.SUCCESS) {
-                        try {
-                            FileOutputStream(screenshotFile).use { out ->
-                                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                // Move blocking compression/IO to background thread
+                lifecycleScope.launch(Dispatchers.IO) {
+                    try {
+                        if (copyResult == PixelCopy.SUCCESS) {
+                            try {
+                                FileOutputStream(screenshotFile).use { out ->
+                                    bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                                }
+                                withContext(Dispatchers.Main) {
+                                    Toast.makeText(this@MainActivity, "Screenshot saved", Toast.LENGTH_SHORT).show()
+                                }
+                            } catch (e: IOException) {
+                                Log.e(TAG, "Failed to save screenshot", e)
                             }
-                            Toast.makeText(this@MainActivity, "Screenshot saved", Toast.LENGTH_SHORT).show()
-                        } catch (e: IOException) {
-                            Log.e(TAG, "Failed to save screenshot", e)
+                        } else {
+                            Log.e(TAG, "PixelCopy failed with result: $copyResult")
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(this@MainActivity, "Screenshot failed", Toast.LENGTH_SHORT).show()
+                            }
                         }
-                    } else {
-                        Log.e(TAG, "PixelCopy failed with result: $copyResult")
-                        Toast.makeText(this@MainActivity, "Screenshot failed", Toast.LENGTH_SHORT).show()
+                    } finally {
+                        bitmap.recycle()
                     }
-                } finally {
-                    bitmap.recycle()
                 }
             }, Handler(Looper.getMainLooper()))
         } catch (e: IllegalArgumentException) {
