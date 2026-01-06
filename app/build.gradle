@@ -5,7 +5,8 @@ plugins {
 
 android {
     namespace 'com.hereliesaz.sphereslam'
-    compileSdk 34
+    compileSdk 36
+    ndkVersion "29.0.14206865"
 
     defaultConfig {
         applicationId "com.hereliesaz.sphereslam"
@@ -21,18 +22,28 @@ android {
         }
     }
 
+    signingConfigs {
+        release {
+            storeFile file(System.getenv("KEYSTORE_FILE") ?: "keystore.jks")
+            storePassword System.getenv("KEYSTORE_PASSWORD")
+            keyAlias System.getenv("KEY_ALIAS")
+            keyPassword System.getenv("KEY_PASSWORD")
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
     }
     kotlinOptions {
-        jvmTarget = '1.8'
+        jvmTarget = '21'
     }
     buildFeatures {
         viewBinding true

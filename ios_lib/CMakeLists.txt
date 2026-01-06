@@ -18,6 +18,7 @@ file(GLOB_RECURSE CORE_SOURCES "${CMAKE_SOURCE_DIR}/../core/src/SLAM/*.cpp")
 add_library(sphereslam_ios STATIC
     ${CORE_SOURCES}
     PlatformIOS.mm
+    SphereSLAMBridge.mm
 )
 
 # Link generic libs (in real iOS build, you'd link Foundation etc.)

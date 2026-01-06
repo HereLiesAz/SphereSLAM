@@ -1,11 +1,7 @@
 #ifndef PLATFORM_WEB_H
 #define PLATFORM_WEB_H
 
-<<<<<<< HEAD
-#include "../../core/include/Platform.h"
-=======
 #include "Platform.h"
->>>>>>> latest-debug-v0.1
 #include <iostream>
 #include <fstream>
 
