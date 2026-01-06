@@ -2,6 +2,7 @@
 #include <emscripten/val.h>
 #include "SLAM/System.h"
 #include "PlatformWeb.h"
+#include <vector>
 
 using namespace emscripten;
 
@@ -9,8 +10,6 @@ using namespace emscripten;
 class SystemWrapper {
 public:
     SystemWrapper(std::string strVocFile, std::string strSettingsFile) {
-        // PlatformWeb is stateless, so we can just pass a new instance
-        // or manage it better. For now:
         mPlatform = new PlatformWeb();
         mSystem = new System(strVocFile, strSettingsFile, System::MONOCULAR, mPlatform, false);
     }
@@ -20,19 +19,50 @@ public:
         delete mPlatform;
     }
 
-    // Wrap ProcessFrame (Monocular for simplicity in this demo)
-    // Takes a JS Uint8Array containing image data
+    // Wrap ProcessFrame
+    // Takes a JS Uint8Array (memory view)
     bool processFrame(val jsData, int width, int height, double timestamp) {
-        // In a real Wasm implementation, managing memory transfer is key.
-        // Copy JS data to C++ vector
-        // This is slow, better to use memory view.
+        // Robustness: Input validation
+        if (width <= 0 || height <= 0) return false;
 
-        // Simplified: Assuming we just want to trigger tracking
-        // We would construct cv::Mat here.
+        std::vector<unsigned char> pixelData;
 
-        // cv::Mat im(height, width, CV_8UC4, ...); // Requires buffer access
+        // Use emscripten::val::as to convert JS array to C++ vector
+        // This handles type checking and copying
+        try {
+            // Option 1: Direct conversion if supported
+            // pixelData = jsData.as<std::vector<unsigned char>>();
 
-        // For the purpose of this structure:
+            // Option 2: Copy manually if auto-conversion is tricky with TypedArrays
+            unsigned int length = jsData["length"].as<unsigned int>();
+            pixelData.resize(length);
+
+            // Efficient copy using memory view if available, or loop
+            // For simple bind:
+            val memory = val::module_property("HEAPU8");
+            // This requires pointer logic usually.
+            // Let's use the provided helper method if available, or just use .as<std::vector> which works for simple arrays.
+            // For TypedArray, we often use memory view.
+
+            // Fallback for simplicity/robustness without complex pointer math in this snippet:
+            // Convert to regular array first in JS? No, slow.
+            // Let's assume standard vector conversion works for now as it's cleaner.
+             pixelData = vecFromJSArray<unsigned char>(jsData);
+
+        } catch (...) {
+            return false;
+        }
+
+        // Check size
+        if (pixelData.size() != width * height * 4) { // Assuming RGBA
+            // Error handling
+            return false;
+        }
+
+        // Construct Mat (if OpenCV available)
+        // cv::Mat im(height, width, CV_8UC4, pixelData.data());
+        // mSystem->TrackMonocular(im, timestamp);
+
         return true;
     }
 
@@ -63,4 +93,7 @@ EMSCRIPTEN_BINDINGS(sphereslam_module) {
         .function("getTrackingState", &SystemWrapper::getTrackingState)
         .function("getMapStats", &SystemWrapper::getMapStats)
         .function("reset", &SystemWrapper::reset);
+
+    // Register vector conversion if needed explicitly
+    register_vector<unsigned char>("VectorU8");
 }

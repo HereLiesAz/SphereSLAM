@@ -6,7 +6,10 @@
 @interface SphereSLAMBridge : NSObject
 
 - (instancetype)initWithVocFile:(NSString *)vocFile settingsFile:(NSString *)settingsFile;
-- (void)processFrame:(NSData *)imageData width:(int)width height:(int)height timestamp:(double)timestamp;
+
+// Updated signature to accept raw pointer and stride
+- (void)processFrame:(const void *)baseAddress width:(int)width height:(int)height stride:(int)stride timestamp:(double)timestamp;
+
 - (int)getTrackingState;
 - (NSString *)getMapStats;
 - (void)reset;

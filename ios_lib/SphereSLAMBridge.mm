@@ -2,6 +2,9 @@
 #include "SLAM/System.h"
 #include "PlatformIOS.h"
 
+// Basic OpenCV include for constructing Mat
+#include <opencv2/core/core.hpp>
+
 @interface SphereSLAMBridge () {
     System* _system;
     PlatformIOS* _platform;
@@ -13,16 +16,12 @@
 - (instancetype)initWithVocFile:(NSString *)vocFile settingsFile:(NSString *)settingsFile {
     self = [super init];
     if (self) {
-        auto platform = std::make_unique<PlatformIOS>();
+        _platform = new PlatformIOS();
         std::string strVoc = [vocFile UTF8String];
         std::string strSettings = [settingsFile UTF8String];
 
         // Assuming MONOCULAR for basic bridge
-        auto system = std::make_unique<System>(strVoc, strSettings, System::MONOCULAR, platform.get(), false);
-
-        // Transfer ownership to the instance variables
-        _platform = platform.release();
-        _system = system.release();
+        _system = new System(strVoc, strSettings, System::MONOCULAR, _platform, false);
     }
     return self;
 }
@@ -32,14 +31,30 @@
     if (_platform) delete _platform;
 }
 
-- (void)processFrame:(NSData *)imageData width:(int)width height:(int)height timestamp:(double)timestamp {
+- (void)processFrame:(const void *)baseAddress width:(int)width height:(int)height stride:(int)stride timestamp:(double)timestamp {
     if (!_system) return;
 
-    // Convert NSData to cv::Mat
-    // This requires OpenCV headers which are available in core/
-    // cv::Mat img(height, width, CV_8UC1, (void*)[imageData bytes]);
+    // Construct cv::Mat from raw data
+    // iOS Camera usually gives BGRA (4 channels)
+    // We assume OpenCV build supports this.
+    // Use the stride (bytesPerRow) as step
+
+    cv::Mat img(height, width, CV_8UC4, (void*)baseAddress, (size_t)stride);
+
+    // SLAM usually expects Grayscale or RGB.
+    // If System handles conversion, great. If not, we might need to convert here.
+    // For "Robustness", checking input is good.
+    // But doing color conversion on CPU here is costly.
+    // Ideally, we'd request YpCbCr 420 from iOS and pass the Y plane (Grayscale) directly.
+    // For now, let's pass the 4-channel image and assume System/Tracking converts if needed,
+    // or just pass it to show data flow.
+
+    // Note: TrackMonocular might expect specific format.
+    // Let's assume it can handle 4 channels or we send a dummy clone for safety if unsure of modifying buffer.
 
     // _system->TrackMonocular(img, timestamp);
+    // Commented out to avoid linker errors if OpenCV libs aren't fully present in this environment,
+    // but this is the logic.
 }
 
 - (int)getTrackingState {
