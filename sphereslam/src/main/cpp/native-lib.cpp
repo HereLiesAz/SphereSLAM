@@ -228,3 +228,29 @@ Java_com_hereliesaz_sphereslam_SphereSLAM_getMapStats(JNIEnv* env, jobject thiz)
     }
     return env->NewStringUTF(stats.c_str());
 }
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_hereliesaz_sphereslam_SphereSLAM_saveMap(JNIEnv* env, jobject thiz, jstring filePath) {
+    if (slamSystem) {
+        const char *path = env->GetStringUTFChars(filePath, 0);
+        if (path == nullptr) {
+            return;
+        }
+        std::string strPath(path);
+        env->ReleaseStringUTFChars(filePath, path);
+        slamSystem->SaveMap(strPath);
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_hereliesaz_sphereslam_SphereSLAM_savePhotosphere(JNIEnv* env, jobject thiz, jstring filePath) {
+    if (slamSystem) {
+        const char *path = env->GetStringUTFChars(filePath, 0);
+        if (path == nullptr) {
+            return;
+        }
+        std::string strPath(path);
+        env->ReleaseStringUTFChars(filePath, path);
+        slamSystem->SavePhotosphere(strPath);
+    }
+}

@@ -8,6 +8,7 @@
 *   **Vulkan Compute:** GPU-accelerated conversion of Equirectangular images to CubeMap faces.
 *   **Neural Depth:** Integration structure for **Depth Any Camera (DAC)** foundation models (TFLite) for zero-shot metric scale recovery.
 *   **Mobile Gaussian Splatting:** Real-time visualization using a lightweight 3D Gaussian Splatting renderer (`MobileGS`).
+*   **Photosphere Capture:** Capture 360-degree environment maps (as PPM files) from the SLAM system in all supported platforms.
 *   **Easy Integration:** Available as a JitPack library for easy import into any Android project.
 
 ## Installation
