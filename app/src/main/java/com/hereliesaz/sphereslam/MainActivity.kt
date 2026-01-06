@@ -109,7 +109,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
                 Toast.makeText(this@MainActivity, "External storage not available.", Toast.LENGTH_LONG).show()
                 return@launch
             }
-            val destDir = File(documentsDir, "SphereSLAM_Captures/$timestamp")
+            val destDir = File(documentsDir, "$CAPTURE_DIR_NAME/$timestamp")
             if (!destDir.exists() && !destDir.mkdirs()) {
                 Toast.makeText(this@MainActivity, "Failed to create capture directory.", Toast.LENGTH_LONG).show()
                 return@launch
@@ -117,7 +117,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
 
             withContext(Dispatchers.IO) {
                 // 1. Trigger Map Save in Native (Persist State)
-                val mapFileName = "map_$timestamp.bin"
+                val mapFileName = "$MAP_FILE_PREFIX$timestamp$MAP_FILE_SUFFIX"
                 val mapFile = File(cacheDir, mapFileName)
                 sphereSLAM.saveMap(mapFile.absolutePath)
 
@@ -125,7 +125,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
                 copyCacheContents(destDir)
 
                 // 3. Capture Visual Photosphere (Native)
-                val photosphereFile = File(destDir, "photosphere.ppm")
+                val photosphereFile = File(destDir, PHOTOSPHERE_FILE_NAME)
                 sphereSLAM.savePhotosphere(photosphereFile.absolutePath)
             }
 
@@ -154,26 +154,26 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     }
 
     private fun captureScreenshot(destDir: File) {
-        val screenshotFile = File(destDir, "preview.jpg")
+        val screenshotFile = File(destDir, PREVIEW_FILE_NAME)
         try {
             val bitmap = Bitmap.createBitmap(surfaceView.width, surfaceView.height, Bitmap.Config.ARGB_8888)
             PixelCopy.request(surfaceView, bitmap, { copyResult ->
-                if (copyResult == PixelCopy.SUCCESS) {
-                    try {
-                        FileOutputStream(screenshotFile).use { out ->
-                            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                try {
+                    if (copyResult == PixelCopy.SUCCESS) {
+                        try {
+                            FileOutputStream(screenshotFile).use { out ->
+                                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                            }
+                            Toast.makeText(this@MainActivity, "Screenshot saved", Toast.LENGTH_SHORT).show()
+                        } catch (e: IOException) {
+                            Log.e(TAG, "Failed to save screenshot", e)
                         }
-                        runOnUiThread {
-                            Toast.makeText(this, "Screenshot saved", Toast.LENGTH_SHORT).show()
-                        }
-                    } catch (e: IOException) {
-                        Log.e(TAG, "Failed to save screenshot", e)
+                    } else {
+                        Log.e(TAG, "PixelCopy failed with result: $copyResult")
+                        Toast.makeText(this@MainActivity, "Screenshot failed", Toast.LENGTH_SHORT).show()
                     }
-                } else {
-                    Log.e(TAG, "PixelCopy failed with result: $copyResult")
-                    runOnUiThread {
-                        Toast.makeText(this, "Screenshot failed", Toast.LENGTH_SHORT).show()
-                    }
+                } finally {
+                    bitmap.recycle()
                 }
             }, Handler(Looper.getMainLooper()))
         } catch (e: IllegalArgumentException) {
@@ -308,5 +308,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
 
     companion object {
         private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
+        private const val CAPTURE_DIR_NAME = "SphereSLAM_Captures"
+        private const val MAP_FILE_PREFIX = "map_"
+        private const val MAP_FILE_SUFFIX = ".bin"
+        private const val PHOTOSPHERE_FILE_NAME = "photosphere.ppm"
+        private const val PREVIEW_FILE_NAME = "preview.jpg"
     }
 }
