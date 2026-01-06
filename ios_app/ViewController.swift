@@ -144,10 +144,10 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
 
         // Capture Snapshot of the View
         // Note: For AR/SLAM, we might want to render the internal state, but here we capture the screen preview.
-        UIGraphicsBeginImageContextWithOptions(view.bounds.size, false, 0.0)
-        view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
-        let image = UIGraphicsGetImageFromCurrentImageContext()
-        UIGraphicsEndImageContext()
+        let renderer = UIGraphicsImageRenderer(size: view.bounds.size)
+        let image = renderer.image { _ in
+            view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
+        }
 
         if let capturedImage = image {
             UIImageWriteToSavedPhotosAlbum(capturedImage, self, #selector(image(_:didFinishSavingWithError:contextInfo:)), nil)
