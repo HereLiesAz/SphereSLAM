@@ -13,12 +13,16 @@
 - (instancetype)initWithVocFile:(NSString *)vocFile settingsFile:(NSString *)settingsFile {
     self = [super init];
     if (self) {
-        _platform = new PlatformIOS();
+        auto platform = std::make_unique<PlatformIOS>();
         std::string strVoc = [vocFile UTF8String];
         std::string strSettings = [settingsFile UTF8String];
 
         // Assuming MONOCULAR for basic bridge
-        _system = new System(strVoc, strSettings, System::MONOCULAR, _platform, false);
+        auto system = std::make_unique<System>(strVoc, strSettings, System::MONOCULAR, platform.get(), false);
+
+        // Transfer ownership to the instance variables
+        _platform = platform.release();
+        _system = system.release();
     }
     return self;
 }
