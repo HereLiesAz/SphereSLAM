@@ -22,6 +22,7 @@ class SphereSLAM(private val context: Context) {
     external fun getTrackingState(): Int
     external fun resetSystem()
     external fun getMapStats(): String
+    external fun saveMap(filePath: String)
 
     fun cleanup() {
         destroyNative()
