@@ -15,8 +15,12 @@ class ViewController: UIViewController {
 
         // Initialize SLAM System
         // In a real app, these paths would point to Bundle resources
-        let vocPath = Bundle.main.path(forResource: "ORBvoc", ofType: "txt") ?? ""
-        let settingsPath = Bundle.main.path(forResource: "Settings", ofType: "yaml") ?? ""
+        guard let vocPath = Bundle.main.path(forResource: "ORBvoc", ofType: "txt"),
+              let settingsPath = Bundle.main.path(forResource: "Settings", ofType: "yaml") else {
+            print("Error: SLAM resource files not found in bundle.")
+            // Handle the error, e.g., by showing an alert and returning.
+            return
+        }
 
         print("Initializing SphereSLAM with \(vocPath)...")
         slamBridge = SphereSLAMBridge(vocFile: vocPath, settingsFile: settingsPath)
