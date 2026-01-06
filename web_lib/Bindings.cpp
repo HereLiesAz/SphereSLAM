@@ -80,6 +80,10 @@ public:
         if (mSystem) mSystem->Reset();
     }
 
+    void savePhotosphere(std::string filename) {
+        if (mSystem) mSystem->SavePhotosphere(filename);
+    }
+
 private:
     System* mSystem;
     PlatformWeb* mPlatform;
@@ -92,7 +96,8 @@ EMSCRIPTEN_BINDINGS(sphereslam_module) {
         .function("processFrame", &SystemWrapper::processFrame)
         .function("getTrackingState", &SystemWrapper::getTrackingState)
         .function("getMapStats", &SystemWrapper::getMapStats)
-        .function("reset", &SystemWrapper::reset);
+        .function("reset", &SystemWrapper::reset)
+        .function("savePhotosphere", &SystemWrapper::savePhotosphere);
 
     // Register vector conversion if needed explicitly
     register_vector<unsigned char>("VectorU8");

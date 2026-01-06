@@ -13,6 +13,7 @@
 - (int)getTrackingState;
 - (NSString *)getMapStats;
 - (void)reset;
+- (void)savePhotosphere:(NSString *)filename;
 
 @end
 
