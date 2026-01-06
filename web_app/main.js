@@ -3,7 +3,7 @@
 // and we would import it.
 
 // Assuming emcc output is named sphereslam_web.js
-import createSphereSLAMModule from '../web_lib/build/sphereslam_web.js';
+import createSphereSLAMModule from './sphereslam_web.js';
 
 const statusDiv = document.getElementById('status');
 const startBtn = document.getElementById('start-btn');
