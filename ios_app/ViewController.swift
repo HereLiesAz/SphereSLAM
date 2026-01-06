@@ -20,6 +20,15 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         return label
     }()
 
+    let captureButton: UIButton = {
+        let button = UIButton(type: .system)
+        button.setTitle("Capture Photosphere", for: .normal)
+        button.backgroundColor = .white
+        button.layer.cornerRadius = 10
+        button.translatesAutoresizingMaskIntoConstraints = false
+        return button
+    }()
+
     override func viewDidLoad() {
         super.viewDidLoad()
 
@@ -41,9 +50,17 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         view.backgroundColor = .black
         view.addSubview(statusLabel)
 
+        view.addSubview(captureButton)
+        captureButton.addTarget(self, action: #selector(capturePhotosphere), for: .touchUpInside)
+
         NSLayoutConstraint.activate([
             statusLabel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20),
-            statusLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor)
+            statusLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+
+            captureButton.bottomAnchor.constraint(equalTo: statusLabel.topAnchor, constant: -20),
+            captureButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            captureButton.widthAnchor.constraint(equalToConstant: 200),
+            captureButton.heightAnchor.constraint(equalToConstant: 50)
         ])
     }
 
@@ -119,6 +136,29 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     func updateStatus(text: String) {
         DispatchQueue.main.async {
             self.statusLabel.text = text
+        }
+    }
+
+    @objc func capturePhotosphere() {
+        guard let layer = videoPreviewLayer else { return }
+
+        // Capture Snapshot of the View
+        // Note: For AR/SLAM, we might want to render the internal state, but here we capture the screen preview.
+        UIGraphicsBeginImageContextWithOptions(view.bounds.size, false, 0.0)
+        view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
+        let image = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+
+        if let capturedImage = image {
+            UIImageWriteToSavedPhotosAlbum(capturedImage, self, #selector(image(_:didFinishSavingWithError:contextInfo:)), nil)
+        }
+    }
+
+    @objc func image(_ image: UIImage, didFinishSavingWithError error: Error?, contextInfo: UnsafeRawPointer) {
+        if let error = error {
+            updateStatus(text: "Capture Failed: \(error.localizedDescription)")
+        } else {
+            updateStatus(text: "Photosphere Saved!")
         }
     }
 
