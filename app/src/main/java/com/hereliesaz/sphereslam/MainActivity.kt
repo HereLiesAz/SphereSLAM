@@ -100,35 +100,38 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     }
 
     private fun capturePhotosphere() {
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        lifecycleScope.launch {
+            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
 
-        // 1. Trigger Map Save in Native (Persist State)
-        val mapFileName = "map_$timestamp.bin"
-        val mapFile = File(cacheDir, mapFileName)
-        sphereSLAM.saveMap(mapFile.absolutePath)
+            // Prepare Destination Directory
+            val documentsDir = getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS)
+            if (documentsDir == null) {
+                Toast.makeText(this@MainActivity, "External storage not available.", Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            val destDir = File(documentsDir, "SphereSLAM_Captures/$timestamp")
+            if (!destDir.exists() && !destDir.mkdirs()) {
+                Toast.makeText(this@MainActivity, "Failed to create capture directory.", Toast.LENGTH_LONG).show()
+                return@launch
+            }
 
-        // 2. Prepare Destination Directory
-        val documentsDir = getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS)
-        if (documentsDir == null) {
-            Toast.makeText(this, "External storage not available.", Toast.LENGTH_LONG).show()
-            return
+            withContext(Dispatchers.IO) {
+                // 1. Trigger Map Save in Native (Persist State)
+                val mapFileName = "map_$timestamp.bin"
+                val mapFile = File(cacheDir, mapFileName)
+                sphereSLAM.saveMap(mapFile.absolutePath)
+
+                // 2. Copy cache contents
+                copyCacheContents(destDir)
+
+                // 3. Capture Visual Photosphere (Native)
+                val photosphereFile = File(destDir, "photosphere.ppm")
+                sphereSLAM.savePhotosphere(photosphereFile.absolutePath)
+            }
+
+            // 4. Capture Visual Preview (Screenshot)
+            captureScreenshot(destDir)
         }
-        val destDir = File(documentsDir, "SphereSLAM_Captures/$timestamp")
-        if (!destDir.exists() && !destDir.mkdirs()) {
-            Toast.makeText(this, "Failed to create capture directory.", Toast.LENGTH_LONG).show()
-            return
-        }
-
-        lifecycleScope.launch(Dispatchers.IO) {
-            copyCacheContents(destDir)
-        }
-
-        // 3. Capture Visual Photosphere (Native)
-        val photosphereFile = File(destDir, "photosphere.ppm")
-        sphereSLAM.savePhotosphere(photosphereFile.absolutePath)
-
-        // 4. Capture Visual Preview (Screenshot)
-        captureScreenshot(destDir)
     }
 
     private suspend fun copyCacheContents(destDir: File) {
