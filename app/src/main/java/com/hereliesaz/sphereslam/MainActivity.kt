@@ -12,6 +12,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.PixelCopy
@@ -23,8 +24,12 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.hereliesaz.sphereslam.SphereCameraManager
 import com.hereliesaz.sphereslam.SphereSLAM
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -34,6 +39,7 @@ import java.util.Locale
 
 class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Callback, Choreographer.FrameCallback {
 
+    private val TAG = "MainActivity"
     private val CAMERA_PERMISSION_REQUEST_CODE = 100
     private lateinit var cameraManager: SphereCameraManager
     private lateinit var sphereSLAM: SphereSLAM
@@ -94,41 +100,53 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     }
 
     private fun saveState() {
-        // 1. Trigger Save in Native
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+
+        // 1. Trigger Save in Native
         val mapFileName = "map_$timestamp.bin"
         val mapFile = File(cacheDir, mapFileName)
         sphereSLAM.saveMap(mapFile.absolutePath)
 
         // 2. Prepare Destination Directory
-        val destDir = File(getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "SphereSLAM_Saves/$timestamp")
-        if (!destDir.exists()) {
-            destDir.mkdirs()
+        val documentsDir = getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS)
+        if (documentsDir == null) {
+            Toast.makeText(this, "External storage not available.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val destDir = File(documentsDir, "SphereSLAM_Saves/$timestamp")
+        if (!destDir.exists() && !destDir.mkdirs()) {
+            Toast.makeText(this, "Failed to create save directory.", Toast.LENGTH_LONG).show()
+            return
         }
 
-        // 3. Copy Cache Directory Contents
-        Thread {
-            try {
-                // Copy the map file specifically if it exists, or everything in cache
-                // The prompt asks to copy contents of SphereSLAM cache directory
-                cacheDir.listFiles()?.forEach { file ->
-                    if (file.isFile) {
-                        file.copyTo(File(destDir, file.name), overwrite = true)
-                    }
-                }
+        lifecycleScope.launch(Dispatchers.IO) {
+            copyCacheContents(destDir)
+        }
 
-                runOnUiThread {
-                    Toast.makeText(this, "Cache copied to ${destDir.absolutePath}", Toast.LENGTH_SHORT).show()
-                }
-            } catch (e: IOException) {
-                e.printStackTrace()
-                runOnUiThread {
-                    Toast.makeText(this, "Failed to copy cache", Toast.LENGTH_SHORT).show()
+        // Screenshot needs to happen on main/UI thread logic for PixelCopy setup
+        captureScreenshot(destDir)
+    }
+
+    private suspend fun copyCacheContents(destDir: File) {
+        try {
+            // The prompt asks to copy contents of SphereSLAM cache directory
+            cacheDir.listFiles()?.forEach { file ->
+                if (file.isFile) {
+                    file.copyTo(File(destDir, file.name), overwrite = true)
                 }
             }
-        }.start()
+            withContext(Dispatchers.Main) {
+                Toast.makeText(this@MainActivity, "Cache copied to ${destDir.absolutePath}", Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: IOException) {
+            Log.e(TAG, "Failed to copy cache", e)
+            withContext(Dispatchers.Main) {
+                Toast.makeText(this@MainActivity, "Failed to copy cache", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
-        // 4. Capture Screenshot
+    private fun captureScreenshot(destDir: File) {
         val screenshotFile = File(destDir, "preview.jpg")
         try {
             val bitmap = Bitmap.createBitmap(surfaceView.width, surfaceView.height, Bitmap.Config.ARGB_8888)
@@ -142,16 +160,17 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
                             Toast.makeText(this, "Screenshot saved", Toast.LENGTH_SHORT).show()
                         }
                     } catch (e: IOException) {
-                        e.printStackTrace()
+                        Log.e(TAG, "Failed to save screenshot", e)
                     }
                 } else {
+                    Log.e(TAG, "PixelCopy failed with result: $copyResult")
                     runOnUiThread {
                         Toast.makeText(this, "Screenshot failed", Toast.LENGTH_SHORT).show()
                     }
                 }
             }, Handler(Looper.getMainLooper()))
         } catch (e: IllegalArgumentException) {
-            e.printStackTrace()
+             Log.e(TAG, "Failed to create bitmap or request PixelCopy", e)
         }
     }
 
