@@ -1,6 +1,6 @@
 # SphereSLAM
 
-**SphereSLAM** is a lightweight, on-device Monocular Spherical SLAM and Dense Reconstruction library for Android. It converts user-captured 360° photospheres (equirectangular projection) into navigable 3D world scenes using heterogeneous computing (CPU, GPU, NPU).
+**SphereSLAM** is a lightweight, on-device Monocular Spherical SLAM and Dense Reconstruction library for Android, with experimental support for iOS and Web (Wasm). It converts user-captured 360° photospheres (equirectangular projection) into navigable 3D world scenes using heterogeneous computing (CPU, GPU, NPU).
 
 ## Features
 
@@ -9,34 +9,36 @@
 *   **Neural Depth:** Integration structure for **Depth Any Camera (DAC)** foundation models (TFLite) for zero-shot metric scale recovery.
 *   **Mobile Gaussian Splatting:** Real-time visualization using a lightweight 3D Gaussian Splatting renderer (`MobileGS`).
 *   **Photosphere Capture:** Capture 360-degree environment maps (as PPM files) from the SLAM system in all supported platforms.
-*   **Easy Integration:** Available as a JitPack library for easy import into any Android project.
+*   **Cross-Platform Core:** Shared C++ core (`core/`) used by Android, iOS, and Web modules.
 
 ## Installation
 
 Add the JitPack repository to your build file:
 
-**settings.gradle:**
-```groovy
+**settings.gradle.kts:**
+```kotlin
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         google()
         mavenCentral()
-        maven { url 'https://jitpack.io' }
+        maven { url = uri("https://jitpack.io") }
     }
 }
 ```
 
-**build.gradle (app):**
-```groovy
+**build.gradle.kts (app):**
+```kotlin
 dependencies {
-    implementation 'com.github.HereLiesAz:SphereSLAM:0.4.0'
+    implementation("com.github.HereLiesAz:SphereSLAM:1.0.0")
 }
 ```
 
 ## Usage
 
-### 1. Initialize SphereSLAM
+### Android
+
+#### 1. Initialize SphereSLAM
 In your Activity or Fragment:
 
 ```kotlin
@@ -60,18 +62,18 @@ class MainActivity : AppCompatActivity() {
 }
 ```
 
-### 2. Process Frames
+#### 2. Process Frames
 Pass camera frames and timestamps to the system. The library provides a `SphereCameraManager` helper, or you can implement your own camera logic.
 
 ```kotlin
 cameraManager = SphereCameraManager(this) { image ->
-    // Pass the image timestamp (in seconds or nanoseconds depending on config)
+    // Pass the image timestamp
     sphereSLAM.processFrame(0L, image.timestamp.toDouble())
     image.close()
 }
 ```
 
-### 3. Rendering
+#### 3. Rendering
 SphereSLAM renders directly to a `Surface`. Pass the Surface from a `SurfaceView` or `TextureView`.
 
 ```kotlin
@@ -84,6 +86,21 @@ override fun doFrame(frameTimeNanos: Long) {
     sphereSLAM.renderFrame()
 }
 ```
+
+### Web (Experimental)
+
+The web module uses Emscripten to compile the core C++ logic to WebAssembly.
+See `web_app/` for a simple HTML/JS integration example.
+
+To build:
+```bash
+./scripts/build_web.sh
+```
+
+### iOS (Experimental)
+
+The iOS module uses an Objective-C++ bridge to link the C++ core with Swift.
+See `ios_app/` for the Xcode project structure.
 
 ## Architecture
 
@@ -98,6 +115,7 @@ override fun doFrame(frameTimeNanos: Long) {
 ## Requirements
 
 *   **Android SDK:** API Level 29 (Android 10) or higher.
+*   **NDK:** Version 29.0.14206865.
 *   **Hardware:** Device with Vulkan and NPU support recommended (Snapdragon 8 Gen 2+).
 
 ## License
