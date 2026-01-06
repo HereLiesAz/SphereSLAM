@@ -126,7 +126,7 @@ jobs:
 
           VERSION_NAME="$MAJOR.$MINOR.$PATCH.$BUILD_NUMBER"
           
-          TAG_NAME="latest-debug-v${MAJOR}.${MINOR}"
+          TAG_NAME="v$VERSION_NAME"
           
           # Dynamic App Name from settings.gradle
           if [ -f "settings.gradle.kts" ]; then
@@ -167,31 +167,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Force update tag to point to current commit
-          git tag -fa $TAG_NAME -m "Latest Debug Build"
-          git push origin $TAG_NAME --force
+          # Create unique tag for this build
+          git tag -a $TAG_NAME -m "Debug Build $VERSION_NAME"
+          git push origin $TAG_NAME
 
           BUILD_TOOLS="build-tools.zip"
 
-          # Check if release exists
-          if gh release view $TAG_NAME > /dev/null 2>&1; then
-             echo "Updating existing release..."
+          echo "Creating new release for $TAG_NAME..."
+          gh release create $TAG_NAME "$APK_FILE" --prerelease \
+            --title "Debug Build $VERSION_NAME" \
+            --notes "Auto-build from commit $GITHUB_SHA" \
+            --target $GITHUB_SHA
 
-             # We do NOT delete old assets anymore, allowing accumulation of history
-             # Just upload the new one with a unique name (already has version/build number in filename)
-
-             gh release edit $TAG_NAME --prerelease \
-               --title "Latest Debug Build ($TAG_NAME)" \
-               --notes "Auto-build from commit $GITHUB_SHA" \
-               --target $GITHUB_SHA
-
-             gh release upload $TAG_NAME "$APK_FILE" --clobber
-             [ -f "$BUILD_TOOLS" ] && gh release upload $TAG_NAME "$BUILD_TOOLS" --clobber
-          else
-             echo "Creating new release..."
-             gh release create $TAG_NAME "$APK_FILE" --prerelease \
-               --title "Latest Debug Build ($TAG_NAME)" \
-               --notes "Auto-build from commit $GITHUB_SHA" \
-               --target $GITHUB_SHA
-             [ -f "$BUILD_TOOLS" ] && gh release upload $TAG_NAME "$BUILD_TOOLS" --clobber
-          fi
+          [ -f "$BUILD_TOOLS" ] && gh release upload $TAG_NAME "$BUILD_TOOLS"
