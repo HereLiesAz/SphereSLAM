@@ -59,6 +59,9 @@ public:
     // New: Save Trajectory
     void SaveTrajectoryTUM(const std::string &filename);
 
+    // New: Save Photosphere
+    void SavePhotosphere(const std::string &filename);
+
     int GetTrackingState();
 
     // Reset System
@@ -93,6 +96,10 @@ private:
     // IMU Buffer
     std::queue<IMUData> mImuQueue;
     std::mutex mMutexImu;
+
+    // Photosphere Capture Cache
+    std::vector<cv::Mat> mLastFaces;
+    std::mutex mMutexFaces;
 };
 
 #endif // SYSTEM_H

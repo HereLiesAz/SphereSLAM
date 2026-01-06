@@ -3,6 +3,7 @@ import createSphereSLAMModule from '../web_lib/build/sphereslam_web.js';
 
 const statusDiv = document.getElementById('status');
 const startBtn = document.getElementById('start-btn');
+const captureBtn = document.getElementById('capture-btn');
 
 let slamSystem = null;
 let video = null;
@@ -108,10 +109,28 @@ startBtn.addEventListener('click', async () => {
             location.reload();
         };
 
+        captureBtn.disabled = false;
+
     } catch (err) {
         console.error(err);
         statusDiv.innerText = "Status: Camera Error";
     }
+});
+
+captureBtn.addEventListener('click', () => {
+    if (!canvas) return;
+
+    // Capture canvas as image
+    const dataURL = canvas.toDataURL('image/jpeg');
+
+    // Create download link
+    const link = document.createElement('a');
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    link.download = `photosphere_capture_${timestamp}.jpg`;
+    link.href = dataURL;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
 });
 
 // Auto-init on load
