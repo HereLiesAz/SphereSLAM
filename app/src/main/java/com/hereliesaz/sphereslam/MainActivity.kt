@@ -3,19 +3,13 @@ package com.hereliesaz.sphereslam
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Bundle
-import android.os.Environment
-import android.os.Handler
-import android.os.Looper
-import android.util.Log
 import android.view.Choreographer
 import android.view.MotionEvent
-import android.view.PixelCopy
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.widget.Button
@@ -24,22 +18,11 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
 import com.hereliesaz.sphereslam.SphereCameraManager
 import com.hereliesaz.sphereslam.SphereSLAM
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
-import java.io.FileOutputStream
-import java.io.IOException
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Callback, Choreographer.FrameCallback {
 
-    private val TAG = "MainActivity"
     private val CAMERA_PERMISSION_REQUEST_CODE = 100
     private lateinit var cameraManager: SphereCameraManager
     private lateinit var sphereSLAM: SphereSLAM
@@ -74,10 +57,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
             sphereSLAM.resetSystem()
         }
 
-        findViewById<Button>(R.id.saveButton).setOnClickListener {
-            saveState()
-        }
-
         // Initialize SphereSLAM Library
         sphereSLAM = SphereSLAM(this)
 
@@ -96,81 +75,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
             ActivityCompat.requestPermissions(
                 this, REQUIRED_PERMISSIONS, CAMERA_PERMISSION_REQUEST_CODE
             )
-        }
-    }
-
-    private fun saveState() {
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-
-        // 1. Trigger Save in Native
-        val mapFileName = "map_$timestamp.bin"
-        val mapFile = File(cacheDir, mapFileName)
-        sphereSLAM.saveMap(mapFile.absolutePath)
-
-        // 2. Prepare Destination Directory
-        val documentsDir = getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS)
-        if (documentsDir == null) {
-            Toast.makeText(this, "External storage not available.", Toast.LENGTH_LONG).show()
-            return
-        }
-        val destDir = File(documentsDir, "SphereSLAM_Saves/$timestamp")
-        if (!destDir.exists() && !destDir.mkdirs()) {
-            Toast.makeText(this, "Failed to create save directory.", Toast.LENGTH_LONG).show()
-            return
-        }
-
-        lifecycleScope.launch(Dispatchers.IO) {
-            copyCacheContents(destDir)
-        }
-
-        // Screenshot needs to happen on main/UI thread logic for PixelCopy setup
-        captureScreenshot(destDir)
-    }
-
-    private suspend fun copyCacheContents(destDir: File) {
-        try {
-            // The prompt asks to copy contents of SphereSLAM cache directory
-            cacheDir.listFiles()?.forEach { file ->
-                if (file.isFile) {
-                    file.copyTo(File(destDir, file.name), overwrite = true)
-                }
-            }
-            withContext(Dispatchers.Main) {
-                Toast.makeText(this@MainActivity, "Cache copied to ${destDir.absolutePath}", Toast.LENGTH_SHORT).show()
-            }
-        } catch (e: IOException) {
-            Log.e(TAG, "Failed to copy cache", e)
-            withContext(Dispatchers.Main) {
-                Toast.makeText(this@MainActivity, "Failed to copy cache", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    private fun captureScreenshot(destDir: File) {
-        val screenshotFile = File(destDir, "preview.jpg")
-        try {
-            val bitmap = Bitmap.createBitmap(surfaceView.width, surfaceView.height, Bitmap.Config.ARGB_8888)
-            PixelCopy.request(surfaceView, bitmap, { copyResult ->
-                if (copyResult == PixelCopy.SUCCESS) {
-                    try {
-                        FileOutputStream(screenshotFile).use { out ->
-                            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
-                        }
-                        runOnUiThread {
-                            Toast.makeText(this, "Screenshot saved", Toast.LENGTH_SHORT).show()
-                        }
-                    } catch (e: IOException) {
-                        Log.e(TAG, "Failed to save screenshot", e)
-                    }
-                } else {
-                    Log.e(TAG, "PixelCopy failed with result: $copyResult")
-                    runOnUiThread {
-                        Toast.makeText(this, "Screenshot failed", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }, Handler(Looper.getMainLooper()))
-        } catch (e: IllegalArgumentException) {
-             Log.e(TAG, "Failed to create bitmap or request PixelCopy", e)
         }
     }
 
