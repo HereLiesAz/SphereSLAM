@@ -33,7 +33,6 @@ android {
 
     buildTypes {
         getByName("debug") {
-            signingConfig = signingConfigs.getByName("shared")
         }
         getByName("release") {
             signingConfig = signingConfigs.getByName("shared")
