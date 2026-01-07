@@ -191,38 +191,75 @@ void System::SavePhotosphere(const std::string &filename) {
     {
         std::unique_lock<std::mutex> lock(mMutexFaces);
         if (mLastFaces.size() != 6) {
-            if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "No CubeMap faces available to save photosphere.");
-            else std::cerr << "No CubeMap faces available to save photosphere." << std::endl;
+            if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "No CubeMap faces available to save photosphere (count=" + std::to_string(mLastFaces.size()) + ").");
+            else std::cerr << "No CubeMap faces available to save photosphere (count=" << mLastFaces.size() << ")." << std::endl;
             return;
         }
         for (const auto& f : mLastFaces) {
+            if (f.empty()) {
+                if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "One of the CubeMap faces is empty.");
+                else std::cerr << "One of the CubeMap faces is empty." << std::endl;
+                return;
+            }
             faces.push_back(f.clone());
         }
     }
 
-    // Real Stitching Implementation (CubeMap Strip)
-    int faceWidth = faces[0].cols;
-    int faceHeight = faces[0].rows;
-    int type = faces[0].type();
+    // Stitch the 6 faces horizontally: [Right, Left, Top, Bottom, Front, Back] or similar order
+    // Order in CubeMapCamera is typically: PX, NX, PY, NY, PZ, NZ
+    // We will stitch them in a simple strip for now.
+    cv::Mat strip;
+    cv::hconcat(faces, strip);
 
-    // We will arrange them in a 3x2 grid or 6x1 strip. Let's do 6x1 horizontal strip for simplicity.
-    cv::Mat canvas(faceHeight, faceWidth * 6, type);
+    // Normalize/standardize output format: always write PNG for predictable behavior across platforms.
+    // If the requested filename has no extension or a non-PNG extension, enforce ".png".
+    std::string outputFilename = filename;
+    {
+        // Find last path separator and last dot to determine extension.
+        const std::string::size_type lastSlash = outputFilename.find_last_of("/\\");
+        const std::string::size_type lastDot = outputFilename.find_last_of('.');
 
-    for (int i = 0; i < 6; ++i) {
-        cv::Mat roi = canvas(cv::Rect(i * faceWidth, 0, faceWidth, faceHeight));
-        faces[i].copyTo(roi);
+        const bool hasDotAfterSlash =
+            lastDot != std::string::npos &&
+            (lastSlash == std::string::npos || lastDot > lastSlash);
+
+        if (!hasDotAfterSlash) {
+            // No extension: append .png
+            outputFilename += ".png";
+        } else {
+            // Has some extension: if it's not .png, replace it to ensure a consistent format.
+            std::string ext = outputFilename.substr(lastDot);
+            // Case-insensitive compare to ".png"
+            std::string extLower = ext;
+            std::transform(extLower.begin(), extLower.end(), extLower.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+            if (extLower != ".png") {
+                if (mpPlatform) {
+                    mpPlatform->Log(LogLevel::WARN, "System",
+                                    "Requested photosphere filename extension '" + ext +
+                                        "' is not supported uniformly; saving as PNG instead.");
+                } else {
+                    std::cerr << "Requested photosphere filename extension '" << ext
+                              << "' may not be supported uniformly; saving as PNG instead."
+                              << std::endl;
+                }
+                outputFilename = outputFilename.substr(0, lastDot) + ".png";
+            }
+        }
     }
 
-    // Save using OpenCV
-    if (cv::imwrite(filename, canvas)) {
+    bool success = cv::imwrite(outputFilename, strip);
+
+    if (success) {
         if (mpPlatform) {
-            mpPlatform->Log(LogLevel::INFO, "System", "Photosphere saved to " + filename);
+            mpPlatform->Log(LogLevel::INFO, "System", "Photosphere saved to " + outputFilename);
         } else {
-            std::cout << "Photosphere saved to " << filename << std::endl;
+            std::cout << "Photosphere saved to " << outputFilename << std::endl;
         }
     } else {
-        if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "Failed to save photosphere image to " + filename);
-        else std::cerr << "Failed to save photosphere image to " << filename << std::endl;
+        if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "Failed to save photosphere to: " + outputFilename);
+        else std::cerr << "Failed to save photosphere to: " << outputFilename << std::endl;
     }
 }
 

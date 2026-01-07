@@ -5,6 +5,8 @@
 #include <chrono>
 #include <iostream>
 
+namespace SphereSLAM {
+
 class Profiler {
 public:
     Profiler(const std::string& name) : mName(name) {
@@ -21,5 +23,7 @@ private:
     std::string mName;
     std::chrono::time_point<std::chrono::high_resolution_clock> mStart;
 };
+
+} // namespace SphereSLAM
 
 #endif // PROFILER_H
