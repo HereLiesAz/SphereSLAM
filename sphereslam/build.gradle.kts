@@ -47,6 +47,16 @@ android {
         viewBinding = true
         prefab = true
     }
+
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDirs("../libs/opencv-4.12.0/sdk/native/libs")
+        }
+    }
+
+    publishing {
+        singleVariant("release") {}
+    }
 }
 
 dependencies {

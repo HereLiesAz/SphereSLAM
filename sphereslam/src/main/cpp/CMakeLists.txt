@@ -17,6 +17,11 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/../../../../libs/opencv-4.12.0/sdk/native/jni/include # Adjust path as needed
 )
 
+# Import OpenCV library
+add_library(lib_opencv SHARED IMPORTED)
+set_target_properties(lib_opencv PROPERTIES IMPORTED_LOCATION
+    ${CMAKE_SOURCE_DIR}/../../../../libs/opencv-4.12.0/sdk/native/libs/${ANDROID_ABI}/libopencv_java4.so)
+
 # Creates and names a library, sets it as either STATIC
 # or SHARED, and provides the relative paths to its source code.
 # You can define multiple libraries, and CMake builds them for you.
@@ -82,6 +87,7 @@ target_link_libraries( # Specifies the target library.
                        ${log-lib}
                        ${android-lib}
                        ${android-asset}
+                       lib_opencv
                        android
                        EGL
                        GLESv3
