@@ -50,12 +50,18 @@ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s USE_LIBPNG=1 -s USE_ZLI
 # Core Sources
 file(GLOB_RECURSE CORE_SOURCES "${CMAKE_SOURCE_DIR}/../core/src/SLAM/*.cpp")
 
-# Add Executable (Wasm module)
-add_executable(sphereslam_web
+# Define sources explicitly to ensure CMake picks them up
+set(WEB_SOURCES
     ${CORE_SOURCES}
     PlatformWeb.cpp
     Bindings.cpp
+    WebStubs.cpp
 )
+
+message(STATUS "Web Sources: ${WEB_SOURCES}")
+
+# Add Executable (Wasm module)
+add_executable(sphereslam_web ${WEB_SOURCES})
 
 # Emscripten Linker Flags
 set_target_properties(sphereslam_web PROPERTIES LINK_FLAGS "-s WASM=1 -s ALLOW_MEMORY_GROWTH=1 --bind -s MODULARIZE=1 -s EXPORT_NAME='createSphereSLAMModule'")
