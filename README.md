@@ -1,4 +1,5 @@
 # SphereSLAM
+[![](https://jitpack.io/v/HereLiesAz/sphereslam.svg)](https://jitpack.io/#HereLiesAz/sphereslam)
 
 **SphereSLAM** is a lightweight, on-device Monocular Spherical SLAM and Dense Reconstruction library for Android, with experimental support for iOS and Web (Wasm). It converts user-captured 360° photospheres (equirectangular projection) into navigable 3D world scenes using heterogeneous computing (CPU, GPU, NPU).
 
