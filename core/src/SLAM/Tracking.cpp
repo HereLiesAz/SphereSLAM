@@ -12,7 +12,7 @@ Tracking::Tracking(System* pSys, GeometricCamera* pCam, Map* pMap, LocalMapping*
 }
 
 cv::Mat Tracking::GrabImageCubeMap(const std::vector<cv::Mat>& faces, const double& timestamp) {
-    Profiler p("GrabImageCubeMap");
+    SphereSLAM::Profiler p("GrabImageCubeMap");
 
     // 1. Create Frame
     mCurrentFrame = Frame(faces, timestamp, mpORBextractor, mpCamera);
