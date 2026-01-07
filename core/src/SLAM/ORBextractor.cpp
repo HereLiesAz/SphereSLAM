@@ -1,31 +1,31 @@
 #include "ORBextractor.h"
 #include <iostream>
+#include <opencv2/features2d.hpp>
 
 ORBextractor::ORBextractor(int nfeatures, float scaleFactor, int nlevels, int iniThFAST, int minThFAST)
     : nfeatures(nfeatures), scaleFactor(scaleFactor), nlevels(nlevels), iniThFAST(iniThFAST), minThFAST(minThFAST) {
-    // Initialize pyramid parameters
 }
 
 void ORBextractor::operator()(cv::Mat image, cv::Mat mask,
                               std::vector<cv::KeyPoint>& keypoints,
                               cv::Mat& descriptors) {
-    // Stub implementation: Detect some dummy keypoints for testing flow
+    // Real implementation using OpenCV's ORB
+    if (image.empty()) return;
 
-    // In a real implementation, this would:
-    // 1. Build Image Pyramid
-    // 2. Compute FAST corners per level
-    // 3. Compute Orientation (Intensity Centroid)
-    // 4. Compute BRIEF descriptors
+    // Create OpenCV ORB detector with parameters
+    // Note: nlevels and scaleFactor map directly. iniThFAST maps to fastThreshold.
+    // scoreType, WTA_K etc are left as defaults.
+    cv::Ptr<cv::ORB> orb = cv::ORB::create(
+        nfeatures,
+        scaleFactor,
+        nlevels,
+        31, // edgeThreshold
+        0,  // firstLevel
+        2,  // WTA_K
+        cv::ORB::HARRIS_SCORE,
+        31, // patchSize
+        iniThFAST // fastThreshold
+    );
 
-    // Simulating detection
-    int width = image.cols;
-    int height = image.rows;
-
-    if (width > 0 && height > 0) {
-        // Add a dummy keypoint in center
-        keypoints.push_back(cv::KeyPoint(width/2.0f, height/2.0f, 10.0f));
-
-        // Add a dummy descriptor (32 bytes for ORB)
-        descriptors = cv::Mat::zeros(1, 32, CV_8U); // CV_8U is standard for ORB
-    }
+    orb->detectAndCompute(image, mask, keypoints, descriptors);
 }
