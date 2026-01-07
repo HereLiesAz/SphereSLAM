@@ -1,8 +1,8 @@
 name: Deploy Web App
 
 on:
-  push:
-    branches: ["main"]
+  release:
+    types: [published, prereleased]
   workflow_dispatch:
 
 permissions:

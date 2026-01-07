@@ -10,7 +10,7 @@
 
 namespace cv {
 
-    Mat::Mat() : flags(0), dims(0), rows(0), cols(0), data(nullptr), datastart(nullptr), dataend(nullptr), datalimit(nullptr), allocator(nullptr), u(nullptr), size(&rows) {}
+    Mat::Mat() noexcept : flags(0), dims(0), rows(0), cols(0), data(nullptr), datastart(nullptr), dataend(nullptr), datalimit(nullptr), allocator(nullptr), u(nullptr), size(&rows) {}
 
     Mat::Mat(int rows, int cols, int type) : flags(0), dims(0), rows(rows), cols(cols), data(nullptr), datastart(nullptr), dataend(nullptr), datalimit(nullptr), allocator(nullptr), u(nullptr), size(&this->rows) {
         std::cerr << "CRITICAL WARNING: Stub cv::Mat(int, int, int) called. No memory allocated." << std::endl;
@@ -26,7 +26,7 @@ namespace cv {
 
     Mat::Mat(const Mat& m) : flags(m.flags), dims(m.dims), rows(m.rows), cols(m.cols), data(m.data), datastart(m.datastart), dataend(m.dataend), datalimit(m.datalimit), allocator(m.allocator), u(m.u), size(&this->rows) {}
 
-    Mat::Mat(Mat&& m) : flags(m.flags), dims(m.dims), rows(m.rows), cols(m.cols), data(m.data), datastart(m.datastart), dataend(m.dataend), datalimit(m.datalimit), allocator(m.allocator), u(m.u), size(&this->rows) {
+    Mat::Mat(Mat&& m) noexcept : flags(m.flags), dims(m.dims), rows(m.rows), cols(m.cols), data(m.data), datastart(m.datastart), dataend(m.dataend), datalimit(m.datalimit), allocator(m.allocator), u(m.u), size(&this->rows) {
         m.data = nullptr;
         m.u = nullptr;
     }
@@ -37,7 +37,7 @@ namespace cv {
         return *this;
     }
 
-    Mat& Mat::operator=(Mat&& m) {
+    Mat& Mat::operator=(Mat&& m) noexcept {
         return *this;
     }
 
