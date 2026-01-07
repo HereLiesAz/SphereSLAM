@@ -78,6 +78,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
             capturePhotosphere()
         }
 
+        findViewById<Button>(R.id.logsButton).setOnClickListener {
+            val bottomSheet = LogBottomSheetFragment()
+            bottomSheet.show(supportFragmentManager, "LogBottomSheet")
+        }
+
         // Initialize SphereSLAM Library
         sphereSLAM = SphereSLAM(this)
 
@@ -146,7 +151,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
                 Toast.makeText(this@MainActivity, "Cache copied to ${destDir.absolutePath}", Toast.LENGTH_SHORT).show()
             }
         } catch (e: IOException) {
-            Log.e(TAG, "Failed to copy cache", e)
+            LogManager.e(TAG, "Failed to copy cache", e)
             withContext(Dispatchers.Main) {
                 Toast.makeText(this@MainActivity, "Failed to copy cache", Toast.LENGTH_SHORT).show()
             }
@@ -170,10 +175,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
                                     Toast.makeText(this@MainActivity, "Screenshot saved", Toast.LENGTH_SHORT).show()
                                 }
                             } catch (e: IOException) {
-                                Log.e(TAG, "Failed to save screenshot", e)
+                                LogManager.e(TAG, "Failed to save screenshot", e)
                             }
                         } else {
-                            Log.e(TAG, "PixelCopy failed with result: $copyResult")
+                            LogManager.e(TAG, "PixelCopy failed with result: $copyResult")
                             withContext(Dispatchers.Main) {
                                 Toast.makeText(this@MainActivity, "Screenshot failed", Toast.LENGTH_SHORT).show()
                             }
@@ -184,7 +189,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
                 }
             }, Handler(Looper.getMainLooper()))
         } catch (e: IllegalArgumentException) {
-             Log.e(TAG, "Failed to create bitmap or request PixelCopy", e)
+             LogManager.e(TAG, "Failed to create bitmap or request PixelCopy", e)
         }
     }
 
