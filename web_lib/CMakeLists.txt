@@ -8,10 +8,22 @@ endif()
 
 # Handle OPENCV_DIR variable
 if(DEFINED OPENCV_DIR)
-    message(STATUS "Web Build: OPENCV_DIR is set to ${OPENCV_DIR}. Using provided headers for compilation. Linking will require external OpenCV libraries or ports.")
-    include_directories(${OPENCV_DIR}/sdk/native/jni/include)
+    # Resolve absolute path, handling relative paths from build directory (where cmake is run)
+    get_filename_component(OPENCV_ABS "${OPENCV_DIR}" ABSOLUTE BASE_DIR "${CMAKE_BINARY_DIR}")
+
+    # Check if it exists at the resolved path
+    if(NOT EXISTS "${OPENCV_ABS}")
+         # Try relative to source directory as fallback
+         get_filename_component(OPENCV_ABS_SRC "${OPENCV_DIR}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+         if(EXISTS "${OPENCV_ABS_SRC}")
+             set(OPENCV_ABS "${OPENCV_ABS_SRC}")
+         endif()
+    endif()
+
+    message(STATUS "Web Build: OPENCV_DIR is set to ${OPENCV_DIR}. Resolved to ${OPENCV_ABS}. Using provided headers for compilation.")
+    include_directories(${OPENCV_ABS}/sdk/native/jni/include)
 else()
-    # Fallback to hardcoded path if OPENCV_DIR is not set, or error out
+    # Fallback to hardcoded path if OPENCV_DIR is not set
     # Assuming standard project structure if not provided
     set(DEFAULT_OPENCV_PATH "${CMAKE_SOURCE_DIR}/../libs/opencv-4.12.0")
     if(EXISTS "${DEFAULT_OPENCV_PATH}")
