@@ -17,6 +17,9 @@ public:
         // std::cout << "[" << mName << "] took " << duration << " ms" << std::endl;
     }
 
+    Profiler(const Profiler&) = delete;
+    Profiler& operator=(const Profiler&) = delete;
+
 private:
     std::string mName;
     std::chrono::time_point<std::chrono::high_resolution_clock> mStart;
