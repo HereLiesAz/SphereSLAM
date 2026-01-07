@@ -6,9 +6,9 @@ if(NOT EMSCRIPTEN)
     message(FATAL_ERROR "This CMakeLists.txt is intended for Emscripten builds only.")
 endif()
 
-# Handle OPENCV_DIR variable to satisfy warning and inform user
+# Handle OPENCV_DIR variable
 if(DEFINED OPENCV_DIR)
-    message(STATUS "Web Build: OPENCV_DIR is set to ${OPENCV_DIR}, but local libraries are for Android. Using Emscripten's built-in OpenCV port (-s USE_OPENCV=4).")
+    message(STATUS "Web Build: OPENCV_DIR is set to ${OPENCV_DIR}, but local libraries are for Android. Attempting to use Emscripten contrib port.")
 endif()
 
 # Core Includes
@@ -19,9 +19,10 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/../core/Thirdparty/glm
 )
 
-# Use Emscripten's built-in OpenCV port
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -s USE_OPENCV=4")
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s USE_OPENCV=4")
+# Use Emscripten's contrib OpenCV port
+# Replaces deprecated -s USE_OPENCV=4 with --use-port=contrib.opencv
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --use-port=contrib.opencv")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} --use-port=contrib.opencv")
 
 # Core Sources
 file(GLOB_RECURSE CORE_SOURCES "${CMAKE_SOURCE_DIR}/../core/src/SLAM/*.cpp")
