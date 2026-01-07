@@ -8,7 +8,16 @@ endif()
 
 # Handle OPENCV_DIR variable
 if(DEFINED OPENCV_DIR)
-    message(STATUS "Web Build: OPENCV_DIR is set to ${OPENCV_DIR}, but local libraries are for Android. Attempting to use Emscripten contrib port.")
+    message(STATUS "Web Build: OPENCV_DIR is set to ${OPENCV_DIR}. Using provided headers for compilation. Linking will require external OpenCV libraries or ports.")
+    include_directories(${OPENCV_DIR}/sdk/native/jni/include)
+else()
+    # Fallback to hardcoded path if OPENCV_DIR is not set, or error out
+    # Assuming standard project structure if not provided
+    set(DEFAULT_OPENCV_PATH "${CMAKE_SOURCE_DIR}/../libs/opencv-4.12.0")
+    if(EXISTS "${DEFAULT_OPENCV_PATH}")
+        message(STATUS "Web Build: OPENCV_DIR not set. Defaulting to ${DEFAULT_OPENCV_PATH}.")
+        include_directories(${DEFAULT_OPENCV_PATH}/sdk/native/jni/include)
+    endif()
 endif()
 
 # Core Includes
@@ -20,10 +29,11 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/../core/Thirdparty/glm
 )
 
-# Use Emscripten's contrib OpenCV port
-# Replaces deprecated -s USE_OPENCV=4 with --use-port=contrib.opencv
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --use-port=contrib.opencv")
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} --use-port=contrib.opencv")
+# Emscripten specific flags
+# USE_OPENCV is removed/deprecated in recent versions.
+# We use local headers for compilation and expect libraries to be provided or linked manually if needed.
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -s USE_LIBPNG=1 -s USE_ZLIB=1")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s USE_LIBPNG=1 -s USE_ZLIB=1")
 
 # Core Sources
 file(GLOB_RECURSE CORE_SOURCES "${CMAKE_SOURCE_DIR}/../core/src/SLAM/*.cpp")
