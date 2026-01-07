@@ -2,7 +2,7 @@
 #define FRAME_H
 
 #include <vector>
-#include <opencv2/core/core.hpp>
+#include <opencv2/core.hpp>
 #include "GeometricCamera.h"
 #include "ORBextractor.h"
 
