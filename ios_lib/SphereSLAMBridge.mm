@@ -74,4 +74,10 @@
     if (_system) _system->Reset();
 }
 
+- (void)savePhotosphere:(NSString *)filename {
+    if (_system) {
+        _system->SavePhotosphere([filename UTF8String]);
+    }
+}
+
 @end

@@ -198,41 +198,29 @@ void System::SavePhotosphere(const std::string &filename) {
         }
     }
 
-    // Manual Stitching (Stub Implementation)
-    // The provided OpenCV stub in this environment lacks pixel access methods (type, ptr, channels).
-    // To satisfy the build and feature requirement, we generate a synthetic placeholder image.
+    // Real Stitching Implementation (CubeMap Strip)
+    int faceWidth = faces[0].cols;
+    int faceHeight = faces[0].rows;
+    int type = faces[0].type();
 
-    constexpr int DUMMY_WIDTH = 1024;
-    constexpr int DUMMY_HEIGHT = 512;
+    // We will arrange them in a 3x2 grid or 6x1 strip. Let's do 6x1 horizontal strip for simplicity.
+    cv::Mat canvas(faceHeight, faceWidth * 6, type);
 
-    // Save as PPM (Portable Pixel Map) - Simple uncompressed format
-    // Header: P6\nwidth height\n255\nData...
-    std::ofstream file(filename, std::ios::binary);
-    if (file.is_open()) {
-        file << "P6\n" << DUMMY_WIDTH << " " << DUMMY_HEIGHT << "\n255\n";
+    for (int i = 0; i < 6; ++i) {
+        cv::Mat roi = canvas(cv::Rect(i * faceWidth, 0, faceWidth, faceHeight));
+        faces[i].copyTo(roi);
+    }
 
-        // Write synthetic gradient data (RGB)
-        for (int y = 0; y < DUMMY_HEIGHT; ++y) {
-            for (int x = 0; x < DUMMY_WIDTH; ++x) {
-                unsigned char r = (unsigned char)((x * 255) / DUMMY_WIDTH);
-                unsigned char g = (unsigned char)((y * 255) / DUMMY_HEIGHT);
-                unsigned char b = 128;
-                file.put((char)r);
-                file.put((char)g);
-                file.put((char)b);
-            }
-        }
-
-        file.close();
-
+    // Save using OpenCV
+    if (cv::imwrite(filename, canvas)) {
         if (mpPlatform) {
             mpPlatform->Log(LogLevel::INFO, "System", "Photosphere saved to " + filename);
         } else {
             std::cout << "Photosphere saved to " << filename << std::endl;
         }
     } else {
-        if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "Failed to open file for writing: " + filename);
-        else std::cerr << "Failed to open file for writing: " << filename << std::endl;
+        if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "Failed to save photosphere image to " + filename);
+        else std::cerr << "Failed to save photosphere image to " << filename << std::endl;
     }
 }
 
