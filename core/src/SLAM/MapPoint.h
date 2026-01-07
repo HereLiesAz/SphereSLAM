@@ -1,7 +1,7 @@
 #ifndef MAPPOINT_H
 #define MAPPOINT_H
 
-#include <opencv2/core/core.hpp>
+#include <opencv2/core.hpp>
 #include <mutex>
 
 class KeyFrame;

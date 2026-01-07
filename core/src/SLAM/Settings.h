@@ -2,7 +2,7 @@
 #define SETTINGS_H
 
 #include <string>
-#include <opencv2/core/core.hpp>
+#include <opencv2/core.hpp>
 
 class Settings {
 public:

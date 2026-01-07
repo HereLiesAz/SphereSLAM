@@ -1,7 +1,7 @@
 #ifndef TRACKING_H
 #define TRACKING_H
 
-#include <opencv2/core/core.hpp>
+#include <opencv2/core.hpp>
 #include <mutex>
 #include "Frame.h"
 #include "GeometricCamera.h"
