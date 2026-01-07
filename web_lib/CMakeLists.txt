@@ -15,6 +15,7 @@ endif()
 include_directories(
     ${CMAKE_SOURCE_DIR}/../core/include
     ${CMAKE_SOURCE_DIR}/../core/src
+    ${CMAKE_SOURCE_DIR}/../core/src/Utils
     ${CMAKE_SOURCE_DIR}/../core/Thirdparty/eigen
     ${CMAKE_SOURCE_DIR}/../core/Thirdparty/glm
 )

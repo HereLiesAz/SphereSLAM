@@ -200,26 +200,29 @@ void System::SavePhotosphere(const std::string &filename) {
         }
     }
 
-    // Real Implementation using OpenCV
-    if (faces.empty()) return;
+    // Real Stitching Implementation (CubeMap Strip)
+    int faceWidth = faces[0].cols;
+    int faceHeight = faces[0].rows;
+    int type = faces[0].type();
 
-    // Stitch the 6 faces horizontally: [Right, Left, Top, Bottom, Front, Back] or similar order
-    // Order in CubeMapCamera is typically: PX, NX, PY, NY, PZ, NZ
-    // We will stitch them in a simple strip for now.
-    cv::Mat strip;
-    cv::hconcat(faces, strip);
+    // We will arrange them in a 3x2 grid or 6x1 strip. Let's do 6x1 horizontal strip for simplicity.
+    cv::Mat canvas(faceHeight, faceWidth * 6, type);
 
-    bool success = cv::imwrite(filename, strip);
+    for (int i = 0; i < 6; ++i) {
+        cv::Mat roi = canvas(cv::Rect(i * faceWidth, 0, faceWidth, faceHeight));
+        faces[i].copyTo(roi);
+    }
 
-    if (success) {
+    // Save using OpenCV
+    if (cv::imwrite(filename, canvas)) {
         if (mpPlatform) {
             mpPlatform->Log(LogLevel::INFO, "System", "Photosphere saved to " + filename);
         } else {
             std::cout << "Photosphere saved to " << filename << std::endl;
         }
     } else {
-        if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "Failed to save photosphere to: " + filename);
-        else std::cerr << "Failed to save photosphere to: " << filename << std::endl;
+        if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "Failed to save photosphere image to " + filename);
+        else std::cerr << "Failed to save photosphere image to " << filename << std::endl;
     }
 }
 
