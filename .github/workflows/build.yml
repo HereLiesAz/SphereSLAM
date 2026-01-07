@@ -167,6 +167,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          # Clean up existing tag/release to allow re-runs
+          echo "Checking for existing release/tag..."
+          gh release delete $TAG_NAME -y --cleanup-tag || echo "No existing release to delete."
+          git tag -d $TAG_NAME || echo "No local tag to delete."
+          git push origin --delete $TAG_NAME || echo "No remote tag to delete."
+
           # Create unique tag for this build
           git tag -a $TAG_NAME -m "Debug Build $VERSION_NAME"
           git push origin $TAG_NAME
