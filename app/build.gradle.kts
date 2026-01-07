@@ -35,7 +35,16 @@ android {
         getByName("debug") {
         }
         getByName("release") {
-            signingConfig = signingConfigs.getByName("shared")
+            val keystorePath = System.getenv("KEYSTORE_FILE") ?: "keystore.jks"
+            val keystoreFile = file(keystorePath)
+
+            if (keystoreFile.exists()) {
+                signingConfig = signingConfigs.getByName("shared")
+            } else {
+                println("Keystore file '$keystorePath' not found. Falling back to debug signing for release build.")
+                signingConfig = signingConfigs.getByName("debug")
+            }
+
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
