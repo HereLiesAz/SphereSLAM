@@ -91,4 +91,5 @@ target_link_libraries( # Specifies the target library.
                        android
                        EGL
                        GLESv3
-                       vulkan )
+                       vulkan
+                       lib_opencv )
