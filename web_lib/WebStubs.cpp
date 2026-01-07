@@ -37,7 +37,7 @@ namespace cv {
         return *this;
     }
 
-    Mat& Mat::operator=(Mat&& m) noexcept {
+    Mat& Mat::operator=(Mat&& m) {
         return *this;
     }
 
