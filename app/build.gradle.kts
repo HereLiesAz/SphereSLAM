@@ -50,6 +50,12 @@ android {
     buildFeatures {
         viewBinding = true
     }
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+            pickFirsts.add("**/libc++_shared.so")
+        }
+    }
 }
 
 dependencies {
