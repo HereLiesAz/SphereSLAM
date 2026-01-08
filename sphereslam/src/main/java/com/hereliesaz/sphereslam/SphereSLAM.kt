@@ -14,7 +14,8 @@ class SphereSLAM(private val context: Context) {
     // Native Interface
     external fun initNative(assetManager: AssetManager, cacheDir: String)
     external fun destroyNative()
-    external fun processFrame(matAddr: Long, timestamp: Double)
+    external fun getBufferAddress(buffer: java.nio.Buffer): Long
+    external fun processFrame(matAddr: Long, timestamp: Double, width: Int, height: Int, stride: Int)
     external fun processIMU(type: Int, x: Float, y: Float, z: Float, timestamp: Long)
     external fun setNativeWindow(surface: Surface?)
     external fun renderFrame()

@@ -36,6 +36,7 @@ import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.LinkedBlockingQueue
 
 class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Callback, Choreographer.FrameCallback {
 
@@ -56,6 +57,17 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     // Touch handling
     private var lastTouchX = 0f
     private var lastTouchY = 0f
+
+    // Frame Queue for Safe Image Reading
+    private data class QueuedFrame(
+        val image: android.media.Image,
+        val address: Long,
+        val timestamp: Double,
+        val width: Int,
+        val height: Int,
+        val stride: Int
+    )
+    private val frameQueue = LinkedBlockingQueue<QueuedFrame>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -86,9 +98,46 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         // Initialize SphereSLAM Library
         sphereSLAM = SphereSLAM(this)
 
+        // Start frame processing loop
+        lifecycleScope.launch(Dispatchers.IO) {
+            while (true) {
+                try {
+                    val frame = frameQueue.take() // Blocks until a frame is available
+                    sphereSLAM.processFrame(
+                        frame.address,
+                        frame.timestamp,
+                        frame.width,
+                        frame.height,
+                        frame.stride
+                    )
+                    frame.image.close()
+                } catch (e: Exception) {
+                    LogManager.e(TAG, "Error processing frame", e)
+                }
+            }
+        }
+
         cameraManager = SphereCameraManager(this) { image ->
-            sphereSLAM.processFrame(0L, image.timestamp.toDouble())
-            image.close()
+            try {
+                val plane = image.planes[0]
+                val buffer = plane.buffer
+                val width = image.width
+                val height = image.height
+                val stride = plane.rowStride
+
+                // Get memory address via JNI helper
+                val address = sphereSLAM.getBufferAddress(buffer)
+
+                if (address != 0L) {
+                    frameQueue.offer(QueuedFrame(image, address, image.timestamp.toDouble(), width, height, stride))
+                } else {
+                    LogManager.e(TAG, "Failed to get buffer address, dropping frame")
+                    image.close()
+                }
+            } catch (e: Exception) {
+                LogManager.e(TAG, "Error queuing frame", e)
+                image.close()
+            }
         }
 
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
