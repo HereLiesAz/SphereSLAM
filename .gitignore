@@ -36,4 +36,4 @@ google-services.json
 *.pem
 scripts/private.key
 libs/opencv-4.12.0
-libs/opencv-4.12.0
+libs/litert_sdk/
