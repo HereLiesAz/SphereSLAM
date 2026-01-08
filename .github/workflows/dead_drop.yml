@@ -1,4 +1,4 @@
-name: "Context Dead Drop (Sterilized)"
+name: "Context Dead Drop (Bulletproof)"
 
 on:
   workflow_dispatch:
@@ -16,8 +16,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Generate and Upload
-        shell: powershell
+      - name: Generate and Exfiltrate
+        shell: pwsh
         run: |
           # --- Configuration ---
           $BackupPrefix = "project_backup"
@@ -26,17 +26,8 @@ jobs:
           $OutFile      = Join-Path $Root "${BackupPrefix}_full_${Timestamp}.txt"
           
           # --- The Kill List ---
-          $TrashDirs = @(
-              "build", "out", "bin", "obj", 
-              ".gradle", ".idea", ".vscode", ".git", 
-              "node_modules", "captures", ".cxx", 
-              "generated"
-          )
-
-          $TrashFiles = @(
-              "package-lock.json", "yarn.lock", 
-              "local.properties", "*.iml", ".DS_Store", "Thumbs.db"
-          )
+          $TrashDirs = @("build", "out", "bin", "obj", ".gradle", ".idea", ".vscode", ".git", "node_modules", "captures", ".cxx", "generated")
+          $TrashFiles = @("package-lock.json", "yarn.lock", "local.properties", "*.iml", ".DS_Store", "Thumbs.db")
 
           # --- Helper Functions ---
           function Test-IsBinary($Path) {
@@ -89,38 +80,51 @@ jobs:
           foreach ($f in $CleanList) {
               $rel = $f.Substring($Root.Path.Length + 1)
               $Writer.WriteLine(">>> $rel")
-              
-              if (Test-IsBinary $f) {
-                  $Writer.WriteLine("[BINARY]")
-              } else {
-                  try { 
-                      $content = [System.IO.File]::ReadAllText($f)
-                      $Writer.WriteLine($content) 
-                  } catch { 
-                      $Writer.WriteLine("[READ ERROR]") 
-                  }
+              if (Test-IsBinary $f) { $Writer.WriteLine("[BINARY]") } 
+              else {
+                  try { $Writer.WriteLine([System.IO.File]::ReadAllText($f)) } catch { $Writer.WriteLine("[READ ERROR]") }
               }
               $Writer.WriteLine("`n")
           }
           $Writer.Close()
 
-          # --- Dead Drop ---
-          Write-Host "Uploading payload..." -ForegroundColor Cyan
+          # --- Verification ---
+          $Size = (Get-Item $OutFile).Length
+          Write-Host "Payload generated. Size: $([math]::Round($Size / 1KB, 2)) KB" -ForegroundColor Cyan
+          if ($Size -eq 0) { Write-Error "Payload is empty! Check filters."; exit 1 }
+
+          # --- UPLOAD STRATEGY 1: FILE.IO ---
+          $Link = $null
+          Write-Host "Attempting Upload (Primary: file.io)..." -ForegroundColor Yellow
           try {
               $response = Invoke-RestMethod -Uri "https://file.io/?expires=1d" -Method Post -InFile $OutFile
-              $link = $response.link
-              
-              # Write to Console
-              Write-Host "`nLINK: $link" -ForegroundColor Green
-              
-              # Write to Job Summary
-              "## Context Payload Ready" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-              "**Download Link (One-time use):**" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-              "[$link]($link)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-              "> *This link will expire immediately after the first download.*" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-
+              Write-Host "Raw Response: $($response | ConvertTo-Json -Depth 1)" -ForegroundColor DarkGray
+              $Link = $response.link
           } catch {
-              Write-Error "Upload failed."
-              "## Upload Failed" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-              "Check logs for details." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+              Write-Host "Primary upload failed: $_" -ForegroundColor Red
+          }
+
+          # --- UPLOAD STRATEGY 2: TRANSFER.SH (Fallback) ---
+          if ([string]::IsNullOrWhiteSpace($Link)) {
+              Write-Host "Falling back to Transfer.sh..." -ForegroundColor Yellow
+              try {
+                  # Transfer.sh returns the URL as plain text body
+                  $Link = curl.exe --upload-file "$OutFile" "https://transfer.sh/context.txt"
+                  $Link = $Link.Trim()
+              } catch {
+                  Write-Host "Fallback upload failed: $_" -ForegroundColor Red
+              }
+          }
+
+          # --- Final Report ---
+          if (-not [string]::IsNullOrWhiteSpace($Link)) {
+              Write-Host "`nSUCCESS. LINK: $Link" -ForegroundColor Green
+              
+              "## 📦 Context Payload Ready" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+              "**Download Link:**" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+              "[$Link]($Link)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+              "> *Link expires after use or 14 days (depending on service used).*" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          } else {
+              Write-Error "All upload strategies failed."
+              "## ❌ Extraction Failed" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           }
