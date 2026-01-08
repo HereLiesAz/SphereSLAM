@@ -26,7 +26,8 @@ jobs:
           # --- CONFIGURATION ---
           
           # 1. TRASH (Dead to us. Never listed, never read.)
-          TRASH_DIRS="build out bin obj .gradle .idea .vscode .git node_modules captures .cxx generated"
+          # Updated to include build_test, libs, captured
+          TRASH_DIRS="build out bin obj .gradle .idea .vscode .git node_modules captures captured .cxx generated build_test libs"
           TRASH_FILES="package-lock.json yarn.lock local.properties .DS_Store Thumbs.db"
 
           # 2. WHITELIST (We read the content of these.)
@@ -35,7 +36,7 @@ jobs:
               "kt" "kts" "java" "xml" "gradle" "properties" "pro" "toml"
               # NDK
               "cpp" "c" "cc" "h" "hpp" "ld" "S" "cmake" "in"
-              # Web/Config/Workflows (YML INCLUDED)
+              # Web/Config/Workflows
               "json" "yaml" "yml" "md" "txt" "sql" "html" "css" "js"
           )
           
