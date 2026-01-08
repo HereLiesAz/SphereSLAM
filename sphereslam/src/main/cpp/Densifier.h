@@ -15,9 +15,8 @@ public:
     Densifier(DepthAnyCamera* pDepthEstimator);
 
     // Main function to convert a KeyFrame to Gaussians
-    std::vector<Gaussian> DensifyKeyFrame(KeyFrame* pKF, const std::vector<float>& depthMap);
-
-    // In a real system, this might run in a loop or be called by LocalMapping
+    // Accepts the KeyFrame (for Pose) and the Equirectangular Depth and Color maps
+    std::vector<Gaussian> DensifyKeyFrame(KeyFrame* pKF, const std::vector<float>& depthMap, const cv::Mat& colorImage);
 
 private:
     DepthAnyCamera* mpDepthEstimator;

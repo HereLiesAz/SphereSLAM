@@ -7,6 +7,10 @@ cmake_minimum_required(VERSION 3.22.1)
 # Declares and names the project.
 project("sphereslam")
 
+# Find Packages
+# find_package(TensorFlowLiteC REQUIRED) # Disabled due to Prefab failure
+find_package(OpenCV REQUIRED)
+
 # Include directories
 include_directories(
     ${CMAKE_SOURCE_DIR}
@@ -14,13 +18,7 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/../../../../core/src
     ${CMAKE_SOURCE_DIR}/../../../../core/Thirdparty/eigen
     ${CMAKE_SOURCE_DIR}/../../../../core/Thirdparty/glm
-    ${CMAKE_SOURCE_DIR}/../../../../libs/opencv-4.12.0/sdk/native/jni/include # Adjust path as needed
 )
-
-# Import OpenCV library
-add_library(lib_opencv SHARED IMPORTED)
-set_target_properties(lib_opencv PROPERTIES IMPORTED_LOCATION
-    ${CMAKE_SOURCE_DIR}/../../../../libs/opencv-4.12.0/sdk/native/libs/${ANDROID_ABI}/libopencv_java4.so)
 
 # Creates and names a library, sets it as either STATIC
 # or SHARED, and provides the relative paths to its source code.
@@ -35,6 +33,7 @@ add_library( # Sets the name of the library.
 
              # Provides a relative path to your source file(s).
              native-lib.cpp
+             PlatformAndroid.cpp
              VulkanCompute.cpp
              DepthAnyCamera.cpp
              Densifier.cpp
@@ -87,9 +86,9 @@ target_link_libraries( # Specifies the target library.
                        ${log-lib}
                        ${android-lib}
                        ${android-asset}
-                       lib_opencv
+                       ${OpenCV_LIBS}
+                       # TensorFlowLiteC::TensorFlowLiteC
                        android
                        EGL
                        GLESv3
-                       vulkan
-                       lib_opencv )
+                       vulkan )

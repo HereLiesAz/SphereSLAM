@@ -14,6 +14,7 @@ public:
 
     void SetPose(const cv::Mat &Tcw);
     cv::Mat GetPose();
+    cv::Mat GetPoseInverse();
 
     // Connections
     void AddConnection(KeyFrame* pKF, const int &weight);

@@ -2,6 +2,7 @@
 #define MOBILE_GS_H
 
 #include <vector>
+#include <EGL/egl.h>
 #include <GLES3/gl32.h>
 #include <glm/glm.hpp>
 #include <android/native_window.h>
@@ -43,18 +44,28 @@ private:
     std::vector<glm::mat4> keyFramePoses; // New: Store poses for visualization
     ANativeWindow* mWindow;
 
+    // EGL State
+    EGLDisplay mDisplay;
+    EGLSurface mSurface;
+    EGLContext mContext;
+    bool mEglInitialized;
+
+    // GL State
+    GLuint mProgram;
+    GLuint mVAO;
+    GLuint mVBO;
+
     // Camera State
     glm::mat4 mViewMatrix;
     glm::mat4 mProjMatrix;
     glm::vec3 mUserOffset;
     glm::vec3 mUserRotation;
 
-    // OpenGL/Vulkan resources (buffers, shaders)
-    // For blueprint, we assume these exist
-
-    void sortGaussians(); // Radix sort on GPU
-    void cullTiles();     // Tile-based culling
-    void drawFrustums();  // New: Helper to draw lines
+    void initEGL();
+    void terminateEGL();
+    void compileShaders();
+    GLuint loadShader(GLenum type, const char* shaderSrc);
+    void drawFrustums();
 };
 
 #endif // MOBILE_GS_H
