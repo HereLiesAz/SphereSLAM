@@ -67,7 +67,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         val height: Int,
         val stride: Int
     )
-    private val frameQueue = LinkedBlockingQueue<QueuedFrame>()
+    private val frameQueue = LinkedBlockingQueue<QueuedFrame>(2)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -129,7 +129,16 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
                 val address = sphereSLAM.getBufferAddress(buffer)
 
                 if (address != 0L) {
-                    frameQueue.offer(QueuedFrame(image, address, image.timestamp.toDouble(), width, height, stride))
+                    val frame = QueuedFrame(image, address, image.timestamp.toDouble(), width, height, stride)
+                    if (!frameQueue.offer(frame)) {
+                        // Queue is full, drop oldest frame to make space (Drop Oldest Strategy)
+                        val oldFrame = frameQueue.poll()
+                        oldFrame?.image?.close()
+                        if (!frameQueue.offer(frame)) {
+                            // Still couldn't add (unlikely), drop current
+                            image.close()
+                        }
+                    }
                 } else {
                     LogManager.e(TAG, "Failed to get buffer address, dropping frame")
                     image.close()
@@ -267,6 +276,15 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
 
     override fun onDestroy() {
         super.onDestroy()
+        // Drain queue and close images to prevent leaks
+        while (true) {
+            val frame = frameQueue.poll() ?: break
+            try {
+                frame.image.close()
+            } catch (e: Exception) {
+                // Ignore close errors
+            }
+        }
         sphereSLAM.cleanup()
     }
 
