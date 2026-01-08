@@ -25,12 +25,12 @@
 ## **Phase 2: Build System & Dependencies**
 *Target: `sphereslam/build.gradle.kts`, `sphereslam/src/main/cpp/CMakeLists.txt`*
 
-* [ ] **Retain SDK 36:** Keep `compileSdk = 36` (Android 16).
-* [ ] **Enable Prefab:** Ensure `buildFeatures { prefab = true }` is active in `sphereslam/build.gradle.kts`.
-* [ ] **Link Real Libraries (CMake):**
+* [x] **Retain SDK 36:** Keep `compileSdk = 36` (Android 16).
+* [x] **Enable Prefab:** Ensure `buildFeatures { prefab = true }` is active in `sphereslam/build.gradle.kts`.
+* [x] **Link Real Libraries (CMake):**
     * Remove hardcoded paths to `libs/opencv...`.
     * Use `find_package(OpenCV REQUIRED)` (or `libopencv_java4` via Prefab).
-    * Use `find_package(TensorFlowLiteC REQUIRED)` (via `com.google.ai.edge.litert`).
+    * Use `find_package(TensorFlowLiteC REQUIRED)` (via `com.google.ai.edge.litert`). *(Partially Complete: OpenCV linked. TFLite deferred to Phase 3 due to missing Prefab metadata in current artifact)*.
     * Link these targets to `sphereslam`.
 
 ## **Phase 3: Real Neural Inference (Depth)**
