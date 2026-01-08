@@ -5,22 +5,21 @@
 #include <vector>
 #include <android/asset_manager.h>
 
-// Forward declaration for TFLite Interpreter
-namespace tflite {
-    class Interpreter;
-    class FlatBufferModel;
-}
-
-// Mock TFLite C API Types
-typedef struct TfLiteModel TfLiteModel;
-typedef struct TfLiteInterpreterOptions TfLiteInterpreterOptions;
-typedef struct TfLiteInterpreter TfLiteInterpreter;
-typedef struct TfLiteTensor TfLiteTensor;
+// LiteRT Headers (Expected path when SDK is linked)
+#ifdef USE_LITERT
+#include "litert/c/c_api.h"
+#else
+// Define dummy types to compile the header without SDK
+typedef struct LiteRtModel LiteRtModel;
+typedef struct LiteRtInterpreterOptions LiteRtInterpreterOptions;
+typedef struct LiteRtInterpreter LiteRtInterpreter;
+typedef struct LiteRtTensor LiteRtTensor;
+#endif
 
 struct DacState {
-    TfLiteModel* model = nullptr;
-    TfLiteInterpreter* interpreter = nullptr;
-    TfLiteInterpreterOptions* options = nullptr;
+    LiteRtModel* model = nullptr;
+    LiteRtInterpreter* interpreter = nullptr;
+    LiteRtInterpreterOptions* options = nullptr;
 };
 
 class DepthAnyCamera {

@@ -15,10 +15,15 @@ public:
                     std::vector<bool> &vbTriangulated);
 
 private:
-    // Stub members
     Frame mInitialFrame;
     float mSigma;
     int mMaxIterations;
+
+    std::vector<cv::Point2f> mvKeys1;
+    std::vector<cv::Point2f> mvKeys2;
+
+    std::vector<std::vector<size_t>> mvSets;
+    std::vector<int> mvMatches12;
 };
 
 #endif // INITIALIZER_H
