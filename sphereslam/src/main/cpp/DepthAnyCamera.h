@@ -4,12 +4,22 @@
 #include <string>
 #include <vector>
 #include <android/asset_manager.h>
-#include "tensorflow/lite/c/c_api.h"
+
+// LiteRT Headers (Expected path when SDK is linked)
+#ifdef USE_LITERT
+#include "litert/c/c_api.h"
+#else
+// Define dummy types to compile the header without SDK
+typedef struct LiteRtModel LiteRtModel;
+typedef struct LiteRtInterpreterOptions LiteRtInterpreterOptions;
+typedef struct LiteRtInterpreter LiteRtInterpreter;
+typedef struct LiteRtTensor LiteRtTensor;
+#endif
 
 struct DacState {
-    TfLiteModel* model = nullptr;
-    TfLiteInterpreter* interpreter = nullptr;
-    TfLiteInterpreterOptions* options = nullptr;
+    LiteRtModel* model = nullptr;
+    LiteRtInterpreter* interpreter = nullptr;
+    LiteRtInterpreterOptions* options = nullptr;
 };
 
 class DepthAnyCamera {

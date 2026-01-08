@@ -105,8 +105,8 @@ std::vector<Gaussian> Densifier::DensifyKeyFrame(KeyFrame* pKF, const std::vecto
             Gaussian g;
             g.position = glm::vec3(X_world, Y_world, Z_world);
 
-            // Rotation: Default identity for spherical gaussians
-            g.rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+            // Rotation: Default identity for spherical gaussians (Aggregate Init)
+            g.rotation = {1.0f, 0.0f, 0.0f, 0.0f};
 
             // Scale: Heuristic based on depth and pixel angular size
             float scaleFactor = depth * 0.05f;
