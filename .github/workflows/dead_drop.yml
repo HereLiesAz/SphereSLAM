@@ -1,4 +1,4 @@
-name: "Context Backup (Standard Artifact)"
+name: "Context Backup (Surgical + Manifest)"
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  backup:
+  surgical-extraction:
     runs-on: ubuntu-latest
     
     steps:
@@ -16,67 +16,122 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Generate Clean Context
+      - name: Generate Surgical Context
         shell: bash
         run: |
-          # --- CONFIGURATION ---
           TIMESTAMP=$(date +'%Y%m%d_%H%M%S')
-          OUTFILE="project_backup_full_${TIMESTAMP}.txt"
+          OUTFILE="project_backup_surgical_${TIMESTAMP}.txt"
+          MANIFEST="skipped_files.tmp"
+
+          # --- CONFIGURATION ---
           
-          # TRASH FILTERS (Files/Dirs to ignore)
-          TRASH_DIRS="build out bin obj .gradle .idea .vscode .git node_modules captures .cxx generated"
+          # 1. TRASH (Dead to us. Never listed, never read.)
+          # Updated to include build_test, libs, captured
+          TRASH_DIRS="build out bin obj .gradle .idea .vscode .git node_modules captures captured .cxx generated build_test libs"
           TRASH_FILES="package-lock.json yarn.lock local.properties .DS_Store Thumbs.db"
 
-          echo -e "\033[36m[+] Generating Context...\033[0m"
-          touch "$OUTFILE"
+          # 2. WHITELIST (We read the content of these.)
+          EXTENSIONS=(
+              # JVM
+              "kt" "kts" "java" "xml" "gradle" "properties" "pro" "toml"
+              # NDK
+              "cpp" "c" "cc" "h" "hpp" "ld" "S" "cmake" "in"
+              # Web/Config/Workflows
+              "json" "yaml" "yml" "md" "txt" "sql" "html" "css" "js"
+          )
+          
+          # Specific critical filenames
+          CRITICAL_FILES=("CMakeLists.txt" "Android.mk" "Application.mk" "Makefile")
 
-          # Helper: Check for binary
+          echo -e "\033[36m[+] Starting Surgical Extraction with Manifest...\033[0m"
+
+          # Helper: Check for binary content
           is_binary() {
               if head -c 512 "$1" | grep -qP '\x00'; then return 0; else return 1; fi
           }
 
-          # 1. FIND FILES
+          # 1. FIND ALL "ALIVE" FILES (Everything except Trash Dirs)
           if [ -d ".git" ]; then
+              # Git is smarter about ignoring trash, so we use it if possible
               FILES=$(git ls-files -c -o --exclude-standard)
           else
               FILES=$(find . -type f)
           fi
 
-          # 2. PROCESS FILES
+          touch "$OUTFILE"
+          touch "$MANIFEST"
+
           echo "$FILES" > filelist.tmp
+          
           while IFS= read -r file; do
-              # Skip Trash Directories
+              # A. TRASH FILTER (Double Check)
               SKIP=0
               for trash in $TRASH_DIRS; do
                   if [[ "$file" == *"/$trash/"* ]] || [[ "$file" == "$trash/"* ]] || [[ "$file" == *"/$trash" ]]; then
                       SKIP=1; break
                   fi
               done
-              # Skip Trash Files
-              BASENAME=$(basename "$file")
+              basename=$(basename "$file")
               for trash in $TRASH_FILES; do
-                  if [[ "$BASENAME" == "$trash" ]]; then SKIP=1; break; fi
+                  if [[ "$basename" == "$trash" ]]; then SKIP=1; break; fi
+              done
+              if [[ "$SKIP" -eq 1 ]]; then continue; fi
+
+              # B. WHITELIST CHECK
+              IS_WHITELISTED=0
+              ext="${file##*.}"
+              
+              # Check extension
+              for valid_ext in "${EXTENSIONS[@]}"; do
+                  if [[ "$ext" == "$valid_ext" ]]; then IS_WHITELISTED=1; break; fi
               done
               
-              if [[ "$SKIP" -eq 1 ]]; then continue; fi
-              
-              # Write Content
-              echo ">>> $file" >> "$OUTFILE"
-              if is_binary "$file"; then
-                  echo "[BINARY CONTENT SKIPPED]" >> "$OUTFILE"
-              else
-                  cat "$file" >> "$OUTFILE" 2>>/dev/null || echo "[READ ERROR]" >> "$OUTFILE"
+              # Check filename
+              if [[ "$IS_WHITELISTED" -eq 0 ]]; then
+                  for valid_name in "${CRITICAL_FILES[@]}"; do
+                      if [[ "$basename" == "$valid_name" ]]; then IS_WHITELISTED=1; break; fi
+                  done
               fi
-              echo -e "\n\n" >> "$OUTFILE"
+
+              # C. ACTION
+              if [[ "$IS_WHITELISTED" -eq 1 ]]; then
+                  # It's on the list. Add CONTENT.
+                  echo ">>> $file" >> "$OUTFILE"
+                  if is_binary "$file"; then
+                      echo "[BINARY CONTENT REDACTED]" >> "$OUTFILE"
+                  else
+                      cat "$file" >> "$OUTFILE" 2>>/dev/null || echo "[READ ERROR]" >> "$OUTFILE"
+                  fi
+                  echo -e "\n\n" >> "$OUTFILE"
+              else
+                  # It's not trash, but not whitelisted. Add to MANIFEST.
+                  echo "$file" >> "$MANIFEST"
+              fi
+
           done < filelist.tmp
           rm filelist.tmp
 
-          echo "BACKUP_FILE=$OUTFILE" >> $GITHUB_ENV
-          echo -e "\033[32m[+] Complete: $OUTFILE\033[0m"
+          # D. APPEND MANIFEST
+          echo -e "\n\n==================================================================" >> "$OUTFILE"
+          echo "       SKIPPED FILES REPORT (The Grey Zone)" >> "$OUTFILE"
+          echo "       (Files present in repo but extensions not whitelisted)" >> "$OUTFILE"
+          echo "==================================================================" >> "$OUTFILE"
+          
+          if [ -s "$MANIFEST" ]; then
+              cat "$MANIFEST" >> "$OUTFILE"
+          else
+              echo "(None)" >> "$OUTFILE"
+          fi
+          rm "$MANIFEST"
 
-      - name: Upload to Artifacts Tab
+          # STATS
+          SIZE_KB=$(du -k "$OUTFILE" | cut -f1)
+          echo -e "\033[32m[+] Final Payload Size: ${SIZE_KB} KB\033[0m"
+          echo "BACKUP_FILE=$OUTFILE" >> $GITHUB_ENV
+
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: context-backup
+          name: surgical-backup
           path: ${{ env.BACKUP_FILE }}
           retention-days: 1
