@@ -55,6 +55,10 @@ bool DepthAnyCamera::initialize(const std::string& cachePath) {
     // LiteRtDelegate* gpuDelegate = LiteRtGpuDelegateV2Create(nullptr);
     // if (gpuDelegate) LiteRtInterpreterOptionsAddDelegate(dacCtx.options, gpuDelegate);
 
+    // Check if GPU delegate is available (Optional / Future work)
+    // TfLiteDelegate* gpuDelegate = TfLiteGpuDelegateV2Create(nullptr);
+    // if (gpuDelegate) TfLiteInterpreterOptionsAddDelegate(dacCtx.options, gpuDelegate);
+
     // 3. Create Interpreter
     dacCtx.interpreter = LiteRtInterpreterCreate(dacCtx.model, dacCtx.options);
     if (!dacCtx.interpreter) {

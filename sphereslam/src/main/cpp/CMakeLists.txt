@@ -87,7 +87,7 @@ target_link_libraries( # Specifies the target library.
                        ${android-lib}
                        ${android-asset}
                        ${OpenCV_LIBS}
-                       # TensorFlowLiteC::TensorFlowLiteC
+                       TensorFlowLiteC::TensorFlowLiteC
                        android
                        EGL
                        GLESv3
