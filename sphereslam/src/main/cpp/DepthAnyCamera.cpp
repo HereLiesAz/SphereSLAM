@@ -7,7 +7,7 @@
 
 #define TAG "DepthAnyCamera"
 // Define to enable LiteRT when SDK is available
-// #define USE_LITERT
+// #define USE_LITERT 
 
 DepthAnyCamera::DepthAnyCamera(AAssetManager* assetManager) : assetManager(assetManager) {
 }
@@ -50,14 +50,10 @@ bool DepthAnyCamera::initialize(const std::string& cachePath) {
     // 2. Create Options
     dacCtx.options = LiteRtInterpreterOptionsCreate();
     LiteRtInterpreterOptionsSetNumThreads(dacCtx.options, 4); // Use 4 threads (Big cores)
-
+    
     // Check if GPU delegate is available (Optional / Future work)
     // LiteRtDelegate* gpuDelegate = LiteRtGpuDelegateV2Create(nullptr);
     // if (gpuDelegate) LiteRtInterpreterOptionsAddDelegate(dacCtx.options, gpuDelegate);
-
-    // Check if GPU delegate is available (Optional / Future work)
-    // TfLiteDelegate* gpuDelegate = TfLiteGpuDelegateV2Create(nullptr);
-    // if (gpuDelegate) TfLiteInterpreterOptionsAddDelegate(dacCtx.options, gpuDelegate);
 
     // 3. Create Interpreter
     dacCtx.interpreter = LiteRtInterpreterCreate(dacCtx.model, dacCtx.options);
@@ -92,10 +88,10 @@ std::vector<float> DepthAnyCamera::estimateDepth(void* inputBuffer, int width, i
 
     // Use stride if necessary, but here we assume inputBuffer is packed or handle it via Mat
     cv::Mat inputWrapper(height, width, CV_8UC3, inputBuffer);
-
+    
     cv::Mat resized;
     cv::resize(inputWrapper, resized, cv::Size(modelWidth, modelHeight));
-
+    
     cv::Mat floatMat;
     resized.convertTo(floatMat, CV_32FC3, 1.0f / 255.0f); // Normalize 0.0 - 1.0
 
@@ -103,7 +99,7 @@ std::vector<float> DepthAnyCamera::estimateDepth(void* inputBuffer, int width, i
 
     // Check input tensor size to be sure
     // int inputDims[4] = {1, 256, 512, 3}; // Check against actual model
-
+    
     // Copy data
     if (floatMat.isContinuous()) {
         LiteRtTensorCopyFromBuffer(inputTensor, floatMat.data, floatMat.total() * floatMat.elemSize());
