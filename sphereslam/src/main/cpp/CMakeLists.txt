@@ -8,7 +8,7 @@ cmake_minimum_required(VERSION 3.22.1)
 project("sphereslam")
 
 # Find Packages
-# find_package(TensorFlowLiteC REQUIRED) # Deferred to Phase 3
+find_package(TensorFlowLiteC REQUIRED)
 find_package(OpenCV REQUIRED)
 
 # Include directories
@@ -87,7 +87,7 @@ target_link_libraries( # Specifies the target library.
                        ${android-lib}
                        ${android-asset}
                        ${OpenCV_LIBS}
-                       # TensorFlowLiteC::TensorFlowLiteC
+                       TensorFlowLiteC::TensorFlowLiteC
                        android
                        EGL
                        GLESv3

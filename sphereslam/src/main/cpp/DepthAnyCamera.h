@@ -4,18 +4,7 @@
 #include <string>
 #include <vector>
 #include <android/asset_manager.h>
-
-// Forward declaration for TFLite Interpreter
-namespace tflite {
-    class Interpreter;
-    class FlatBufferModel;
-}
-
-// Mock TFLite C API Types
-typedef struct TfLiteModel TfLiteModel;
-typedef struct TfLiteInterpreterOptions TfLiteInterpreterOptions;
-typedef struct TfLiteInterpreter TfLiteInterpreter;
-typedef struct TfLiteTensor TfLiteTensor;
+#include "tensorflow/lite/c/c_api.h"
 
 struct DacState {
     TfLiteModel* model = nullptr;
