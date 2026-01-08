@@ -6,6 +6,7 @@
 #include <android/native_window_jni.h>
 #include <vector>
 #include <mutex>
+#include <opencv2/core.hpp>
 
 #include "SLAM/System.h"
 #include "VulkanCompute.h"
@@ -93,14 +94,38 @@ Java_com_hereliesaz_sphereslam_SphereSLAM_destroyNative(JNIEnv* env, jobject thi
     __android_log_print(ANDROID_LOG_INFO, TAG, "Native Systems Destroyed");
 }
 
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_hereliesaz_sphereslam_SphereSLAM_getBufferAddress(JNIEnv* env, jobject thiz, jobject buffer) {
+    void* address = env->GetDirectBufferAddress(buffer);
+    if (address == nullptr) {
+        return 0L;
+    }
+    return (jlong)address;
+}
+
 extern "C" JNIEXPORT void JNICALL
-Java_com_hereliesaz_sphereslam_SphereSLAM_processFrame(JNIEnv* env, jobject thiz, jlong matAddr, jdouble timestamp) {
+Java_com_hereliesaz_sphereslam_SphereSLAM_processFrame(JNIEnv* env, jobject thiz, jlong matAddr, jdouble timestamp, jint width, jint height, jint stride) {
     if (slamSystem && vulkanCompute) {
         // Pipeline: Input -> Vulkan (Equirect to Cubemap) -> SLAM
 
+        // Cast address to raw pointer
+        uint8_t* ptr = reinterpret_cast<uint8_t*>(matAddr);
+        if (!ptr) return;
+
+        // Construct cv::Mat wrapper around raw data
+        // Use stride if it differs from width
+        size_t step = (stride > 0) ? (size_t)stride : cv::Mat::AUTO_STEP;
+        cv::Mat inputWrapper(height, width, CV_8UC1, ptr, step);
+
+        // Clone to persist data for background processing
+        cv::Mat inputImage = inputWrapper.clone();
+
         // 1. Process Input Image on GPU
-        // In a real implementation, matAddr might be a AHardwareBuffer or TextureID
-        vulkanCompute->processImage((void*)matAddr, 3840, 1920); // Assume 4K equirect input
+        // In a real implementation, we would pass the texture or buffer to Vulkan
+        // For now, we assume the input is suitable for processing.
+        // We pass the raw data pointer from the clone, or the clone itself if VulkanCompute accepts it.
+        // Since VulkanCompute->processImage takes void*, we pass the data pointer of the clone.
+        vulkanCompute->processImage(inputImage.data, width, height);
 
         // 2. Retrieve Output Faces
         // Conceptual: Get 6 cv::Mat or buffers from VulkanCompute output
@@ -108,11 +133,9 @@ Java_com_hereliesaz_sphereslam_SphereSLAM_processFrame(JNIEnv* env, jobject thiz
         // Mocking the output:
         // for(int i=0; i<6; ++i) faces.push_back(vulkanCompute->getOutputFace(i));
 
-        // For Blueprint: If matAddr is valid, we push it as a dummy face to keep pipeline moving
-        if (matAddr != 0) {
-            cv::Mat* pMat = (cv::Mat*)matAddr;
-            faces.push_back(*pMat);
-        }
+        // For Blueprint: Push the input image as a dummy face to keep pipeline moving
+        // (Assuming monocular or specific testing setup)
+        faces.push_back(inputImage);
 
         // 3. Track
         cv::Mat Tcw = slamSystem->TrackCubeMap(faces, timestamp);

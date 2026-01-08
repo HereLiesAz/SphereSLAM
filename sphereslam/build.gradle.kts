@@ -15,7 +15,7 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags("-std=c++17 -frtti -fexceptions -O3")
-                arguments("-DANDROID_STL=c++_shared")
+                arguments("-DANDROID_STL=c++_shared", "-DOpenCV_DIR=" + file("../libs/opencv-4.12.0/sdk/native/jni").absolutePath)
             }
         }
         ndk {

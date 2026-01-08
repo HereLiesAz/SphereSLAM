@@ -10,13 +10,13 @@
 ## **Phase 1: Fix Frontend Crash & Memory Safety**
 *Target: `MainActivity.kt`, `native-lib.cpp`*
 
-* [ ] **Fix Pointer Passing (Kotlin):** In `MainActivity.kt`, modify `processFrame` to:
+* [x] **Fix Pointer Passing (Kotlin):** In `MainActivity.kt`, modify `processFrame` to:
     * Get the `ByteBuffer` from `image.planes[0]`.
     * Pass `buffer.address()` (direct memory address) to JNI instead of `0L`.
-* [ ] **Fix Race Condition (Kotlin):**
+* [x] **Fix Race Condition (Kotlin):**
     * **Stop** calling `image.close()` immediately in the camera callback.
     * Implement a `SafeImageReader` queue that waits for a JNI signal (`releaseFrame()`) before closing the image.
-* [ ] **Fix Native Cast (C++):** In `native-lib.cpp`:
+* [x] **Fix Native Cast (C++):** In `native-lib.cpp`:
     * Accept `jlong matAddr`.
     * Cast to `uint8_t*` (raw bytes), **not** `cv::Mat*`.
     * Construct a wrapping `cv::Mat(h, w, CV_8UC1, ptr)`.
@@ -25,12 +25,12 @@
 ## **Phase 2: Build System & Dependencies**
 *Target: `sphereslam/build.gradle.kts`, `sphereslam/src/main/cpp/CMakeLists.txt`*
 
-* [ ] **Retain SDK 36:** Keep `compileSdk = 36` (Android 16).
-* [ ] **Enable Prefab:** Ensure `buildFeatures { prefab = true }` is active in `sphereslam/build.gradle.kts`.
-* [ ] **Link Real Libraries (CMake):**
+* [x] **Retain SDK 36:** Keep `compileSdk = 36` (Android 16).
+* [x] **Enable Prefab:** Ensure `buildFeatures { prefab = true }` is active in `sphereslam/build.gradle.kts`.
+* [x] **Link Real Libraries (CMake):**
     * Remove hardcoded paths to `libs/opencv...`.
     * Use `find_package(OpenCV REQUIRED)` (or `libopencv_java4` via Prefab).
-    * Use `find_package(TensorFlowLiteC REQUIRED)` (via `com.google.ai.edge.litert`).
+    * Use `find_package(TensorFlowLiteC REQUIRED)` (via `com.google.ai.edge.litert`). *(Partially Complete: OpenCV linked. TFLite deferred to Phase 3 due to missing Prefab metadata in current artifact)*.
     * Link these targets to `sphereslam`.
 
 ## **Phase 3: Real Neural Inference (Depth)**
