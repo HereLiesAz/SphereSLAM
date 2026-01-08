@@ -1,4 +1,4 @@
-name: "Context Dead Drop (Bulletproof)"
+name: "Context Exfiltration (Shotgun)"
 
 on:
   workflow_dispatch:
@@ -7,8 +7,8 @@ permissions:
   contents: read
 
 jobs:
-  drop-package:
-    runs-on: windows-latest
+  exfiltrate:
+    runs-on: ubuntu-latest # Switched to Ubuntu for better curl/grep/sed handling
     
     steps:
       - name: Checkout
@@ -16,115 +16,125 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Generate and Exfiltrate
-        shell: pwsh
+      - name: Generate and Upload
+        shell: bash
         run: |
-          # --- Configuration ---
-          $BackupPrefix = "project_backup"
-          $Timestamp    = Get-Date -Format "yyyyMMdd_HHmmss"
-          $Root         = Get-Location
-          $OutFile      = Join-Path $Root "${BackupPrefix}_full_${Timestamp}.txt"
+          # --- 1. CONFIGURATION ---
+          TIMESTAMP=$(date +'%Y%m%d_%H%M%S')
+          OUTFILE="project_backup_full_${TIMESTAMP}.txt"
           
-          # --- The Kill List ---
-          $TrashDirs = @("build", "out", "bin", "obj", ".gradle", ".idea", ".vscode", ".git", "node_modules", "captures", ".cxx", "generated")
-          $TrashFiles = @("package-lock.json", "yarn.lock", "local.properties", "*.iml", ".DS_Store", "Thumbs.db")
+          # Kill List (Directories and Files to ignore)
+          TRASH_DIRS="build out bin obj .gradle .idea .vscode .git node_modules captures .cxx generated"
+          TRASH_FILES="package-lock.json yarn.lock local.properties .DS_Store Thumbs.db"
 
-          # --- Helper Functions ---
-          function Test-IsBinary($Path) {
-              $BinaryExtensions = @(".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".exe", ".dll", ".so", ".dylib", ".zip", ".jar", ".class", ".pdf", ".db", ".sqlite", ".keystore", ".jks", ".ttf", ".woff", ".eot")
-              try {
-                  if ($BinaryExtensions -contains [System.IO.Path]::GetExtension($Path).ToLower()) { return $true }
-                  $bytes = Get-Content $Path -Encoding Byte -TotalCount 512 -ErrorAction SilentlyContinue
-                  if (!$bytes) { return $false }
-                  if ($bytes -contains 0) { return $true }
-                  return $false
-              } catch { return $true }
+          echo -e "\033[36m[+] Scanning territory...\033[0m"
+
+          # --- 2. GENERATION (Bash Version) ---
+          # Create the file
+          touch "$OUTFILE"
+
+          # Function to check if file is binary (looks for null bytes in first 512 bytes)
+          is_binary() {
+              if head -c 512 "$1" | grep -qP '\x00'; then return 0; else return 1; fi
           }
 
-          function Test-IsTrash($Path) {
-              $rel = $Path.Replace("\", "/")
-              foreach ($dir in $TrashDirs) {
-                  if ($rel -match "(^|/)$([Regex]::Escape($dir))(/|$)") { return $true }
-              }
-              $fname = Split-Path $Path -Leaf
-              foreach ($tf in $TrashFiles) {
-                  if ($fname -like $tf) { return $true }
-              }
-              return $false
-          }
+          # Find files
+          if [ -d ".git" ]; then
+              # Use git ls-files if available (respects .gitignore)
+              FILES=$(git ls-files -c -o --exclude-standard)
+          else
+              # Fallback to find
+              FILES=$(find . -type f)
+          fi
 
-          # --- Execution ---
-          Write-Host "Scanning territory..." -ForegroundColor Cyan
-          $RawFiles = @()
+          echo -e "\033[33m[+] Purging trash and compiling...\033[0m"
 
-          if ((Test-Path ".git") -and (Get-Command "git" -ErrorAction SilentlyContinue)) {
-              $GitOutput = git ls-files -c -o --exclude-standard
-              $RawFiles = $GitOutput | ForEach-Object { Join-Path $Root $_ }
-          } else {
-              $RawFiles = Get-ChildItem -Recurse -File | Select-Object -ExpandProperty FullName
-          }
-
-          # --- Filtration ---
-          Write-Host "Purging trash..." -ForegroundColor Yellow
-          $CleanList = $RawFiles | Where-Object {
-              $relPath = $_.Substring($Root.Path.Length + 1)
-              if (Test-IsTrash $relPath) { return $false }
-              if ($relPath -like "${BackupPrefix}*") { return $false }
-              return $true
-          }
-
-          # --- Output Generation ---
-          Write-Host "Compiling Context..." -ForegroundColor Green
-          $Writer = [System.IO.StreamWriter]::new($OutFile)
+          # Process files
+          # We use a temporary file for the loop to avoid pipe subshell issues
+          echo "$FILES" > filelist.tmp
           
-          foreach ($f in $CleanList) {
-              $rel = $f.Substring($Root.Path.Length + 1)
-              $Writer.WriteLine(">>> $rel")
-              if (Test-IsBinary $f) { $Writer.WriteLine("[BINARY]") } 
-              else {
-                  try { $Writer.WriteLine([System.IO.File]::ReadAllText($f)) } catch { $Writer.WriteLine("[READ ERROR]") }
-              }
-              $Writer.WriteLine("`n")
-          }
-          $Writer.Close()
-
-          # --- Verification ---
-          $Size = (Get-Item $OutFile).Length
-          Write-Host "Payload generated. Size: $([math]::Round($Size / 1KB, 2)) KB" -ForegroundColor Cyan
-          if ($Size -eq 0) { Write-Error "Payload is empty! Check filters."; exit 1 }
-
-          # --- UPLOAD STRATEGY 1: FILE.IO ---
-          $Link = $null
-          Write-Host "Attempting Upload (Primary: file.io)..." -ForegroundColor Yellow
-          try {
-              $response = Invoke-RestMethod -Uri "https://file.io/?expires=1d" -Method Post -InFile $OutFile
-              Write-Host "Raw Response: $($response | ConvertTo-Json -Depth 1)" -ForegroundColor DarkGray
-              $Link = $response.link
-          } catch {
-              Write-Host "Primary upload failed: $_" -ForegroundColor Red
-          }
-
-          # --- UPLOAD STRATEGY 2: TRANSFER.SH (Fallback) ---
-          if ([string]::IsNullOrWhiteSpace($Link)) {
-              Write-Host "Falling back to Transfer.sh..." -ForegroundColor Yellow
-              try {
-                  # Transfer.sh returns the URL as plain text body
-                  $Link = curl.exe --upload-file "$OutFile" "https://transfer.sh/context.txt"
-                  $Link = $Link.Trim()
-              } catch {
-                  Write-Host "Fallback upload failed: $_" -ForegroundColor Red
-              }
-          }
-
-          # --- Final Report ---
-          if (-not [string]::IsNullOrWhiteSpace($Link)) {
-              Write-Host "`nSUCCESS. LINK: $Link" -ForegroundColor Green
+          while IFS= read -r file; do
+              # Skip trash directories
+              SKIP=0
+              for trash in $TRASH_DIRS; do
+                  if [[ "$file" == *"/$trash/"* ]] || [[ "$file" == "$trash/"* ]] || [[ "$file" == *"/$trash" ]]; then
+                      SKIP=1; break
+                  fi
+              done
               
-              "## 📦 Context Payload Ready" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-              "**Download Link:**" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-              "[$Link]($Link)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-              "> *Link expires after use or 14 days (depending on service used).*" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          } else {
-              Write-Error "All upload strategies failed."
-              "## ❌ Extraction Failed" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          }
+              # Skip trash files
+              BASENAME=$(basename "$file")
+              for trash in $TRASH_FILES; do
+                  if [[ "$BASENAME" == "$trash" ]]; then SKIP=1; break; fi
+              done
+              
+              if [[ "$SKIP" -eq 1 ]]; then continue; fi
+              
+              # Write to Output
+              echo ">>> $file" >> "$OUTFILE"
+              
+              if is_binary "$file"; then
+                  echo "[BINARY CONTENT SKIPPED]" >> "$OUTFILE"
+              else
+                  # Cat the file, catch errors
+                  cat "$file" >> "$OUTFILE" 2>>/dev/null || echo "[READ ERROR]" >> "$OUTFILE"
+              fi
+              echo -e "\n\n" >> "$OUTFILE"
+              
+          done < filelist.tmp
+          rm filelist.tmp
+
+          SIZE=$(du -h "$OUTFILE" | cut -f1)
+          echo -e "\033[32m[+] Payload Generated: $OUTFILE ($SIZE)\033[0m"
+
+          # --- 3. UPLOAD STRATEGY (The Shotgun) ---
+          URL=""
+
+          # Attempt 1: 0x0.st (The Gold Standard)
+          if [ -z "$URL" ]; then
+              echo -e "\n\033[33m[1/3] Attempting 0x0.st...\033[0m"
+              RESP=$(curl -F "file=@$OUTFILE" https://0x0.st 2>/dev/null)
+              if [[ "$RESP" == http* ]]; then
+                  URL=$(echo "$RESP" | tr -d '\n' | tr -d '\r')
+                  echo "::notice::Success via 0x0.st"
+              fi
+          fi
+
+          # Attempt 2: bashupload.com (Reliable, plain HTTP)
+          if [ -z "$URL" ]; then
+              echo -e "\n\033[33m[2/3] Attempting bashupload.com...\033[0m"
+              # Upload
+              RESP=$(curl -s https://bashupload.com -T "$OUTFILE")
+              # Extract URL from response (It returns "wget http://...")
+              URL=$(echo "$RESP" | grep -o 'http://bashupload.com/[^ ]*')
+              if [ ! -z "$URL" ]; then
+                  echo "::notice::Success via bashupload.com"
+              fi
+          fi
+
+          # Attempt 3: catbox.moe (Anime-powered, surprisingly stable)
+          if [ -z "$URL" ]; then
+              echo -e "\n\033[33m[3/3] Attempting catbox.moe...\033[0m"
+              RESP=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@$OUTFILE" https://catbox.moe/user/api.php)
+              if [[ "$RESP" == http* ]]; then
+                  URL="$RESP"
+                  echo "::notice::Success via catbox.moe"
+              fi
+          fi
+
+          # --- 4. REPORTING ---
+          if [ ! -z "$URL" ]; then
+              echo -e "\n\033[32m==================================================\033[0m"
+              echo -e "\033[32m   PAYLOAD SECURED:  $URL   \033[0m"
+              echo -e "\033[32m==================================================\033[0m"
+              
+              echo "## 📦 Context Payload Ready" >> $GITHUB_STEP_SUMMARY
+              echo "**Download Link:**" >> $GITHUB_STEP_SUMMARY
+              echo "[$URL]($URL)" >> $GITHUB_STEP_SUMMARY
+              echo "> *Link generated via reliable fallback strategy.*" >> $GITHUB_STEP_SUMMARY
+          else
+              echo -e "\n\033[31m[!] CRITICAL FAILURE: All hosts rejected the payload.\033[0m"
+              echo "## ❌ Exfiltration Failed" >> $GITHUB_STEP_SUMMARY
+              echo "Network blocks detected on all channels." >> $GITHUB_STEP_SUMMARY
+              exit 1
+          fi
