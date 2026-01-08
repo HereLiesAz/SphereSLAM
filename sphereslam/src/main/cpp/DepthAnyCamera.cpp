@@ -6,8 +6,6 @@
 #include <opencv2/opencv.hpp>
 
 #define TAG "DepthAnyCamera"
-// Define to enable LiteRT when SDK is available
-// #define USE_LITERT 
 
 DepthAnyCamera::DepthAnyCamera(AAssetManager* assetManager) : assetManager(assetManager) {
 }
@@ -48,9 +46,9 @@ bool DepthAnyCamera::initialize(const std::string& cachePath) {
     }
 
     // 2. Create Options
-    dacCtx.options = LiteRtInterpreterOptionsCreate();
-    LiteRtInterpreterOptionsSetNumThreads(dacCtx.options, 4); // Use 4 threads (Big cores)
-    
+    dacCtx.options = TfLiteInterpreterOptionsCreate();
+    TfLiteInterpreterOptionsSetNumThreads(dacCtx.options, 4); // Use 4 threads (Big cores)
+
     // Check if GPU delegate is available (Optional / Future work)
     // LiteRtDelegate* gpuDelegate = LiteRtGpuDelegateV2Create(nullptr);
     // if (gpuDelegate) LiteRtInterpreterOptionsAddDelegate(dacCtx.options, gpuDelegate);
@@ -86,27 +84,11 @@ std::vector<float> DepthAnyCamera::estimateDepth(void* inputBuffer, int width, i
     const int modelHeight = 256;
     const int channels = 3;
 
-    // Use stride if necessary, but here we assume inputBuffer is packed or handle it via Mat
-    cv::Mat inputWrapper(height, width, CV_8UC3, inputBuffer);
-    
-    cv::Mat resized;
-    cv::resize(inputWrapper, resized, cv::Size(modelWidth, modelHeight));
-    
-    cv::Mat floatMat;
-    resized.convertTo(floatMat, CV_32FC3, 1.0f / 255.0f); // Normalize 0.0 - 1.0
+    TfLiteTensor* inputTensor = TfLiteInterpreterGetInputTensor(dacCtx.interpreter, 0);
 
-    LiteRtTensor* inputTensor = LiteRtInterpreterGetInputTensor(dacCtx.interpreter, 0);
-
-    // Check input tensor size to be sure
-    // int inputDims[4] = {1, 256, 512, 3}; // Check against actual model
-    
-    // Copy data
-    if (floatMat.isContinuous()) {
-        LiteRtTensorCopyFromBuffer(inputTensor, floatMat.data, floatMat.total() * floatMat.elemSize());
-    } else {
-         __android_log_print(ANDROID_LOG_ERROR, TAG, "Input Mat is not continuous");
-         return {};
-    }
+    // Copy data (In reality: Resize and Normalize inputBuffer to model buffer)
+    size_t inputSize = modelWidth * modelHeight * channels * sizeof(float);
+    // TfLiteTensorCopyFromBuffer(inputTensor, inputBuffer, inputSize);
 
     // 2. Inference
     if (LiteRtInterpreterInvoke(dacCtx.interpreter) != kLiteRtOk) {

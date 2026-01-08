@@ -70,12 +70,20 @@ std::vector<Gaussian> Densifier::DensifyKeyFrame(KeyFrame* pKF, const std::vecto
             // Spherical to Cartesian (Camera Frame)
             // SphereSLAM / OpenCV Convention:
             // +Z Forward, +X Right, +Y Down.
+<<<<<<< HEAD
             
+=======
+
+>>>>>>> origin/jules/phases-3-6-implementation-11970608427474041327
             // Standard Spherical (Y-Up):
             // x = cos(theta)sin(phi)
             // y = sin(theta)  <-- +1 at Top
             // z = cos(theta)cos(phi)
+<<<<<<< HEAD
             
+=======
+
+>>>>>>> origin/jules/phases-3-6-implementation-11970608427474041327
             // We want Y-Down (+1 at Bottom).
             // v=0 (Top) -> theta = PI/2. We want Y = -1.
             // So y_c = -sin(theta).
@@ -104,12 +112,20 @@ std::vector<Gaussian> Densifier::DensifyKeyFrame(KeyFrame* pKF, const std::vecto
             // 3. Create Gaussian
             Gaussian g;
             g.position = glm::vec3(X_world, Y_world, Z_world);
+<<<<<<< HEAD
             
+=======
+
+>>>>>>> origin/jules/phases-3-6-implementation-11970608427474041327
             // Rotation: Default identity for spherical gaussians (Aggregate Init)
             g.rotation = {1.0f, 0.0f, 0.0f, 0.0f};
 
             // Scale: Heuristic based on depth and pixel angular size
+<<<<<<< HEAD
             float scaleFactor = depth * 0.05f; 
+=======
+            float scaleFactor = depth * 0.05f;
+>>>>>>> origin/jules/phases-3-6-implementation-11970608427474041327
             g.scale = glm::vec3(scaleFactor, scaleFactor, scaleFactor);
 
             // Opacity
@@ -123,7 +139,11 @@ std::vector<Gaussian> Densifier::DensifyKeyFrame(KeyFrame* pKF, const std::vecto
             newGaussians.push_back(g);
         }
     }
+<<<<<<< HEAD
     
+=======
+
+>>>>>>> origin/jules/phases-3-6-implementation-11970608427474041327
     __android_log_print(ANDROID_LOG_INFO, TAG, "Densified KeyFrame %lu: Generated %zu Gaussians", pKF->mnId, newGaussians.size());
     return newGaussians;
 }
