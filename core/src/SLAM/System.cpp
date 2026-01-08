@@ -8,6 +8,7 @@
 #include <cmath>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 
 System::System(const std::string &strVocFile, const std::string &strSettingsFile, const eSensor sensor, Platform* pPlatform, const bool bUseViewer)
     : mSensor(sensor), mpDensifier(nullptr), mpPlatform(pPlatform) {
@@ -191,75 +192,94 @@ void System::SavePhotosphere(const std::string &filename) {
     {
         std::unique_lock<std::mutex> lock(mMutexFaces);
         if (mLastFaces.size() != 6) {
-            if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "No CubeMap faces available to save photosphere (count=" + std::to_string(mLastFaces.size()) + ").");
-            else std::cerr << "No CubeMap faces available to save photosphere (count=" << mLastFaces.size() << ")." << std::endl;
+            if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "No CubeMap faces available.");
             return;
         }
         for (const auto& f : mLastFaces) {
             if (f.empty()) {
                 if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "One of the CubeMap faces is empty.");
-                else std::cerr << "One of the CubeMap faces is empty." << std::endl;
                 return;
             }
             faces.push_back(f.clone());
         }
     }
 
-    // Stitch the 6 faces horizontally: [Right, Left, Top, Bottom, Front, Back] or similar order
-    // Order in CubeMapCamera is typically: PX, NX, PY, NY, PZ, NZ
-    // We will stitch them in a simple strip for now.
-    cv::Mat strip;
-    cv::hconcat(faces, strip);
+    CubeMapCamera* pCubeCam = dynamic_cast<CubeMapCamera*>(mpCamera);
+    if (!pCubeCam) {
+        if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "Camera is not a CubeMapCamera.");
+        return;
+    }
 
-    // Normalize/standardize output format: always write PNG for predictable behavior across platforms.
-    // If the requested filename has no extension or a non-PNG extension, enforce ".png".
-    std::string outputFilename = filename;
-    {
-        // Find last path separator and last dot to determine extension.
-        const std::string::size_type lastSlash = outputFilename.find_last_of("/\\");
-        const std::string::size_type lastDot = outputFilename.find_last_of('.');
+    // Create Equirectangular Image
+    // Width = 2 * Height. For 512 faces, let's use 2048x1024 or 1024x512.
+    int outW = 2048;
+    int outH = 1024;
+    cv::Mat equiImg(outH, outW, CV_8UC3);
 
-        const bool hasDotAfterSlash =
-            lastDot != std::string::npos &&
-            (lastSlash == std::string::npos || lastDot > lastSlash);
+    const float PI = 3.14159265358979323846f;
 
-        if (!hasDotAfterSlash) {
-            // No extension: append .png
-            outputFilename += ".png";
-        } else {
-            // Has some extension: if it's not .png, replace it to ensure a consistent format.
-            std::string ext = outputFilename.substr(lastDot);
-            // Case-insensitive compare to ".png"
-            std::string extLower = ext;
-            std::transform(extLower.begin(), extLower.end(), extLower.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    for (int v = 0; v < outH; ++v) {
+        for (int u = 0; u < outW; ++u) {
+            // Normalized UV [0,1]
+            float uf = (float)u / outW;
+            float vf = (float)v / outH;
 
-            if (extLower != ".png") {
-                if (mpPlatform) {
-                    mpPlatform->Log(LogLevel::WARN, "System",
-                                    "Requested photosphere filename extension '" + ext +
-                                        "' is not supported uniformly; saving as PNG instead.");
-                } else {
-                    std::cerr << "Requested photosphere filename extension '" << ext
-                              << "' may not be supported uniformly; saving as PNG instead."
-                              << std::endl;
+            // Longitude (phi) [-PI, PI], Latitude (theta) [-PI/2, PI/2]
+            float phi = (uf - 0.5f) * 2.0f * PI;
+            float theta = -(vf - 0.5f) * PI; // Y-Down convention
+
+            // Spherical to Cartesian (Camera Frame)
+            // Should match Densifier convention
+            float cosTheta = cos(theta);
+            float sinTheta = sin(theta);
+            float cosPhi = cos(phi);
+            float sinPhi = sin(phi);
+
+            // Unit Vector
+            float x = cosTheta * sinPhi;
+            float y = -sinTheta;
+            float z = cosTheta * cosPhi;
+
+            cv::Point3f p3D(x, y, z);
+
+            // Project to CubeMap Face
+            int faceIdx = pCubeCam->GetFace(p3D);
+            if (faceIdx < 0 || faceIdx >= 6) continue;
+
+            cv::Point2f uv = pCubeCam->Project(p3D);
+
+            // Sample
+            int x_face = (int)uv.x;
+            int y_face = (int)uv.y;
+
+            // Bounds check
+            const cv::Mat& faceImg = faces[faceIdx];
+            if (x_face >= 0 && x_face < faceImg.cols && y_face >= 0 && y_face < faceImg.rows) {
+                // Determine input type (Gray or Color)
+                if (faceImg.channels() == 3) {
+                    equiImg.at<cv::Vec3b>(v, u) = faceImg.at<cv::Vec3b>(y_face, x_face);
+                } else if (faceImg.channels() == 1) {
+                    uchar gray = faceImg.at<uchar>(y_face, x_face);
+                    equiImg.at<cv::Vec3b>(v, u) = cv::Vec3b(gray, gray, gray);
                 }
-                outputFilename = outputFilename.substr(0, lastDot) + ".png";
+            } else {
+                equiImg.at<cv::Vec3b>(v, u) = cv::Vec3b(0, 0, 0);
             }
         }
     }
 
-    bool success = cv::imwrite(outputFilename, strip);
+    std::string outputFilename = filename;
+    // ... extension check ...
+    if (outputFilename.find(".png") == std::string::npos && outputFilename.find(".jpg") == std::string::npos) {
+        outputFilename += ".png";
+    }
+
+    bool success = cv::imwrite(outputFilename, equiImg);
 
     if (success) {
-        if (mpPlatform) {
-            mpPlatform->Log(LogLevel::INFO, "System", "Photosphere saved to " + outputFilename);
-        } else {
-            std::cout << "Photosphere saved to " << outputFilename << std::endl;
-        }
+        if (mpPlatform) mpPlatform->Log(LogLevel::INFO, "System", "Photosphere saved to " + outputFilename);
     } else {
-        if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "Failed to save photosphere to: " + outputFilename);
-        else std::cerr << "Failed to save photosphere to: " << outputFilename << std::endl;
+        if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "Failed to save photosphere.");
     }
 }
 
