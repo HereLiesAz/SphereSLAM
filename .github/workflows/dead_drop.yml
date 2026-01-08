@@ -1,4 +1,4 @@
-name: "Context Exfiltration (Shotgun)"
+name: "Context Backup (Standard Artifact)"
 
 on:
   workflow_dispatch:
@@ -7,8 +7,8 @@ permissions:
   contents: read
 
 jobs:
-  exfiltrate:
-    runs-on: ubuntu-latest # Switched to Ubuntu for better curl/grep/sed handling
+  backup:
+    runs-on: ubuntu-latest
     
     steps:
       - name: Checkout
@@ -16,53 +16,43 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Generate and Upload
+      - name: Generate Clean Context
         shell: bash
         run: |
-          # --- 1. CONFIGURATION ---
+          # --- CONFIGURATION ---
           TIMESTAMP=$(date +'%Y%m%d_%H%M%S')
           OUTFILE="project_backup_full_${TIMESTAMP}.txt"
           
-          # Kill List (Directories and Files to ignore)
+          # TRASH FILTERS (Files/Dirs to ignore)
           TRASH_DIRS="build out bin obj .gradle .idea .vscode .git node_modules captures .cxx generated"
           TRASH_FILES="package-lock.json yarn.lock local.properties .DS_Store Thumbs.db"
 
-          echo -e "\033[36m[+] Scanning territory...\033[0m"
-
-          # --- 2. GENERATION (Bash Version) ---
-          # Create the file
+          echo -e "\033[36m[+] Generating Context...\033[0m"
           touch "$OUTFILE"
 
-          # Function to check if file is binary (looks for null bytes in first 512 bytes)
+          # Helper: Check for binary
           is_binary() {
               if head -c 512 "$1" | grep -qP '\x00'; then return 0; else return 1; fi
           }
 
-          # Find files
+          # 1. FIND FILES
           if [ -d ".git" ]; then
-              # Use git ls-files if available (respects .gitignore)
               FILES=$(git ls-files -c -o --exclude-standard)
           else
-              # Fallback to find
               FILES=$(find . -type f)
           fi
 
-          echo -e "\033[33m[+] Purging trash and compiling...\033[0m"
-
-          # Process files
-          # We use a temporary file for the loop to avoid pipe subshell issues
+          # 2. PROCESS FILES
           echo "$FILES" > filelist.tmp
-          
           while IFS= read -r file; do
-              # Skip trash directories
+              # Skip Trash Directories
               SKIP=0
               for trash in $TRASH_DIRS; do
                   if [[ "$file" == *"/$trash/"* ]] || [[ "$file" == "$trash/"* ]] || [[ "$file" == *"/$trash" ]]; then
                       SKIP=1; break
                   fi
               done
-              
-              # Skip trash files
+              # Skip Trash Files
               BASENAME=$(basename "$file")
               for trash in $TRASH_FILES; do
                   if [[ "$BASENAME" == "$trash" ]]; then SKIP=1; break; fi
@@ -70,71 +60,23 @@ jobs:
               
               if [[ "$SKIP" -eq 1 ]]; then continue; fi
               
-              # Write to Output
+              # Write Content
               echo ">>> $file" >> "$OUTFILE"
-              
               if is_binary "$file"; then
                   echo "[BINARY CONTENT SKIPPED]" >> "$OUTFILE"
               else
-                  # Cat the file, catch errors
                   cat "$file" >> "$OUTFILE" 2>>/dev/null || echo "[READ ERROR]" >> "$OUTFILE"
               fi
               echo -e "\n\n" >> "$OUTFILE"
-              
           done < filelist.tmp
           rm filelist.tmp
 
-          SIZE=$(du -h "$OUTFILE" | cut -f1)
-          echo -e "\033[32m[+] Payload Generated: $OUTFILE ($SIZE)\033[0m"
+          echo "BACKUP_FILE=$OUTFILE" >> $GITHUB_ENV
+          echo -e "\033[32m[+] Complete: $OUTFILE\033[0m"
 
-          # --- 3. UPLOAD STRATEGY (The Shotgun) ---
-          URL=""
-
-          # Attempt 1: 0x0.st (The Gold Standard)
-          if [ -z "$URL" ]; then
-              echo -e "\n\033[33m[1/3] Attempting 0x0.st...\033[0m"
-              RESP=$(curl -F "file=@$OUTFILE" https://0x0.st 2>/dev/null)
-              if [[ "$RESP" == http* ]]; then
-                  URL=$(echo "$RESP" | tr -d '\n' | tr -d '\r')
-                  echo "::notice::Success via 0x0.st"
-              fi
-          fi
-
-          # Attempt 2: bashupload.com (Reliable, plain HTTP)
-          if [ -z "$URL" ]; then
-              echo -e "\n\033[33m[2/3] Attempting bashupload.com...\033[0m"
-              # Upload
-              RESP=$(curl -s https://bashupload.com -T "$OUTFILE")
-              # Extract URL from response (It returns "wget http://...")
-              URL=$(echo "$RESP" | grep -o 'http://bashupload.com/[^ ]*')
-              if [ ! -z "$URL" ]; then
-                  echo "::notice::Success via bashupload.com"
-              fi
-          fi
-
-          # Attempt 3: catbox.moe (Anime-powered, surprisingly stable)
-          if [ -z "$URL" ]; then
-              echo -e "\n\033[33m[3/3] Attempting catbox.moe...\033[0m"
-              RESP=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@$OUTFILE" https://catbox.moe/user/api.php)
-              if [[ "$RESP" == http* ]]; then
-                  URL="$RESP"
-                  echo "::notice::Success via catbox.moe"
-              fi
-          fi
-
-          # --- 4. REPORTING ---
-          if [ ! -z "$URL" ]; then
-              echo -e "\n\033[32m==================================================\033[0m"
-              echo -e "\033[32m   PAYLOAD SECURED:  $URL   \033[0m"
-              echo -e "\033[32m==================================================\033[0m"
-              
-              echo "## 📦 Context Payload Ready" >> $GITHUB_STEP_SUMMARY
-              echo "**Download Link:**" >> $GITHUB_STEP_SUMMARY
-              echo "[$URL]($URL)" >> $GITHUB_STEP_SUMMARY
-              echo "> *Link generated via reliable fallback strategy.*" >> $GITHUB_STEP_SUMMARY
-          else
-              echo -e "\n\033[31m[!] CRITICAL FAILURE: All hosts rejected the payload.\033[0m"
-              echo "## ❌ Exfiltration Failed" >> $GITHUB_STEP_SUMMARY
-              echo "Network blocks detected on all channels." >> $GITHUB_STEP_SUMMARY
-              exit 1
-          fi
+      - name: Upload to Artifacts Tab
+        uses: actions/upload-artifact@v4
+        with:
+          name: context-backup
+          path: ${{ env.BACKUP_FILE }}
+          retention-days: 1
