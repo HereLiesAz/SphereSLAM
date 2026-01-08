@@ -8,7 +8,7 @@ cmake_minimum_required(VERSION 3.22.1)
 project("sphereslam")
 
 # Find Packages
-# find_package(TensorFlowLiteC REQUIRED) # Deferred to Phase 3
+# find_package(TensorFlowLiteC REQUIRED) # Disabled due to Prefab failure
 find_package(OpenCV REQUIRED)
 
 # Include directories

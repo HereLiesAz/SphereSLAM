@@ -10,6 +10,7 @@ public:
     virtual ~GeometricCamera() {}
     virtual cv::Point2f Project(const cv::Point3f &p3D) = 0;
     virtual cv::Point3f Unproject(const cv::Point2f &p2D) = 0;
+    virtual cv::Mat GetK() = 0;
 };
 
 class CubeMapCamera : public GeometricCamera {
@@ -35,6 +36,15 @@ public:
         } else {
             return (p3D.z > 0) ? 4 : 5;
         }
+    }
+
+    cv::Mat GetK() override {
+        cv::Mat K = cv::Mat::eye(3, 3, CV_32F);
+        K.at<float>(0, 0) = fx;
+        K.at<float>(1, 1) = fy;
+        K.at<float>(0, 2) = cx;
+        K.at<float>(1, 2) = cy;
+        return K;
     }
 
     cv::Point2f Project(const cv::Point3f &p3D) override {
