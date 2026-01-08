@@ -23,7 +23,6 @@ jobs:
           $OutFile      = Join-Path $Root "${BackupPrefix}_full_${Timestamp}.txt"
           
           # --- The Kill List ---
-          # These directories are dead to us. Even if Git tracks them.
           $TrashDirs = @(
               "build", "out", "bin", "obj", 
               ".gradle", ".idea", ".vscode", ".git", 
@@ -31,7 +30,6 @@ jobs:
               "generated"
           )
 
-          # Files to shoot on sight
           $TrashFiles = @(
               "package-lock.json", "yarn.lock", 
               "local.properties", "*.iml", ".DS_Store", "Thumbs.db"
@@ -42,7 +40,6 @@ jobs:
               $BinaryExtensions = @(".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".exe", ".dll", ".so", ".dylib", ".zip", ".jar", ".class", ".pdf", ".db", ".sqlite", ".keystore", ".jks", ".ttf", ".woff", ".eot")
               try {
                   if ($BinaryExtensions -contains [System.IO.Path]::GetExtension($Path).ToLower()) { return $true }
-                  # Null-byte check for hidden binaries
                   $bytes = Get-Content $Path -Encoding Byte -TotalCount 512 -ErrorAction SilentlyContinue
                   if (!$bytes) { return $false }
                   if ($bytes -contains 0) { return $true }
@@ -51,33 +48,23 @@ jobs:
           }
 
           function Test-IsTrash($Path) {
-              # Normalize separators
               $rel = $Path.Replace("\", "/")
-              
-              # Check Directories
               foreach ($dir in $TrashDirs) {
-                  # Match "build/" at start, "/build/" in middle, or "/build" at end
                   if ($rel -match "(^|/)$([Regex]::Escape($dir))(/|$)") { return $true }
               }
-              
-              # Check Files
               $fname = Split-Path $Path -Leaf
               foreach ($tf in $TrashFiles) {
                   if ($fname -like $tf) { return $true }
               }
-              
               return $false
           }
 
           # --- Execution ---
           Write-Host "Scanning territory..." -ForegroundColor Cyan
-          
           $RawFiles = @()
 
           if ((Test-Path ".git") -and (Get-Command "git" -ErrorAction SilentlyContinue)) {
-              # Get everything Git knows about (Cached + Others), excluding standard ignores
               $GitOutput = git ls-files -c -o --exclude-standard
-              # Convert to full paths
               $RawFiles = $GitOutput | ForEach-Object { Join-Path $Root $_ }
           } else {
               $RawFiles = Get-ChildItem -Recurse -File | Select-Object -ExpandProperty FullName
@@ -87,9 +74,7 @@ jobs:
           Write-Host "Purging trash..." -ForegroundColor Yellow
           $CleanList = $RawFiles | Where-Object {
               $relPath = $_.Substring($Root.Path.Length + 1)
-              # The active filter:
               if (Test-IsTrash $relPath) { return $false }
-              # The backup prefix filter:
               if ($relPath -like "${BackupPrefix}*") { return $false }
               return $true
           }
@@ -120,7 +105,19 @@ jobs:
           Write-Host "Uploading payload..." -ForegroundColor Cyan
           try {
               $response = Invoke-RestMethod -Uri "https://file.io/?expires=1d" -Method Post -InFile $OutFile
-              Write-Host "`nLINK: $($response.link)" -ForegroundColor Green
+              $link = $response.link
+              
+              # Write to Console (Just in case)
+              Write-Host "`nLINK: $link" -ForegroundColor Green
+              
+              # Write to Job Summary (The "Billboard")
+              "## 📦 Context Payload Ready" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+              "**Download Link (One-time use):**" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+              "[$link]($link)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+              "> *This link will expire immediately after the first download.*" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
           } catch {
               Write-Error "Upload failed."
+              "## ❌ Upload Failed" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+              "Check logs for details." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           }
