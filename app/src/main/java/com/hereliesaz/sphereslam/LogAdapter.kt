@@ -31,9 +31,7 @@ class LogAdapter : RecyclerView.Adapter<LogAdapter.LogViewHolder>() {
         // Limit list size to prevent OOM in UI
         if (logs.size > 2000) {
             val removeCount = logs.size - 1500
-            for (i in 0 until removeCount) {
-                logs.removeAt(0)
-            }
+            logs.subList(0, removeCount).clear()
             notifyItemRangeRemoved(0, removeCount)
         }
     }

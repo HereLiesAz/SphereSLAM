@@ -9,6 +9,7 @@
 class PlatformAndroid : public Platform {
 public:
     PlatformAndroid(AAssetManager* assetManager, JavaVM* jvm);
+    ~PlatformAndroid() override;
 
     void Log(LogLevel level, const std::string& tag, const std::string& msg) override;
 
@@ -18,6 +19,7 @@ private:
     AAssetManager* mAssetManager;
     JavaVM* mJvm;
     jclass mSphereSLAMClass;
+    jmethodID mLogMethodID;
 };
 
 #endif // PLATFORM_ANDROID_H
