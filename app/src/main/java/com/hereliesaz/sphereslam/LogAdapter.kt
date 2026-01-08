@@ -24,6 +24,20 @@ class LogAdapter : RecyclerView.Adapter<LogAdapter.LogViewHolder>() {
         notifyItemRangeInserted(startPos, newLogs.size)
     }
 
+    fun addLog(entry: LogEntry) {
+        logs.add(entry)
+        notifyItemInserted(logs.size - 1)
+
+        // Limit list size to prevent OOM in UI
+        if (logs.size > 2000) {
+            val removeCount = logs.size - 1500
+            for (i in 0 until removeCount) {
+                logs.removeAt(0)
+            }
+            notifyItemRangeRemoved(0, removeCount)
+        }
+    }
+
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): LogViewHolder {
         val view = LayoutInflater.from(parent.context).inflate(R.layout.item_log, parent, false)
         return LogViewHolder(view)

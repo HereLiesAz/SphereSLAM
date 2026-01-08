@@ -55,10 +55,12 @@ class LogListFragment : Fragment() {
 
         viewLifecycleOwner.lifecycleScope.launch {
             val flow = if (showOnlyErrors) viewModel.errorLogs else viewModel.allLogs
-            flow.collect { logs ->
-                adapter.setLogs(logs)
-                if (logs.isNotEmpty()) {
-                    (view as RecyclerView).scrollToPosition(logs.size - 1)
+            flow.collect { logEntry ->
+                adapter.addLog(logEntry)
+                // Auto-scroll if close to bottom
+                val recyclerView = view as RecyclerView
+                if (!recyclerView.canScrollVertically(1)) {
+                     recyclerView.scrollToPosition(adapter.itemCount - 1)
                 }
             }
         }
