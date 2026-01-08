@@ -3,7 +3,7 @@
 **Status:** IMPLEMENTATION COMPLETE (LiteRT Linked Manually/Guarded)
 **Objective:** Systematically replace "Stub" code with functional implementations.
 **Constraint:** All features, especially **Photosphere Creation**, must be production-ready, not conceptual.
-**Execution Order:** Sequential (Phase 1 -> Phase 10).
+**Execution Order:** Sequential (Phase 1 -> Phase 11).
 
 ---
 
@@ -105,3 +105,9 @@
     * Iterates Equirectangular pixels, unprojects to 3D, projects to CubeMap faces, samples color.
     * Produces 2048x1024 high-quality photosphere.
 * [x] **Automation:** `SavePhotosphere` validates input and saves to disk.
+
+## **Phase 11: System Integration Fixes**
+*Target: `VulkanCompute.cpp`, `native-lib.cpp`*
+
+* [x] **Implement `getOutputFace`:** Add capability to VulkanCompute to retrieve CPU-accessible `cv::Mat` from the GPU readback buffer.
+* [x] **Bridge Vulkan-SLAM:** In `native-lib.cpp`, replace the mock "input-as-face" loop with actual retrieval of 6 faces from VulkanCompute.
