@@ -17,6 +17,7 @@
 #define TAG "SphereSLAM-Native"
 
 // Global Pointers
+JavaVM* g_vm = nullptr;
 System* slamSystem = nullptr;
 VulkanCompute* vulkanCompute = nullptr;
 DepthAnyCamera* depthEstimator = nullptr;
@@ -26,6 +27,12 @@ PlatformAndroid* platformAndroid = nullptr;
 // Thread safety for Pose
 std::mutex mMutexPose;
 cv::Mat mCurrentPose = cv::Mat::eye(4, 4, CV_32F);
+
+extern "C" JNIEXPORT jint JNICALL
+JNI_OnLoad(JavaVM* vm, void* reserved) {
+    g_vm = vm;
+    return JNI_VERSION_1_6;
+}
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_hereliesaz_sphereslam_SphereSLAM_initNative(JNIEnv* env, jobject thiz, jobject assetManager, jstring cacheDir) {
@@ -37,7 +44,7 @@ Java_com_hereliesaz_sphereslam_SphereSLAM_initNative(JNIEnv* env, jobject thiz, 
     env->ReleaseStringUTFChars(cacheDir, path);
 
     // Initialize Platform Layer
-    platformAndroid = new PlatformAndroid(mgr);
+    platformAndroid = new PlatformAndroid(mgr, g_vm);
 
     // Initialize Subsystems
     vulkanCompute = new VulkanCompute(mgr);

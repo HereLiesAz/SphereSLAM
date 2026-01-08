@@ -33,5 +33,10 @@ class SphereSLAM(private val context: Context) {
         init {
             System.loadLibrary("sphereslam")
         }
+
+        @JvmStatic
+        fun onNativeLog(level: Int, tag: String, message: String) {
+            LogManager.log(level, tag, message)
+        }
     }
 }
