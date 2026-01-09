@@ -3,6 +3,7 @@
 #include <vector>
 #include <stdexcept>
 #include <cstring>
+#include <opencv2/imgproc.hpp>
 
 #define TAG "VulkanCompute"
 
@@ -322,7 +323,10 @@ void VulkanCompute::processImage(void* inputBuffer, int width, int height) {
     // 1. Copy Input to Staging
     VkDeviceSize inputSize = width * height * 4;
     void* data;
-    vkMapMemory(vkCtx.device, stagingBufferMemory, 0, inputSize, 0, &data);
+    if (vkMapMemory(vkCtx.device, stagingBufferMemory, 0, inputSize, 0, &data) != VK_SUCCESS) {
+        __android_log_print(ANDROID_LOG_ERROR, TAG, "Failed to map staging buffer memory");
+        return;
+    }
     memcpy(data, inputBuffer, inputSize);
     vkUnmapMemory(vkCtx.device, stagingBufferMemory);
 
@@ -385,6 +389,42 @@ void VulkanCompute::processImage(void* inputBuffer, int width, int height) {
 
     // 4. Readback happens when user accesses buffer mapped memory, or we copy it here.
     // For now, we leave it in readbackBuffer host memory.
+}
+
+std::vector<cv::Mat> VulkanCompute::getAllOutputFaces() {
+    std::vector<cv::Mat> faces;
+    if (!readbackBufferMemory) return faces;
+
+    VkDeviceSize faceSize = 512 * 512 * 4; // RGBA per face
+    VkDeviceSize totalSize = faceSize * 6;
+    void* data;
+
+    // Map ALL memory once
+    if (vkMapMemory(vkCtx.device, readbackBufferMemory, 0, totalSize, 0, &data) != VK_SUCCESS) {
+        __android_log_print(ANDROID_LOG_ERROR, TAG, "Failed to map readback buffer memory");
+        return faces;
+    }
+
+    uint8_t* byteData = static_cast<uint8_t*>(data);
+
+    for (int i = 0; i < 6; ++i) {
+        // Pointer arithmetic to get to the start of the i-th face
+        uint8_t* facePtr = byteData + (i * faceSize);
+
+        // Wrap the raw RGBA data
+        cv::Mat faceRGBA(512, 512, CV_8UC4, facePtr);
+
+        // Convert to Grayscale (this performs a deep copy into faceGray)
+        cv::Mat faceGray;
+        cv::cvtColor(faceRGBA, faceGray, cv::COLOR_RGBA2GRAY);
+
+        faces.push_back(faceGray);
+    }
+
+    // Unmap once
+    vkUnmapMemory(vkCtx.device, readbackBufferMemory);
+
+    return faces;
 }
 
 uint32_t VulkanCompute::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {

@@ -112,11 +112,16 @@ jobs:
           version: 3.1.51
           actions-cache-folder: 'emsdk-cache'
 
+      - name: Build OpenCV for Wasm
+        run: |
+          chmod +x scripts/build_opencv_wasm.sh
+          ./scripts/build_opencv_wasm.sh
+
       - name: Verify Web Build
         run: |
           mkdir -p web_lib/build
           cd web_lib/build
-          emcmake cmake .. -DOPENCV_DIR=../../libs/opencv-4.12.0
+          emcmake cmake .. -DOPENCV_DIR=../../libs/opencv-wasm
           emmake make
 
       # ------------------------------------------------------------------

@@ -52,9 +52,7 @@
     // Note: TrackMonocular might expect specific format.
     // Let's assume it can handle 4 channels or we send a dummy clone for safety if unsure of modifying buffer.
 
-    // _system->TrackMonocular(img, timestamp);
-    // Commented out to avoid linker errors if OpenCV libs aren't fully present in this environment,
-    // but this is the logic.
+    _system->TrackMonocular(img, timestamp);
 }
 
 - (int)getTrackingState {

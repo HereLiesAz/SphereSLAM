@@ -128,14 +128,21 @@ Java_com_hereliesaz_sphereslam_SphereSLAM_processFrame(JNIEnv* env, jobject thiz
         vulkanCompute->processImage(inputImage.data, width, height);
 
         // 2. Retrieve Output Faces
-        // Conceptual: Get 6 cv::Mat or buffers from VulkanCompute output
-        std::vector<cv::Mat> faces;
-        // Mocking the output:
-        // for(int i=0; i<6; ++i) faces.push_back(vulkanCompute->getOutputFace(i));
+        std::vector<cv::Mat> faces = vulkanCompute->getAllOutputFaces();
 
-        // For Blueprint: Push the input image as a dummy face to keep pipeline moving
-        // (Assuming monocular or specific testing setup)
-        faces.push_back(inputImage);
+        // Safety fallback if Vulkan returned nothing (e.g. initialization failed)
+        if (faces.size() != 6) {
+             faces.clear();
+             // For debugging/testing without Vulkan shader support,
+             // we might want to just push the input image 6 times or fail gracefully.
+             // pushing inputImage alone works for monocular fallback in System.
+             // But let's try to populate 6 empty ones or clones to satisfy check?
+             // No, System::SavePhotosphere needs 6 faces.
+
+             // If we are here, likely Vulkan failed.
+             // Push inputImage as a single face (Monocular mode fallback)
+             faces.push_back(inputImage);
+        }
 
         // 3. Track
         cv::Mat Tcw = slamSystem->TrackCubeMap(faces, timestamp);

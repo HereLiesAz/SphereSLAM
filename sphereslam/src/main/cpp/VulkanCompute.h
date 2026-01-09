@@ -5,6 +5,7 @@
 #include <string>
 #include <android/asset_manager.h>
 #include <vulkan/vulkan.h>
+#include <opencv2/core.hpp>
 
 struct VulkanContext {
     VkInstance instance;
@@ -29,6 +30,7 @@ public:
 
     void initialize();
     void processImage(void* inputBuffer, int width, int height);
+    std::vector<cv::Mat> getAllOutputFaces();
 
 private:
     AAssetManager* assetManager;

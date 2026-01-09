@@ -21,14 +21,16 @@ if(DEFINED OPENCV_DIR)
     endif()
 
     message(STATUS "Web Build: OPENCV_DIR is set to ${OPENCV_DIR}. Resolved to ${OPENCV_ABS}. Using provided headers for compilation.")
-    include_directories(${OPENCV_ABS}/sdk/native/jni/include)
+    include_directories(${OPENCV_ABS}/include/opencv4)
+    link_directories(${OPENCV_ABS}/lib)
 else()
     # Fallback to hardcoded path if OPENCV_DIR is not set
     # Assuming standard project structure if not provided
-    set(DEFAULT_OPENCV_PATH "${CMAKE_SOURCE_DIR}/../libs/opencv-4.12.0")
+    set(DEFAULT_OPENCV_PATH "${CMAKE_SOURCE_DIR}/../libs/opencv-wasm")
     if(EXISTS "${DEFAULT_OPENCV_PATH}")
         message(STATUS "Web Build: OPENCV_DIR not set. Defaulting to ${DEFAULT_OPENCV_PATH}.")
-        include_directories(${DEFAULT_OPENCV_PATH}/sdk/native/jni/include)
+        include_directories(${DEFAULT_OPENCV_PATH}/include/opencv4)
+        link_directories(${DEFAULT_OPENCV_PATH}/lib)
     endif()
 endif()
 
@@ -55,13 +57,24 @@ set(WEB_SOURCES
     ${CORE_SOURCES}
     PlatformWeb.cpp
     Bindings.cpp
-    WebStubs.cpp
 )
 
 message(STATUS "Web Sources: ${WEB_SOURCES}")
 
 # Add Executable (Wasm module)
 add_executable(sphereslam_web ${WEB_SOURCES})
+
+# Link OpenCV Static Libraries (Order matters!)
+# Emscripten usually compiles to .a
+target_link_libraries(sphereslam_web
+    opencv_calib3d
+    opencv_features2d
+    opencv_flann
+    opencv_imgcodecs
+    opencv_imgproc
+    opencv_core
+    z
+)
 
 # Emscripten Linker Flags
 set_target_properties(sphereslam_web PROPERTIES LINK_FLAGS "-s WASM=1 -s ALLOW_MEMORY_GROWTH=1 --bind -s MODULARIZE=1 -s EXPORT_NAME='createSphereSLAMModule'")
