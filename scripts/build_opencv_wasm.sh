@@ -4,14 +4,8 @@ set -e
 # Define installation path
 INSTALL_DIR="$(pwd)/libs/opencv-wasm"
 
-# Check if already built
-if [ -f "$INSTALL_DIR/lib/libopencv_core.a" ]; then
-  echo "OpenCV Wasm already built at $INSTALL_DIR."
-  # Forcing rebuild in CI if needed, but local check is fine.
-  # The user likely needs to clear cache or we rely on the fact that if it failed, it might not have created the artifact?
-  # Or we can just let the user handle clean up.
-  exit 0
-fi
+# Force rebuild to ensure new flags are applied and libraries are present
+rm -rf "$INSTALL_DIR"
 
 echo "Building OpenCV for WebAssembly..."
 
@@ -48,6 +42,7 @@ emcmake cmake ../opencv \
   -DBUILD_PNG=ON \
   -DBUILD_JPEG=ON \
   -DBUILD_WEBP=ON \
+  -DBUILD_OPENJPEG=ON \
   -DBUILD_opencv_video=OFF \
   -DBUILD_opencv_videoio=OFF \
   -DBUILD_opencv_highgui=OFF \
@@ -65,6 +60,7 @@ emcmake cmake ../opencv \
   -DWITH_CUDA=OFF \
   -DWITH_OPENCL=OFF \
   -DWITH_TIFF=OFF \
+  -DWITH_JASPER=OFF \
   -DBUILD_opencv_imgcodecs=ON \
   -DCMAKE_BUILD_TYPE=Release
 
@@ -81,3 +77,5 @@ cd ../..
 rm -rf build_opencv_wasm_temp
 
 echo "OpenCV Wasm build complete."
+echo "Listing installed libraries:"
+find "$INSTALL_DIR" -name "*.a"
