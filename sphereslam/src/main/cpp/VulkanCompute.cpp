@@ -323,7 +323,10 @@ void VulkanCompute::processImage(void* inputBuffer, int width, int height) {
     // 1. Copy Input to Staging
     VkDeviceSize inputSize = width * height * 4;
     void* data;
-    vkMapMemory(vkCtx.device, stagingBufferMemory, 0, inputSize, 0, &data);
+    if (vkMapMemory(vkCtx.device, stagingBufferMemory, 0, inputSize, 0, &data) != VK_SUCCESS) {
+        __android_log_print(ANDROID_LOG_ERROR, TAG, "Failed to map staging buffer memory");
+        return;
+    }
     memcpy(data, inputBuffer, inputSize);
     vkUnmapMemory(vkCtx.device, stagingBufferMemory);
 
@@ -397,7 +400,10 @@ cv::Mat VulkanCompute::getOutputFace(int index) {
     VkDeviceSize faceSize = 512 * 512 * 4; // RGBA
     VkDeviceSize offset = index * faceSize;
     void* data;
-    vkMapMemory(vkCtx.device, readbackBufferMemory, offset, faceSize, 0, &data);
+    if (vkMapMemory(vkCtx.device, readbackBufferMemory, offset, faceSize, 0, &data) != VK_SUCCESS) {
+        __android_log_print(ANDROID_LOG_ERROR, TAG, "Failed to map readback buffer memory for face %d", index);
+        return cv::Mat();
+    }
 
     // Construct cv::Mat
     // Data is RGBA, we likely need Gray or RGB for SLAM.
