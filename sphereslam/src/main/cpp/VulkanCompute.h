@@ -30,7 +30,7 @@ public:
 
     void initialize();
     void processImage(void* inputBuffer, int width, int height);
-    cv::Mat getOutputFace(int index);
+    std::vector<cv::Mat> getAllOutputFaces();
 
 private:
     AAssetManager* assetManager;

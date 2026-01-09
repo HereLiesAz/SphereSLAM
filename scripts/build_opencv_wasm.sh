@@ -55,6 +55,7 @@ emcmake cmake ../opencv \
   -DBUILD_opencv_stitching=OFF \
   -DBUILD_opencv_gapi=OFF \
   -DWITH_PTHREADS_PF=OFF \
+  -DWITH_IPP=OFF \
   -DCV_ENABLE_INTRINSICS=OFF \
   -DCMAKE_BUILD_TYPE=Release
 

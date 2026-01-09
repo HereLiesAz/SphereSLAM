@@ -70,6 +70,7 @@ target_link_libraries(sphereslam_web
     opencv_calib3d
     opencv_features2d
     opencv_flann
+    opencv_imgcodecs
     opencv_imgproc
     opencv_core
     z
