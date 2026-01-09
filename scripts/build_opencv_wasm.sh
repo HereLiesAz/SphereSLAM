@@ -7,6 +7,9 @@ INSTALL_DIR="$(pwd)/libs/opencv-wasm"
 # Check if already built
 if [ -f "$INSTALL_DIR/lib/libopencv_core.a" ]; then
   echo "OpenCV Wasm already built at $INSTALL_DIR."
+  # Forcing rebuild in CI if needed, but local check is fine.
+  # The user likely needs to clear cache or we rely on the fact that if it failed, it might not have created the artifact?
+  # Or we can just let the user handle clean up.
   exit 0
 fi
 
@@ -27,7 +30,7 @@ cd build
 
 # Configure CMake
 # We disable as much as possible to keep build time low and artifact size small.
-# We need: core, features2d, imgproc, calib3d, flann.
+# We need: core, features2d, imgproc, calib3d, flann, imgcodecs.
 echo "Configuring OpenCV..."
 emcmake cmake ../opencv \
   -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
@@ -56,6 +59,12 @@ emcmake cmake ../opencv \
   -DBUILD_opencv_gapi=OFF \
   -DWITH_PTHREADS_PF=OFF \
   -DCV_ENABLE_INTRINSICS=OFF \
+  -DWITH_IPP=OFF \
+  -DWITH_1394=OFF \
+  -DWITH_CUDA=OFF \
+  -DWITH_OPENCL=OFF \
+  -DWITH_TIFF=OFF \
+  -DBUILD_opencv_imgcodecs=ON \
   -DCMAKE_BUILD_TYPE=Release
 
 # Build
