@@ -3,6 +3,7 @@
 #include <vector>
 #include <stdexcept>
 #include <cstring>
+#include <opencv2/imgproc.hpp>
 
 #define TAG "VulkanCompute"
 
@@ -385,6 +386,37 @@ void VulkanCompute::processImage(void* inputBuffer, int width, int height) {
 
     // 4. Readback happens when user accesses buffer mapped memory, or we copy it here.
     // For now, we leave it in readbackBuffer host memory.
+}
+
+cv::Mat VulkanCompute::getOutputFace(int index) {
+    if (index < 0 || index >= 6 || !readbackBufferMemory) {
+        return cv::Mat();
+    }
+
+    // Map Memory
+    VkDeviceSize faceSize = 512 * 512 * 4; // RGBA
+    VkDeviceSize offset = index * faceSize;
+    void* data;
+    vkMapMemory(vkCtx.device, readbackBufferMemory, offset, faceSize, 0, &data);
+
+    // Construct cv::Mat
+    // Data is RGBA, we likely need Gray or RGB for SLAM.
+    // OpenCV ORB usually needs Grayscale.
+    // Let's create RGBA first, then convert.
+    cv::Mat faceRGBA(512, 512, CV_8UC4, data);
+
+    // We must clone it because unmapping memory will invalidate 'data' pointer
+    // if we were just wrapping it.
+    // Wait, vkUnmap doesn't necessarily invalidate the bytes if we copy them out.
+    // faceRGBA owns no data, it just points to 'data'.
+
+    cv::Mat faceGray;
+    cv::cvtColor(faceRGBA, faceGray, cv::COLOR_RGBA2GRAY);
+
+    // Unmap
+    vkUnmapMemory(vkCtx.device, readbackBufferMemory);
+
+    return faceGray;
 }
 
 uint32_t VulkanCompute::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
