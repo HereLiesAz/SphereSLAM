@@ -391,38 +391,40 @@ void VulkanCompute::processImage(void* inputBuffer, int width, int height) {
     // For now, we leave it in readbackBuffer host memory.
 }
 
-cv::Mat VulkanCompute::getOutputFace(int index) {
-    if (index < 0 || index >= 6 || !readbackBufferMemory) {
-        return cv::Mat();
-    }
+std::vector<cv::Mat> VulkanCompute::getAllOutputFaces() {
+    std::vector<cv::Mat> faces;
+    if (!readbackBufferMemory) return faces;
 
-    // Map Memory
-    VkDeviceSize faceSize = 512 * 512 * 4; // RGBA
-    VkDeviceSize offset = index * faceSize;
+    VkDeviceSize faceSize = 512 * 512 * 4; // RGBA per face
+    VkDeviceSize totalSize = faceSize * 6;
     void* data;
-    if (vkMapMemory(vkCtx.device, readbackBufferMemory, offset, faceSize, 0, &data) != VK_SUCCESS) {
-        __android_log_print(ANDROID_LOG_ERROR, TAG, "Failed to map readback buffer memory for face %d", index);
-        return cv::Mat();
+
+    // Map ALL memory once
+    if (vkMapMemory(vkCtx.device, readbackBufferMemory, 0, totalSize, 0, &data) != VK_SUCCESS) {
+        __android_log_print(ANDROID_LOG_ERROR, TAG, "Failed to map readback buffer memory");
+        return faces;
     }
 
-    // Construct cv::Mat
-    // Data is RGBA, we likely need Gray or RGB for SLAM.
-    // OpenCV ORB usually needs Grayscale.
-    // Let's create RGBA first, then convert.
-    cv::Mat faceRGBA(512, 512, CV_8UC4, data);
+    uint8_t* byteData = static_cast<uint8_t*>(data);
 
-    // We must clone it because unmapping memory will invalidate 'data' pointer
-    // if we were just wrapping it.
-    // Wait, vkUnmap doesn't necessarily invalidate the bytes if we copy them out.
-    // faceRGBA owns no data, it just points to 'data'.
+    for (int i = 0; i < 6; ++i) {
+        // Pointer arithmetic to get to the start of the i-th face
+        uint8_t* facePtr = byteData + (i * faceSize);
 
-    cv::Mat faceGray;
-    cv::cvtColor(faceRGBA, faceGray, cv::COLOR_RGBA2GRAY);
+        // Wrap the raw RGBA data
+        cv::Mat faceRGBA(512, 512, CV_8UC4, facePtr);
 
-    // Unmap
+        // Convert to Grayscale (this performs a deep copy into faceGray)
+        cv::Mat faceGray;
+        cv::cvtColor(faceRGBA, faceGray, cv::COLOR_RGBA2GRAY);
+
+        faces.push_back(faceGray);
+    }
+
+    // Unmap once
     vkUnmapMemory(vkCtx.device, readbackBufferMemory);
 
-    return faceGray;
+    return faces;
 }
 
 uint32_t VulkanCompute::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {

@@ -128,17 +128,7 @@ Java_com_hereliesaz_sphereslam_SphereSLAM_processFrame(JNIEnv* env, jobject thiz
         vulkanCompute->processImage(inputImage.data, width, height);
 
         // 2. Retrieve Output Faces
-        std::vector<cv::Mat> faces;
-        for(int i=0; i<6; ++i) {
-            cv::Mat face = vulkanCompute->getOutputFace(i);
-            if (!face.empty()) {
-                faces.push_back(face);
-            } else {
-                 // Fallback if Vulkan fails (or for testing w/o valid GPU pipeline)
-                 // Just push a clone of input resized or similar, but for now we expect Vulkan to work.
-                 // If it fails, System::TrackCubeMap might complain if size != 6.
-            }
-        }
+        std::vector<cv::Mat> faces = vulkanCompute->getAllOutputFaces();
 
         // Safety fallback if Vulkan returned nothing (e.g. initialization failed)
         if (faces.size() != 6) {
