@@ -23,6 +23,9 @@ if(DEFINED OPENCV_DIR)
     message(STATUS "Web Build: OPENCV_DIR is set to ${OPENCV_DIR}. Resolved to ${OPENCV_ABS}. Using provided headers for compilation.")
     include_directories(${OPENCV_ABS}/include/opencv4)
     link_directories(${OPENCV_ABS}/lib)
+    # Add common locations for 3rdparty static libs in OpenCV static builds
+    link_directories(${OPENCV_ABS}/lib/opencv4/3rdparty)
+    link_directories(${OPENCV_ABS}/share/OpenCV/3rdparty/lib)
 else()
     # Fallback to hardcoded path if OPENCV_DIR is not set
     # Assuming standard project structure if not provided
@@ -31,6 +34,8 @@ else()
         message(STATUS "Web Build: OPENCV_DIR not set. Defaulting to ${DEFAULT_OPENCV_PATH}.")
         include_directories(${DEFAULT_OPENCV_PATH}/include/opencv4)
         link_directories(${DEFAULT_OPENCV_PATH}/lib)
+        link_directories(${DEFAULT_OPENCV_PATH}/lib/opencv4/3rdparty)
+        link_directories(${DEFAULT_OPENCV_PATH}/share/OpenCV/3rdparty/lib)
     endif()
 endif()
 
@@ -44,10 +49,9 @@ include_directories(
 )
 
 # Emscripten specific flags
-# USE_OPENCV is removed/deprecated in recent versions.
-# We use local headers for compilation and expect libraries to be provided or linked manually if needed.
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -s USE_LIBPNG=1 -s USE_ZLIB=1")
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s USE_LIBPNG=1 -s USE_ZLIB=1")
+# We rely on OpenCV's built-in static libraries for PNG, ZLIB, JPEG, etc.
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -s USE_LIBPNG=1 -s USE_ZLIB=1")
+# set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s USE_LIBPNG=1 -s USE_ZLIB=1")
 
 # Core Sources
 file(GLOB_RECURSE CORE_SOURCES "${CMAKE_SOURCE_DIR}/../core/src/SLAM/*.cpp")
@@ -73,7 +77,13 @@ target_link_libraries(sphereslam_web
     opencv_imgcodecs
     opencv_imgproc
     opencv_core
-    z
+
+    # 3rd Party Dependencies (OpenCV built-ins)
+    libopenjp2 # For JPEG2000 support in imgcodecs
+    libjpeg    # For JPEG support
+    libpng     # For PNG support
+    libwebp    # For WebP support
+    z          # ZLib (might link system or OpenCV's libz)
 )
 
 # Emscripten Linker Flags
