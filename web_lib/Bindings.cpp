@@ -60,10 +60,27 @@ public:
         }
 
         // Construct Mat (if OpenCV available)
-        // cv::Mat im(height, width, CV_8UC4, pixelData.data());
-        // mSystem->TrackMonocular(im, timestamp);
+        cv::Mat im(height, width, CV_8UC4, pixelData.data());
+        mLastPose = mSystem->TrackMonocular(im, timestamp);
 
         return true;
+    }
+
+    val getLastPose() {
+        if (mLastPose.empty()) return val::null();
+
+        std::vector<float> poseData;
+        poseData.reserve(16);
+        for(int i=0; i<4; ++i) {
+            for(int j=0; j<4; ++j) {
+                poseData.push_back(mLastPose.at<float>(i,j));
+            }
+        }
+
+        val Float32Array = val::global("Float32Array");
+        val jsArray = Float32Array.new_(16);
+        jsArray.call<void>("set", val(typed_memory_view(poseData.size(), poseData.data())));
+        return jsArray;
     }
 
     int getTrackingState() {
@@ -84,9 +101,48 @@ public:
         if (mSystem) mSystem->SavePhotosphere(filename);
     }
 
+    void saveMap(std::string filename) {
+        if (mSystem) mSystem->SaveMap(filename);
+    }
+
+    bool loadMap(std::string filename) {
+        if (mSystem) return mSystem->LoadMap(filename);
+        return false;
+    }
+
+    // Accessor for Points (Memory Safe)
+    val getMapPointsFlat() {
+        if (!mSystem) return val::null();
+        std::vector<MapPoint*> vMPs = mSystem->GetAllMapPoints();
+        size_t size = vMPs.size() * 3;
+
+        // Allocate JS Array
+        val Float32Array = val::global("Float32Array");
+        val jsArray = Float32Array.new_(size);
+
+        // We need to copy data to it.
+        // Efficient way:
+        std::vector<float> temp;
+        temp.reserve(size);
+        for(auto mp : vMPs) {
+             if (!mp) continue;
+             cv::Point3f p = mp->GetWorldPos();
+             temp.push_back(p.x);
+             temp.push_back(p.y);
+             temp.push_back(p.z);
+        }
+
+        // Create a temporary view and call .set() on the JS array
+        // The view is valid for the duration of the call.
+        jsArray.call<void>("set", val(typed_memory_view(temp.size(), temp.data())));
+
+        return jsArray;
+    }
+
 private:
     System* mSystem;
     PlatformWeb* mPlatform;
+    cv::Mat mLastPose;
 };
 
 // Bindings
@@ -97,7 +153,11 @@ EMSCRIPTEN_BINDINGS(sphereslam_module) {
         .function("getTrackingState", &SystemWrapper::getTrackingState)
         .function("getMapStats", &SystemWrapper::getMapStats)
         .function("reset", &SystemWrapper::reset)
-        .function("savePhotosphere", &SystemWrapper::savePhotosphere);
+        .function("savePhotosphere", &SystemWrapper::savePhotosphere)
+        .function("saveMap", &SystemWrapper::saveMap)
+        .function("loadMap", &SystemWrapper::loadMap)
+        .function("getAllMapPoints", &SystemWrapper::getMapPointsFlat)
+        .function("getPose", &SystemWrapper::getLastPose);
 
     // Register vector conversion if needed explicitly
     register_vector<unsigned char>("VectorU8");

@@ -19,6 +19,9 @@ public:
     // Set the output window
     void setWindow(ANativeWindow* window);
 
+    // Reset the scene
+    void reset();
+
     // Update the virtual camera pose
     void updateCamera(const glm::mat4& viewMatrix, const glm::mat4& projectionMatrix);
 

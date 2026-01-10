@@ -14,6 +14,8 @@
 - (NSString *)getMapStats;
 - (void)reset;
 - (void)savePhotosphere:(NSString *)filename;
+- (void)saveMap:(NSString *)filename;
+- (BOOL)loadMap:(NSString *)filename;
 
 @end
 

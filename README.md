@@ -10,6 +10,7 @@
 *   **Neural Depth:** Integration structure for **Depth Any Camera (DAC)** foundation models (TFLite) for zero-shot metric scale recovery.
 *   **Mobile Gaussian Splatting:** Real-time visualization using a lightweight 3D Gaussian Splatting renderer (`MobileGS`).
 *   **Photosphere Capture:** Capture 360-degree environment maps (as PPM files) from the SLAM system in all supported platforms.
+*   **Map Persistence:** Robust Save/Load functionality for SLAM maps (Poses and Sparse Point Cloud), with Android UI integration.
 *   **Cross-Platform Core:** Shared C++ core (`core/`) used by Android, iOS, and Web modules.
 
 ## Installation
@@ -90,8 +91,11 @@ override fun doFrame(frameTimeNanos: Long) {
 
 ### Web (Experimental)
 
-The web module uses Emscripten to compile the core C++ logic to WebAssembly.
-See `web_app/` for a simple HTML/JS integration example.
+The web module uses Emscripten to compile the core C++ logic to WebAssembly. It supports:
+- Real-time Tracking
+- 360° Photosphere Capture
+- Map Saving and Loading (Persistence)
+- Basic Point Cloud Visualization
 
 To build:
 ```bash
@@ -100,7 +104,11 @@ To build:
 
 ### iOS (Experimental)
 
-The iOS module uses an Objective-C++ bridge to link the C++ core with Swift.
+The iOS module uses an Objective-C++ bridge to link the C++ core with Swift. It supports:
+- Real-time Tracking
+- Photosphere Capture (saves to Photos)
+- Map Saving and Loading (Documents Directory)
+
 See `ios_app/` for the Xcode project structure.
 
 ## Architecture

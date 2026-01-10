@@ -10,6 +10,8 @@ class Map;
 class MapPoint {
 public:
     MapPoint(const cv::Point3f &Pos, KeyFrame* pRefKF, Map* pMap);
+    // Constructor for Loading
+    MapPoint(long unsigned int id, const cv::Point3f &Pos, Map* pMap);
 
     void SetWorldPos(const cv::Point3f &Pos);
     cv::Point3f GetWorldPos();

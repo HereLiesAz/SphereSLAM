@@ -18,8 +18,9 @@ public:
 
     void SetReferenceMapPoints(const std::vector<MapPoint*> &vpMPs);
 
-    // Stub
     void Serialize(const std::string& filename);
+    bool Load(const std::string& filename);
+    void Clear();
 
 protected:
     std::set<MapPoint*> mspMapPoints;
