@@ -110,52 +110,7 @@ public:
         return false;
     }
 
-    val getAllMapPoints() {
-        if (!mSystem) return val::null();
-        std::vector<MapPoint*> vMPs = mSystem->GetAllMapPoints();
-
-        // Flatten [x, y, z, x, y, z, ...]
-        std::vector<float> points;
-        points.reserve(vMPs.size() * 3);
-
-        for (auto mp : vMPs) {
-            if (!mp) continue;
-            cv::Point3f pos = mp->GetWorldPos();
-            points.push_back(pos.x);
-            points.push_back(pos.y);
-            points.push_back(pos.z);
-        }
-
-        // Convert to Float32Array
-        // We need to use val::global("Float32Array").new_(val(typed_memory_view(points.size(), points.data())))
-        // But the points vector is local. We must copy.
-        // Easiest is to return the typed_memory_view logic directly if we can control lifetime?
-        // No, emscripten::typed_memory_view wraps existing memory.
-
-        // Correct way for returning new array:
-        // Create JS Float32Array
-        val Float32Array = val::global("Float32Array");
-        val jsArray = Float32Array.new_(points.size());
-
-        // Copy data
-        // val::module_property("HEAPF32").set(points, jsArray["byteOffset"].as<size_t>() >> 2); -- Too complex for simple bind?
-
-        // Simpler: use typed_memory_view but we need to ensure valid memory or copy?
-        // Let's use generic vector support if registered, or just iterate (slow).
-        // Best practice:
-
-        return val(typed_memory_view(points.size(), points.data()));
-        // WAIT: points is destroyed at end of function. DANGEROUS.
-
-        // Robust Implementation:
-        // We cannot return a view to stack memory.
-        // We must copy.
-        // Since we can't easily execute JS here to copy, let's use a workaround or vector return.
-        // But vector<float> returns JS Array (slow for large points).
-
-    }
-
-    // Better Accessor for Points (Memory Safe)
+    // Accessor for Points (Memory Safe)
     val getMapPointsFlat() {
         if (!mSystem) return val::null();
         std::vector<MapPoint*> vMPs = mSystem->GetAllMapPoints();

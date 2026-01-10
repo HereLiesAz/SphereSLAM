@@ -6,6 +6,7 @@ const startBtn = document.getElementById('start-btn');
 const captureBtn = document.getElementById('capture-btn');
 
 let slamSystem = null;
+let slamModule = null;
 let video = null;
 let canvas = null;
 let ctx = null;
@@ -24,10 +25,10 @@ async function init() {
         // Create SLAM System
         // Note: Paths must exist in MEMFS.
         // In a real robust app, we'd fetch them and write them to FS first.
-        Module.FS.writeFile('ORBvoc.txt', ''); // Dummy file creation
-        Module.FS.writeFile('Settings.yaml', '');
+        slamModule.FS.writeFile('ORBvoc.txt', ''); // Dummy file creation
+        slamModule.FS.writeFile('Settings.yaml', '');
 
-        slamSystem = new Module.System("ORBvoc.txt", "Settings.yaml");
+        slamSystem = new slamModule.System("ORBvoc.txt", "Settings.yaml");
 
         startBtn.disabled = false;
         statusDiv.innerText = "Status: Ready";
@@ -189,48 +190,17 @@ captureBtn.addEventListener('click', () => {
     if (!slamSystem) return;
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `photosphere_${timestamp}.jpg`; // System appends ext if missing, but let's be safe
+    const filename = `photosphere_${timestamp}.jpg`;
 
     slamSystem.savePhotosphere(filename);
-
-    // Read from MEMFS and Download
-    try {
-        // Filename might get appended with .png or .jpg by OpenCV
-        let finalName = filename;
-        if (!finalName.endsWith(".png") && !finalName.endsWith(".jpg")) finalName += ".png";
-
-        // OpenCV might append extension automatically check System.cpp logic
-        // System.cpp: if (outputFilename.find(".png") == std::string::npos && outputFilename.find(".jpg") == std::string::npos) outputFilename += ".png";
-
-        // Let's assume .png for now as System.cpp defaults to it.
-        // Wait, System.cpp uses imwrite.
-
-        // Try reading both
-        let content = null;
-        try {
-            content = slamSystem.FS_readFile(finalName); // FS_readFile is not exposed directly?
-            // We need Module.FS.readFile
-        } catch(e) {
-            // Try with .png
-             finalName = filename + ".png";
-             try {
-                // Access module via closure? No, we have slamSystem instance but need Module.
-                // Module is not global.
-                // We need to store Module globally or pass it.
-             } catch(e2) {}
-        }
-    } catch(e) {
-        console.error("Save Photosphere failed", e);
-    }
+    downloadFromMemFS(filename);
 });
 
 // Helper to download file from MEMFS
 function downloadFromMemFS(filename) {
+    if (!slamModule) return;
     try {
-        // We need access to Module.FS.
-        // Since Module is local to init(), we should expose it.
-        // Let's assign it to window for simplicity in this demo.
-        const content = window.Module.FS.readFile(filename);
+        const content = slamModule.FS.readFile(filename);
         const blob = new Blob([content], {type: 'application/octet-stream'});
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
@@ -260,7 +230,7 @@ document.getElementById('load-map-input').addEventListener('change', async (e) =
     const arrayBuffer = await file.arrayBuffer();
     const data = new Uint8Array(arrayBuffer);
 
-    window.Module.FS.writeFile("map.bin", data);
+    slamModule.FS.writeFile("map.bin", data);
     const success = slamSystem.loadMap("map.bin");
 
     if (success) {
