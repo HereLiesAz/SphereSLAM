@@ -59,22 +59,23 @@ file(GLOB_RECURSE CORE_SOURCES "${CMAKE_SOURCE_DIR}/../core/src/SLAM/*.cpp")
 # Find 3rd Party Libraries
 set(CV_3RD_PARTY_PATH "${OPENCV_ABS}/lib/opencv4/3rdparty")
 set(CV_3RD_PARTY_PATH_2 "${OPENCV_ABS}/share/OpenCV/3rdparty/lib")
+set(CV_3RD_PARTY_PATH_3 "${OPENCV_ABS}/lib")
 
 macro(find_cv_lib VAR NAMES)
-    find_library(${VAR} NAMES ${NAMES} PATHS ${CV_3RD_PARTY_PATH} ${CV_3RD_PARTY_PATH_2} NO_DEFAULT_PATH)
+    find_library(${VAR} NAMES ${NAMES} PATHS ${CV_3RD_PARTY_PATH} ${CV_3RD_PARTY_PATH_2} ${CV_3RD_PARTY_PATH_3} NO_DEFAULT_PATH)
     # Check for empty or NOTFOUND explicitly
     if(NOT ${VAR} OR "${${VAR}}" MATCHES "NOTFOUND")
-        message(WARNING "Could not find library: ${NAMES} in ${CV_3RD_PARTY_PATH} or ${CV_3RD_PARTY_PATH_2}")
+        message(WARNING "Could not find library: ${NAMES} in paths:\n  ${CV_3RD_PARTY_PATH}\n  ${CV_3RD_PARTY_PATH_2}\n  ${CV_3RD_PARTY_PATH_3}")
     else()
         message(STATUS "Found ${NAMES}: ${${VAR}}")
     endif()
 endmacro()
 
-find_cv_lib(LIB_OPENJP2 "libopenjp2;openjp2")
-find_cv_lib(LIB_JPEG    "libjpeg-turbo;libjpeg;jpeg")
-find_cv_lib(LIB_PNG     "libpng;png")
-find_cv_lib(LIB_WEBP    "libwebp;webp")
-find_cv_lib(LIB_Z       "z;zlib;libz")
+find_cv_lib(LIB_OPENJP2 "liblibopenjp2;libopenjp2;openjp2")
+find_cv_lib(LIB_JPEG    "liblibjpeg-turbo;liblibjpeg;libjpeg-turbo;libjpeg;jpeg")
+find_cv_lib(LIB_PNG     "liblibpng;libpng;png")
+find_cv_lib(LIB_WEBP    "liblibwebp;libwebp;webp")
+find_cv_lib(LIB_Z       "libz;z;zlib")
 
 # Define sources explicitly to ensure CMake picks them up
 set(WEB_SOURCES
