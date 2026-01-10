@@ -24,6 +24,7 @@ class SphereSLAM(private val context: Context) {
     external fun resetSystem()
     external fun getMapStats(): String
     external fun saveMap(filePath: String)
+    external fun loadMap(filePath: String): Boolean
     external fun savePhotosphere(filePath: String)
 
     fun cleanup() {

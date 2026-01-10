@@ -63,6 +63,14 @@ void MobileGS::initialize() {
     __android_log_print(ANDROID_LOG_INFO, TAG, "Initializing MobileGS Renderer");
 }
 
+void MobileGS::reset() {
+    std::unique_lock<std::mutex> lock(mMutexBuffer);
+    mFrontBuffer.clear();
+    mBackBuffer.clear();
+    mBufferDirty = true;
+    keyFramePoses.clear();
+}
+
 void MobileGS::setWindow(ANativeWindow* window) {
     if (mWindow == window) return;
 
