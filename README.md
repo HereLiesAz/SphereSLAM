@@ -91,8 +91,11 @@ override fun doFrame(frameTimeNanos: Long) {
 
 ### Web (Experimental)
 
-The web module uses Emscripten to compile the core C++ logic to WebAssembly.
-See `web_app/` for a simple HTML/JS integration example.
+The web module uses Emscripten to compile the core C++ logic to WebAssembly. It supports:
+- Real-time Tracking
+- 360° Photosphere Capture
+- Map Saving and Loading (Persistence)
+- Basic Point Cloud Visualization
 
 To build:
 ```bash
