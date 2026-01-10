@@ -60,11 +60,8 @@ public:
         }
 
         // Construct Mat (if OpenCV available)
-        // cv::Mat im(height, width, CV_8UC4, pixelData.data());
-        // mLastPose = mSystem->TrackMonocular(im, timestamp);
-
-        // Mock Pose for Robustness when OpenCV is missing/stubbed
-        mLastPose = cv::Mat::eye(4,4, CV_32F);
+        cv::Mat im(height, width, CV_8UC4, pixelData.data());
+        mLastPose = mSystem->TrackMonocular(im, timestamp);
 
         return true;
     }
