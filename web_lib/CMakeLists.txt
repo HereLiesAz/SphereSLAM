@@ -56,6 +56,25 @@ include_directories(
 # Core Sources
 file(GLOB_RECURSE CORE_SOURCES "${CMAKE_SOURCE_DIR}/../core/src/SLAM/*.cpp")
 
+# Find 3rd Party Libraries
+set(CV_3RD_PARTY_PATH "${OPENCV_ABS}/lib/opencv4/3rdparty")
+set(CV_3RD_PARTY_PATH_2 "${OPENCV_ABS}/share/OpenCV/3rdparty/lib")
+
+macro(find_cv_lib VAR NAMES)
+    find_library(${VAR} NAMES ${NAMES} PATHS ${CV_3RD_PARTY_PATH} ${CV_3RD_PARTY_PATH_2} NO_DEFAULT_PATH)
+    if(NOT ${VAR})
+        message(WARNING "Could not find library: ${NAMES} in ${CV_3RD_PARTY_PATH}")
+    else()
+        message(STATUS "Found ${NAMES}: ${${VAR}}")
+    endif()
+endmacro()
+
+find_cv_lib(LIB_OPENJP2 "libopenjp2;openjp2")
+find_cv_lib(LIB_JPEG    "libjpeg-turbo;libjpeg;jpeg")
+find_cv_lib(LIB_PNG     "libpng;png")
+find_cv_lib(LIB_WEBP    "libwebp;webp")
+find_cv_lib(LIB_Z       "z;zlib;libz")
+
 # Define sources explicitly to ensure CMake picks them up
 set(WEB_SOURCES
     ${CORE_SOURCES}
@@ -79,12 +98,12 @@ target_link_libraries(sphereslam_web
     opencv_core
 
     # 3rd Party Dependencies (OpenCV built-ins)
-    # We must be explicit with static libraries to avoid linker confusion
-    ${OPENCV_ABS}/lib/opencv4/3rdparty/liblibopenjp2.a
-    ${OPENCV_ABS}/lib/opencv4/3rdparty/liblibjpeg.a
-    ${OPENCV_ABS}/lib/opencv4/3rdparty/liblibpng.a
-    ${OPENCV_ABS}/lib/opencv4/3rdparty/liblibwebp.a
-    ${OPENCV_ABS}/lib/opencv4/3rdparty/libzlib.a
+    # Use find_library to handle naming inconsistencies (libjpeg.a vs liblibjpeg.a)
+    ${LIB_OPENJP2}
+    ${LIB_JPEG}
+    ${LIB_PNG}
+    ${LIB_WEBP}
+    ${LIB_Z}
 )
 
 # Emscripten Linker Flags
