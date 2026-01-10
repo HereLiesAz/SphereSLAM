@@ -104,7 +104,11 @@ To build:
 
 ### iOS (Experimental)
 
-The iOS module uses an Objective-C++ bridge to link the C++ core with Swift.
+The iOS module uses an Objective-C++ bridge to link the C++ core with Swift. It supports:
+- Real-time Tracking
+- Photosphere Capture (saves to Photos)
+- Map Saving and Loading (Documents Directory)
+
 See `ios_app/` for the Xcode project structure.
 
 ## Architecture
