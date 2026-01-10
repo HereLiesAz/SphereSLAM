@@ -62,8 +62,9 @@ set(CV_3RD_PARTY_PATH_2 "${OPENCV_ABS}/share/OpenCV/3rdparty/lib")
 
 macro(find_cv_lib VAR NAMES)
     find_library(${VAR} NAMES ${NAMES} PATHS ${CV_3RD_PARTY_PATH} ${CV_3RD_PARTY_PATH_2} NO_DEFAULT_PATH)
-    if(NOT ${VAR})
-        message(WARNING "Could not find library: ${NAMES} in ${CV_3RD_PARTY_PATH}")
+    # Check for empty or NOTFOUND explicitly
+    if(NOT ${VAR} OR "${${VAR}}" MATCHES "NOTFOUND")
+        message(WARNING "Could not find library: ${NAMES} in ${CV_3RD_PARTY_PATH} or ${CV_3RD_PARTY_PATH_2}")
     else()
         message(STATUS "Found ${NAMES}: ${${VAR}}")
     endif()
