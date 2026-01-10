@@ -79,12 +79,12 @@ target_link_libraries(sphereslam_web
     opencv_core
 
     # 3rd Party Dependencies (OpenCV built-ins)
-    # Note: OpenCV often names them liblibjpeg.a, libzlib.a, etc. in static builds.
-    libopenjp2
-    liblibjpeg
-    liblibpng
-    liblibwebp
-    libzlib
+    # We must be explicit with static libraries to avoid linker confusion
+    ${OPENCV_ABS}/lib/opencv4/3rdparty/liblibopenjp2.a
+    ${OPENCV_ABS}/lib/opencv4/3rdparty/liblibjpeg.a
+    ${OPENCV_ABS}/lib/opencv4/3rdparty/liblibpng.a
+    ${OPENCV_ABS}/lib/opencv4/3rdparty/liblibwebp.a
+    ${OPENCV_ABS}/lib/opencv4/3rdparty/libzlib.a
 )
 
 # Emscripten Linker Flags
