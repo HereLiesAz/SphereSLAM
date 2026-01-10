@@ -8,6 +8,14 @@ MapPoint::MapPoint(const cv::Point3f &Pos, KeyFrame* pRefKF, Map* pMap)
     mnId = nNextId++;
 }
 
+MapPoint::MapPoint(long unsigned int id, const cv::Point3f &Pos, Map* pMap)
+    : mnId(id), mWorldPos(Pos), mpRefKF(nullptr), mpMap(pMap)
+{
+    if (mnId >= nNextId) {
+        nNextId = mnId + 1;
+    }
+}
+
 void MapPoint::SetWorldPos(const cv::Point3f &Pos) {
     std::unique_lock<std::mutex> lock(mMutexPos);
     mWorldPos = Pos;

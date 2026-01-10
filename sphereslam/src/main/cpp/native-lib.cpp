@@ -288,3 +288,35 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_hereliesaz_sphereslam_SphereSLAM_savePhotosphere(JNIEnv* env, jobject thiz, jstring filePath) {
     executeWithFilePath(env, filePath, &System::SavePhotosphere);
 }
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hereliesaz_sphereslam_SphereSLAM_loadMap(JNIEnv* env, jobject thiz, jstring filePath) {
+    const char* path_str = env->GetStringUTFChars(filePath, nullptr);
+    if (!path_str) {
+        return false;
+    }
+    std::string path(path_str);
+    env->ReleaseStringUTFChars(filePath, path_str);
+
+    if (!slamSystem) return false;
+
+    bool success = slamSystem->LoadMap(path);
+    if (success && renderer) {
+        renderer->reset();
+        std::vector<MapPoint*> vMPs = slamSystem->GetAllMapPoints();
+        std::vector<Gaussian> gs;
+        gs.reserve(vMPs.size());
+        for(auto mp : vMPs) {
+            cv::Point3f pos = mp->GetWorldPos();
+            Gaussian g;
+            g.position = glm::vec3(pos.x, pos.y, pos.z);
+            g.rotation = {1.0f, 0.0f, 0.0f, 0.0f};
+            g.scale = glm::vec3(0.05f, 0.05f, 0.05f); // Fixed scale for sparse points
+            g.opacity = 1.0f;
+            g.color_sh = glm::vec3(1.0f, 1.0f, 1.0f); // White
+            gs.push_back(g);
+        }
+        renderer->addGaussians(gs);
+    }
+    return success;
+}
