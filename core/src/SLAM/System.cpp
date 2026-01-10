@@ -118,6 +118,14 @@ void System::SaveMap(const std::string &filename) {
     }
 }
 
+bool System::LoadMap(const std::string &filename) {
+    if (mpMap) {
+        Reset();
+        return mpMap->Load(filename);
+    }
+    return false;
+}
+
 // Helper for Rotation Matrix to Quaternion
 void toQuaternion(const cv::Mat& R, float& qx, float& qy, float& qz, float& qw) {
     // Basic implementation for 3x3 CV_32F matrix
@@ -301,6 +309,13 @@ void System::Reset() {
     }
     if (mpPlatform) mpPlatform->Log(LogLevel::INFO, "System", "System Reset");
     else std::cout << "System Reset" << std::endl;
+}
+
+std::vector<MapPoint*> System::GetAllMapPoints() {
+    if (mpMap) {
+        return mpMap->GetAllMapPoints();
+    }
+    return {};
 }
 
 std::string System::GetMapStats() {

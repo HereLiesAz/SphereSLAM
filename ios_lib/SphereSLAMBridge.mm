@@ -78,4 +78,17 @@
     }
 }
 
+- (void)saveMap:(NSString *)filename {
+    if (_system) {
+        _system->SaveMap([filename UTF8String]);
+    }
+}
+
+- (BOOL)loadMap:(NSString *)filename {
+    if (_system) {
+        return _system->LoadMap([filename UTF8String]);
+    }
+    return NO;
+}
+
 @end

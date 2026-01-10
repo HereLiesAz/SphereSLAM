@@ -111,3 +111,11 @@
 
 * [x] **Implement `getOutputFace`:** Add capability to VulkanCompute to retrieve CPU-accessible `cv::Mat` from the GPU readback buffer.
 * [x] **Bridge Vulkan-SLAM:** In `native-lib.cpp`, replace the mock "input-as-face" loop with actual retrieval of 6 faces from VulkanCompute.
+
+## **Phase 12: Robustness & Usability (Android)**
+*Target: `app`, `core`, `sphereslam`*
+
+* [x] **Map Persistence:** Implemented robust `SaveMap`/`LoadMap` with `MobileGS` visualization.
+* [x] **Concurrency Safety:** Secured map serialization with mutex locks.
+* [x] **UI Integration:** Added persistent map controls and status visualization.
+* [x] **Code Cleanup:** Removed conceptual placeholders and validated build stability.

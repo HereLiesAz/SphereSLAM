@@ -56,6 +56,9 @@ public:
     // New: Save Map
     void SaveMap(const std::string &filename);
 
+    // New: Load Map
+    bool LoadMap(const std::string &filename);
+
     // New: Save Trajectory
     void SaveTrajectoryTUM(const std::string &filename);
 
@@ -66,6 +69,9 @@ public:
 
     // Reset System
     void Reset();
+
+    // Accessors
+    std::vector<MapPoint*> GetAllMapPoints();
 
     // Statistics
     std::string GetMapStats();
