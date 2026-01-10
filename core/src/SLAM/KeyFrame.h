@@ -11,6 +11,8 @@ class KeyFrameDatabase;
 class KeyFrame {
 public:
     KeyFrame(Frame &F, Map* pMap, KeyFrameDatabase* pKFDB);
+    // Constructor for Loading
+    KeyFrame(long unsigned int id, double timeStamp, const cv::Mat &Tcw, Map* pMap);
 
     void SetPose(const cv::Mat &Tcw);
     cv::Mat GetPose();

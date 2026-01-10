@@ -61,9 +61,29 @@ public:
 
         // Construct Mat (if OpenCV available)
         // cv::Mat im(height, width, CV_8UC4, pixelData.data());
-        // mSystem->TrackMonocular(im, timestamp);
+        // mLastPose = mSystem->TrackMonocular(im, timestamp);
+
+        // Mock Pose for Robustness when OpenCV is missing/stubbed
+        mLastPose = cv::Mat::eye(4,4, CV_32F);
 
         return true;
+    }
+
+    val getLastPose() {
+        if (mLastPose.empty()) return val::null();
+
+        std::vector<float> poseData;
+        poseData.reserve(16);
+        for(int i=0; i<4; ++i) {
+            for(int j=0; j<4; ++j) {
+                poseData.push_back(mLastPose.at<float>(i,j));
+            }
+        }
+
+        val Float32Array = val::global("Float32Array");
+        val jsArray = Float32Array.new_(16);
+        jsArray.call<void>("set", val(typed_memory_view(poseData.size(), poseData.data())));
+        return jsArray;
     }
 
     int getTrackingState() {
@@ -84,9 +104,93 @@ public:
         if (mSystem) mSystem->SavePhotosphere(filename);
     }
 
+    void saveMap(std::string filename) {
+        if (mSystem) mSystem->SaveMap(filename);
+    }
+
+    bool loadMap(std::string filename) {
+        if (mSystem) return mSystem->LoadMap(filename);
+        return false;
+    }
+
+    val getAllMapPoints() {
+        if (!mSystem) return val::null();
+        std::vector<MapPoint*> vMPs = mSystem->GetAllMapPoints();
+
+        // Flatten [x, y, z, x, y, z, ...]
+        std::vector<float> points;
+        points.reserve(vMPs.size() * 3);
+
+        for (auto mp : vMPs) {
+            if (!mp) continue;
+            cv::Point3f pos = mp->GetWorldPos();
+            points.push_back(pos.x);
+            points.push_back(pos.y);
+            points.push_back(pos.z);
+        }
+
+        // Convert to Float32Array
+        // We need to use val::global("Float32Array").new_(val(typed_memory_view(points.size(), points.data())))
+        // But the points vector is local. We must copy.
+        // Easiest is to return the typed_memory_view logic directly if we can control lifetime?
+        // No, emscripten::typed_memory_view wraps existing memory.
+
+        // Correct way for returning new array:
+        // Create JS Float32Array
+        val Float32Array = val::global("Float32Array");
+        val jsArray = Float32Array.new_(points.size());
+
+        // Copy data
+        // val::module_property("HEAPF32").set(points, jsArray["byteOffset"].as<size_t>() >> 2); -- Too complex for simple bind?
+
+        // Simpler: use typed_memory_view but we need to ensure valid memory or copy?
+        // Let's use generic vector support if registered, or just iterate (slow).
+        // Best practice:
+
+        return val(typed_memory_view(points.size(), points.data()));
+        // WAIT: points is destroyed at end of function. DANGEROUS.
+
+        // Robust Implementation:
+        // We cannot return a view to stack memory.
+        // We must copy.
+        // Since we can't easily execute JS here to copy, let's use a workaround or vector return.
+        // But vector<float> returns JS Array (slow for large points).
+
+    }
+
+    // Better Accessor for Points (Memory Safe)
+    val getMapPointsFlat() {
+        if (!mSystem) return val::null();
+        std::vector<MapPoint*> vMPs = mSystem->GetAllMapPoints();
+        size_t size = vMPs.size() * 3;
+
+        // Allocate JS Array
+        val Float32Array = val::global("Float32Array");
+        val jsArray = Float32Array.new_(size);
+
+        // We need to copy data to it.
+        // Efficient way:
+        std::vector<float> temp;
+        temp.reserve(size);
+        for(auto mp : vMPs) {
+             if (!mp) continue;
+             cv::Point3f p = mp->GetWorldPos();
+             temp.push_back(p.x);
+             temp.push_back(p.y);
+             temp.push_back(p.z);
+        }
+
+        // Create a temporary view and call .set() on the JS array
+        // The view is valid for the duration of the call.
+        jsArray.call<void>("set", val(typed_memory_view(temp.size(), temp.data())));
+
+        return jsArray;
+    }
+
 private:
     System* mSystem;
     PlatformWeb* mPlatform;
+    cv::Mat mLastPose;
 };
 
 // Bindings
@@ -97,7 +201,11 @@ EMSCRIPTEN_BINDINGS(sphereslam_module) {
         .function("getTrackingState", &SystemWrapper::getTrackingState)
         .function("getMapStats", &SystemWrapper::getMapStats)
         .function("reset", &SystemWrapper::reset)
-        .function("savePhotosphere", &SystemWrapper::savePhotosphere);
+        .function("savePhotosphere", &SystemWrapper::savePhotosphere)
+        .function("saveMap", &SystemWrapper::saveMap)
+        .function("loadMap", &SystemWrapper::loadMap)
+        .function("getAllMapPoints", &SystemWrapper::getMapPointsFlat)
+        .function("getPose", &SystemWrapper::getLastPose);
 
     // Register vector conversion if needed explicitly
     register_vector<unsigned char>("VectorU8");

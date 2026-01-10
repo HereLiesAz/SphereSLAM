@@ -9,6 +9,16 @@ KeyFrame::KeyFrame(Frame &F, Map* pMap, KeyFrameDatabase* pKFDB)
     mvpMapPoints = std::vector<MapPoint*>(F.N, nullptr);
 }
 
+KeyFrame::KeyFrame(long unsigned int id, double timeStamp, const cv::Mat &Tcw, Map* pMap)
+    : mnId(id), mnFrameId(id), mTimeStamp(timeStamp), mpMap(pMap)
+{
+    this->mTcw = Tcw.clone();
+    // No Frame reference, so no features or map points initialization from Frame
+    if (mnId >= Frame::nNextId) {
+        Frame::nNextId = mnId + 1;
+    }
+}
+
 void KeyFrame::SetPose(const cv::Mat &Tcw) {
     std::unique_lock<std::mutex> lock(mMutexPose);
     mTcw = Tcw.clone();
