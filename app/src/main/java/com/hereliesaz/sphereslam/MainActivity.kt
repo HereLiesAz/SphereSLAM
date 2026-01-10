@@ -42,6 +42,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
 
     private val TAG = "MainActivity"
     private val CAMERA_PERMISSION_REQUEST_CODE = 100
+    private val CREATE_FILE_REQUEST_CODE = 101
+    private val OPEN_FILE_REQUEST_CODE = 102
     private lateinit var cameraManager: SphereCameraManager
     private lateinit var sphereSLAM: SphereSLAM
     private lateinit var sensorManager: SensorManager
@@ -88,6 +90,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
 
         findViewById<Button>(R.id.captureButton).setOnClickListener {
             capturePhotosphere()
+        }
+
+        findViewById<Button>(R.id.saveMapButton).setOnClickListener {
+            saveMapExplicit()
+        }
+
+        findViewById<Button>(R.id.loadMapButton).setOnClickListener {
+            loadMapExplicit()
         }
 
         findViewById<Button>(R.id.logsButton).setOnClickListener {
@@ -159,6 +169,81 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
             ActivityCompat.requestPermissions(
                 this, REQUIRED_PERMISSIONS, CAMERA_PERMISSION_REQUEST_CODE
             )
+        }
+    }
+
+    private fun saveMapExplicit() {
+        val intent = android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(android.content.Intent.CATEGORY_OPENABLE)
+            type = "application/octet-stream"
+            putExtra(android.content.Intent.EXTRA_TITLE, "map_${System.currentTimeMillis()}.bin")
+        }
+        startActivityForResult(intent, CREATE_FILE_REQUEST_CODE)
+    }
+
+    private fun loadMapExplicit() {
+        val intent = android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(android.content.Intent.CATEGORY_OPENABLE)
+            type = "application/octet-stream" // Adjust if needed
+        }
+        startActivityForResult(intent, OPEN_FILE_REQUEST_CODE)
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (resultCode == android.app.Activity.RESULT_OK && data != null) {
+            data.data?.let { uri ->
+                lifecycleScope.launch(Dispatchers.IO) {
+                    if (requestCode == CREATE_FILE_REQUEST_CODE) {
+                        try {
+                            // We need a file path for native code. But SAF gives URI.
+                            // Native code cannot write directly to SAF URI without heavy modification (passing FD).
+                            // Strategy: Save to Cache first, then copy stream to URI.
+                            val tempFile = File(cacheDir, "temp_save_map.bin")
+                            sphereSLAM.saveMap(tempFile.absolutePath)
+
+                            contentResolver.openOutputStream(uri)?.use { output ->
+                                tempFile.inputStream().use { input ->
+                                    input.copyTo(output)
+                                }
+                            }
+                            tempFile.delete()
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(this@MainActivity, "Map saved successfully", Toast.LENGTH_SHORT).show()
+                            }
+                        } catch (e: Exception) {
+                            LogManager.e(TAG, "Failed to save map", e)
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(this@MainActivity, "Failed to save map", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    } else if (requestCode == OPEN_FILE_REQUEST_CODE) {
+                        try {
+                            // Strategy: Copy from URI to Cache, then load from path.
+                            val tempFile = File(cacheDir, "temp_load_map.bin")
+                            contentResolver.openInputStream(uri)?.use { input ->
+                                tempFile.outputStream().use { output ->
+                                    input.copyTo(output)
+                                }
+                            }
+                            val success = sphereSLAM.loadMap(tempFile.absolutePath)
+                            tempFile.delete()
+                            withContext(Dispatchers.Main) {
+                                if (success) {
+                                    Toast.makeText(this@MainActivity, "Map loaded successfully", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(this@MainActivity, "Failed to load map structure", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        } catch (e: Exception) {
+                            LogManager.e(TAG, "Failed to load map", e)
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(this@MainActivity, "Failed to load map", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 

@@ -29,6 +29,26 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         return button
     }()
 
+    let saveMapButton: UIButton = {
+        let button = UIButton(type: .system)
+        button.setTitle("Save Map", for: .normal)
+        button.backgroundColor = .systemBlue
+        button.setTitleColor(.white, for: .normal)
+        button.layer.cornerRadius = 10
+        button.translatesAutoresizingMaskIntoConstraints = false
+        return button
+    }()
+
+    let loadMapButton: UIButton = {
+        let button = UIButton(type: .system)
+        button.setTitle("Load Map", for: .normal)
+        button.backgroundColor = .systemGreen
+        button.setTitleColor(.white, for: .normal)
+        button.layer.cornerRadius = 10
+        button.translatesAutoresizingMaskIntoConstraints = false
+        return button
+    }()
+
     override func viewDidLoad() {
         super.viewDidLoad()
 
@@ -53,6 +73,12 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         view.addSubview(captureButton)
         captureButton.addTarget(self, action: #selector(capturePhotosphere), for: .touchUpInside)
 
+        view.addSubview(saveMapButton)
+        saveMapButton.addTarget(self, action: #selector(saveMap), for: .touchUpInside)
+
+        view.addSubview(loadMapButton)
+        loadMapButton.addTarget(self, action: #selector(loadMap), for: .touchUpInside)
+
         NSLayoutConstraint.activate([
             statusLabel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20),
             statusLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
@@ -60,7 +86,17 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
             captureButton.bottomAnchor.constraint(equalTo: statusLabel.topAnchor, constant: -20),
             captureButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             captureButton.widthAnchor.constraint(equalToConstant: 200),
-            captureButton.heightAnchor.constraint(equalToConstant: 50)
+            captureButton.heightAnchor.constraint(equalToConstant: 50),
+
+            saveMapButton.bottomAnchor.constraint(equalTo: captureButton.topAnchor, constant: -10),
+            saveMapButton.trailingAnchor.constraint(equalTo: view.centerXAnchor, constant: -10),
+            saveMapButton.widthAnchor.constraint(equalToConstant: 120),
+            saveMapButton.heightAnchor.constraint(equalToConstant: 40),
+
+            loadMapButton.bottomAnchor.constraint(equalTo: captureButton.topAnchor, constant: -10),
+            loadMapButton.leadingAnchor.constraint(equalTo: view.centerXAnchor, constant: 10),
+            loadMapButton.widthAnchor.constraint(equalToConstant: 120),
+            loadMapButton.heightAnchor.constraint(equalToConstant: 40)
         ])
     }
 
@@ -140,25 +176,68 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     }
 
     @objc func capturePhotosphere() {
-        guard let layer = videoPreviewLayer else { return }
+        // Robust Implementation: Use SLAM Bridge to save actual photosphere
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let filename = "photosphere_\(timestamp).jpg"
+        let fileURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(filename)
 
-        // Capture Snapshot of the View
-        // Note: For AR/SLAM, we might want to render the internal state, but here we capture the screen preview.
-        UIGraphicsBeginImageContextWithOptions(view.bounds.size, false, 0.0)
-        view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
-        let image = UIGraphicsGetImageFromCurrentImageContext()
-        UIGraphicsEndImageContext()
+        // Native Save
+        slamBridge?.savePhotosphere(fileURL.path)
 
-        if let capturedImage = image {
-            UIImageWriteToSavedPhotosAlbum(capturedImage, self, #selector(image(_:didFinishSavingWithError:contextInfo:)), nil)
+        // Wait briefly then check if file exists (since call is async in native usually but here sync)
+        // If file exists, move to Photos
+        DispatchQueue.global(qos: .background).async {
+            // Check for both .jpg and .png as native might append ext
+            let pngURL = fileURL.appendingPathExtension("png") // Wait, path already has .jpg. native might append .png -> .jpg.png if not careful.
+            // System logic: if no ext, appends. If .jpg present, keeps it.
+
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                if let image = UIImage(contentsOfFile: fileURL.path) {
+                    UIImageWriteToSavedPhotosAlbum(image, self, #selector(self.image(_:didFinishSavingWithError:contextInfo:)), nil)
+                }
+            } else {
+                DispatchQueue.main.async {
+                    self.updateStatus(text: "Failed to generate photosphere")
+                }
+            }
+        }
+    }
+
+    @objc func saveMap() {
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let filename = "map_\(timestamp).bin"
+        let fileURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(filename)
+
+        slamBridge?.saveMap(fileURL.path)
+        updateStatus(text: "Map saved: \(filename)")
+    }
+
+    @objc func loadMap() {
+        // Pick the latest map for simplicity
+        let docDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        do {
+            let files = try FileManager.default.contentsOfDirectory(at: docDir, includingPropertiesForKeys: nil)
+            let maps = files.filter { $0.lastPathComponent.hasPrefix("map_") && $0.pathExtension == "bin" }
+                            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+
+            if let latestMap = maps.first {
+                let success = slamBridge?.loadMap(latestMap.path) ?? false
+                updateStatus(text: success ? "Loaded \(latestMap.lastPathComponent)" : "Failed to load map")
+            } else {
+                updateStatus(text: "No maps found")
+            }
+        } catch {
+            updateStatus(text: "Error finding maps")
         }
     }
 
     @objc func image(_ image: UIImage, didFinishSavingWithError error: Error?, contextInfo: UnsafeRawPointer) {
-        if let error = error {
-            updateStatus(text: "Capture Failed: \(error.localizedDescription)")
-        } else {
-            updateStatus(text: "Photosphere Saved!")
+        DispatchQueue.main.async {
+            if let error = error {
+                self.updateStatus(text: "Capture Failed: \(error.localizedDescription)")
+            } else {
+                self.updateStatus(text: "Photosphere Saved to Photos!")
+            }
         }
     }
 
