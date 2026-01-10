@@ -198,21 +198,52 @@ captureBtn.addEventListener('click', () => {
 
 // Helper to download file from MEMFS
 function downloadFromMemFS(filename) {
-    if (!slamModule) return;
+    if (!slamModule) {
+        console.error("slamModule not initialized");
+        alert("SLAM Module not initialized. Cannot download.");
+        return;
+    }
     try {
-        const content = slamModule.FS.readFile(filename);
+        let content = null;
+        let finalName = filename;
+
+        // Try exact name
+        try {
+            content = slamModule.FS.readFile(finalName);
+        } catch (e) {
+            // Not found, try extensions if missing
+            if (!finalName.endsWith('.png') && !finalName.endsWith('.jpg')) {
+                 try {
+                     finalName = filename + ".png";
+                     content = slamModule.FS.readFile(finalName);
+                 } catch (e2) {
+                     try {
+                        finalName = filename + ".jpg";
+                        content = slamModule.FS.readFile(finalName);
+                     } catch(e3) {
+                         throw e; // Rethrow original error if fallback fails
+                     }
+                 }
+            } else {
+                throw e; // Extension was present but file not found
+            }
+        }
+
+        // If content is still null (should be caught above, but safety check)
+        if (!content) throw new Error("File not found in MEMFS");
+
         const blob = new Blob([content], {type: 'application/octet-stream'});
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = filename;
+        link.download = finalName;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
     } catch(e) {
         console.error("Failed to download " + filename, e);
-        alert("Failed to download " + filename);
+        alert("Failed to download " + filename + ". See console for details.");
     }
 }
 
