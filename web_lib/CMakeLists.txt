@@ -79,11 +79,12 @@ target_link_libraries(sphereslam_web
     opencv_core
 
     # 3rd Party Dependencies (OpenCV built-ins)
-    libopenjp2 # For JPEG2000 support in imgcodecs
-    libjpeg    # For JPEG support
-    libpng     # For PNG support
-    libwebp    # For WebP support
-    z          # ZLib (might link system or OpenCV's libz)
+    # Note: OpenCV often names them liblibjpeg.a, libzlib.a, etc. in static builds.
+    libopenjp2
+    liblibjpeg
+    liblibpng
+    liblibwebp
+    libzlib
 )
 
 # Emscripten Linker Flags
