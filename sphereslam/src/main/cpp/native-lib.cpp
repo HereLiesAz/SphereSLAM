@@ -9,6 +9,7 @@
 #include <opencv2/core.hpp>
 
 #include "SLAM/System.h"
+#include "SLAM/KeyFrame.h"
 #include "VulkanCompute.h"
 #include "DepthAnyCamera.h"
 #include "MobileGS.h"
@@ -43,6 +44,9 @@ Java_com_hereliesaz_sphereslam_SphereSLAM_initNative(JNIEnv* env, jobject thiz, 
     const char *path = env->GetStringUTFChars(cacheDir, 0);
     std::string strCacheDir(path);
     env->ReleaseStringUTFChars(cacheDir, path);
+
+    // Set KeyFrame Cache Directory
+    KeyFrame::msCacheDir = strCacheDir;
 
     // Initialize Platform Layer
     platformAndroid = new PlatformAndroid(mgr, g_vm);

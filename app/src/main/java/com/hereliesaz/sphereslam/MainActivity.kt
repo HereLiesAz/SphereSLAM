@@ -248,6 +248,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     }
 
     private fun capturePhotosphere() {
+        Toast.makeText(this, "Stitching Photosphere... This may take a moment.", Toast.LENGTH_SHORT).show()
         lifecycleScope.launch {
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
 
@@ -273,12 +274,16 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
                 copyCacheContents(destDir)
 
                 // 3. Capture Visual Photosphere (Native)
+                // This now stitches all KeyFrames if not in CubeMap mode (Photosphere Creator)
                 val photosphereFile = File(destDir, PHOTOSPHERE_FILE_NAME)
                 sphereSLAM.savePhotosphere(photosphereFile.absolutePath)
             }
 
             // 4. Capture Visual Preview (Screenshot)
             captureScreenshot(destDir)
+
+            // Notify user
+            Toast.makeText(this@MainActivity, "Photosphere Saved!", Toast.LENGTH_LONG).show()
         }
     }
 

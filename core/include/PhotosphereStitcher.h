@@ -4,6 +4,8 @@
 #include <opencv2/core.hpp>
 #include <vector>
 
+class KeyFrame;
+
 class PhotosphereStitcher {
 public:
     /**
@@ -15,6 +17,16 @@ public:
      * @return true if successful.
      */
     static bool StitchCubeMap(const std::vector<cv::Mat>& faces, cv::Mat& outputEqui);
+
+    /**
+     * @brief Stitches a set of KeyFrames into an equirectangular panorama.
+     * This allows creating a photosphere from a monocular SLAM session (Mosaic).
+     *
+     * @param vpKFs Vector of KeyFrames (must have stored images and poses).
+     * @param outputEqui Reference to output equirectangular image.
+     * @return true if successful.
+     */
+    static bool StitchKeyFrames(const std::vector<KeyFrame*>& vpKFs, cv::Mat& outputEqui);
 };
 
 #endif // PHOTOSPHERE_STITCHER_H
