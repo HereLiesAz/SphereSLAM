@@ -186,6 +186,6 @@ bool PhotosphereStitcher::StitchCubeMap(const std::vector<cv::Mat>& faces, cv::M
     cv::Mat result, result_mask;
     blender.blend(result, result_mask);
 
-    result.convertTo(outputEqui, CV_8U);
+    result.convertTo(outputEqui, CV_8UC3);
     return true;
 }
