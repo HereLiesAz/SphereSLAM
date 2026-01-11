@@ -197,28 +197,45 @@ void System::SaveTrajectoryTUM(const std::string &filename) {
 }
 
 void System::SavePhotosphere(const std::string &filename) {
+    bool bUseCubeMap = false;
     std::vector<cv::Mat> faces;
+
+    // 1. Try to use CubeMap faces (if available and valid)
     {
         std::unique_lock<std::mutex> lock(mMutexFaces);
-        if (mLastFaces.size() != 6) {
-            if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "No CubeMap faces available.");
-            return;
-        }
-        for (const auto& f : mLastFaces) {
-            if (f.empty()) {
-                if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "One of the CubeMap faces is empty.");
-                return;
+        if (mLastFaces.size() == 6) {
+            bool allValid = true;
+            for (const auto& f : mLastFaces) {
+                if (f.empty()) {
+                    allValid = false;
+                    break;
+                }
             }
-            faces.push_back(f.clone());
+            if (allValid) {
+                for (const auto& f : mLastFaces) {
+                    faces.push_back(f.clone());
+                }
+                bUseCubeMap = true;
+            }
         }
     }
 
-    // Use Real Photosphere Stitcher
     cv::Mat equiImg;
-    bool stitched = PhotosphereStitcher::StitchCubeMap(faces, equiImg);
+    bool stitched = false;
+
+    if (bUseCubeMap) {
+        // Use Real Photosphere Stitcher for CubeMap
+        if (mpPlatform) mpPlatform->Log(LogLevel::INFO, "System", "Stitching Photosphere from CubeMap...");
+        stitched = PhotosphereStitcher::StitchCubeMap(faces, equiImg);
+    } else {
+        // 2. Fallback: Create Photosphere from KeyFrames (Monocular Mosaic)
+        if (mpPlatform) mpPlatform->Log(LogLevel::INFO, "System", "Stitching Photosphere from KeyFrames (Mosaic Mode)...");
+        std::vector<KeyFrame*> vpKFs = mpMap->GetAllKeyFrames();
+        stitched = PhotosphereStitcher::StitchKeyFrames(vpKFs, equiImg);
+    }
 
     if (!stitched || equiImg.empty()) {
-        if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "Failed to stitch photosphere.");
+        if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "Failed to stitch photosphere (No CubeMap and No KeyFrames).");
         return;
     }
 

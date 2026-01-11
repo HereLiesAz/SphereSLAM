@@ -31,6 +31,13 @@ public:
     // Pose
     cv::Mat mTcw;
 
+    // Intrinsics (Cached for Photosphere Stitching)
+    cv::Mat mK;
+
+    // Source Images (Filenames in Cache) - Avoid OOM
+    std::vector<std::string> mImgFilenames;
+    static std::string msCacheDir;
+
     // MapPoints
     std::vector<MapPoint*> mvpMapPoints;
 

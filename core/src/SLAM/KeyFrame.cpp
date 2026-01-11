@@ -1,10 +1,37 @@
 #include "KeyFrame.h"
 
+// Initialize static member
+std::string KeyFrame::msCacheDir = "";
+
+#include <opencv2/imgcodecs.hpp>
+#include <iostream>
+
 KeyFrame::KeyFrame(Frame &F, Map* pMap, KeyFrameDatabase* pKFDB)
     : mnFrameId(F.mnId), mTimeStamp(F.mTimeStamp), mpMap(pMap)
 {
     mnId = F.mnId; // Using same ID for simplicity in blueprint
     mTcw = F.mTcw.clone();
+
+    // Store Images to Disk to prevent OOM
+    if (!msCacheDir.empty()) {
+        for(size_t i=0; i<F.mImgs.size(); ++i) {
+            std::stringstream ss;
+            ss << "kf_" << mnId << "_" << i << ".jpg";
+            std::string filename = ss.str();
+            std::string fullPath = msCacheDir + "/" + filename;
+
+            if (cv::imwrite(fullPath, F.mImgs[i])) {
+                mImgFilenames.push_back(filename);
+            } else {
+                std::cerr << "KeyFrame: Failed to save image " << fullPath << std::endl;
+            }
+        }
+    }
+
+    // Store Intrinsics
+    if (F.mpCamera) {
+        mK = F.mpCamera->GetK();
+    }
 
     mvpMapPoints = std::vector<MapPoint*>(F.N, nullptr);
 }
