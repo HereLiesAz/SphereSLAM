@@ -23,12 +23,16 @@ if(DEFINED OPENCV_DIR)
     message(STATUS "Web Build: OPENCV_DIR is set to ${OPENCV_DIR}. Resolved to ${OPENCV_ABS}. Using provided headers for compilation.")
 
     # Verify that the OpenCV configuration file exists before proceeding
-    if(NOT EXISTS "${OPENCV_ABS}/OpenCVConfig.cmake" AND NOT EXISTS "${OPENCV_ABS}/lib/cmake/opencv4/OpenCVConfig.cmake")
+    if(EXISTS "${OPENCV_ABS}/OpenCVConfig.cmake")
+        set(OpenCV_DIR "${OPENCV_ABS}")
+    elseif(EXISTS "${OPENCV_ABS}/lib/cmake/opencv4/OpenCVConfig.cmake")
+        set(OpenCV_DIR "${OPENCV_ABS}/lib/cmake/opencv4")
+    else()
         message(FATAL_ERROR "OpenCV configuration file not found in ${OPENCV_ABS}. Please run 'bash scripts/build_opencv_wasm.sh' from the project root to build the required OpenCV Wasm libraries.")
     endif()
 
     # Use find_package to locate OpenCV and its dependencies
-    find_package(OpenCV REQUIRED PATHS "${OPENCV_ABS}" NO_DEFAULT_PATH)
+    find_package(OpenCV REQUIRED PATHS "${OpenCV_DIR}" NO_DEFAULT_PATH)
     message(STATUS "Found OpenCV: ${OpenCV_LIBS}")
     include_directories(${OpenCV_INCLUDE_DIRS})
 
@@ -41,11 +45,15 @@ else()
         message(STATUS "Web Build: OPENCV_DIR not set. Defaulting to ${DEFAULT_OPENCV_PATH}.")
 
          # Verify that the OpenCV configuration file exists before proceeding
-        if(NOT EXISTS "${DEFAULT_OPENCV_PATH}/OpenCVConfig.cmake" AND NOT EXISTS "${DEFAULT_OPENCV_PATH}/lib/cmake/opencv4/OpenCVConfig.cmake")
+        if(EXISTS "${DEFAULT_OPENCV_PATH}/OpenCVConfig.cmake")
+            set(OpenCV_DIR "${DEFAULT_OPENCV_PATH}")
+        elseif(EXISTS "${DEFAULT_OPENCV_PATH}/lib/cmake/opencv4/OpenCVConfig.cmake")
+            set(OpenCV_DIR "${DEFAULT_OPENCV_PATH}/lib/cmake/opencv4")
+        else()
             message(FATAL_ERROR "OpenCV configuration file not found in ${DEFAULT_OPENCV_PATH}. Please run 'bash scripts/build_opencv_wasm.sh' from the project root to build the required OpenCV Wasm libraries.")
         endif()
 
-        find_package(OpenCV REQUIRED PATHS "${DEFAULT_OPENCV_PATH}" NO_DEFAULT_PATH)
+        find_package(OpenCV REQUIRED PATHS "${OpenCV_DIR}" NO_DEFAULT_PATH)
         message(STATUS "Found OpenCV: ${OpenCV_LIBS}")
         include_directories(${OpenCV_INCLUDE_DIRS})
     else()
