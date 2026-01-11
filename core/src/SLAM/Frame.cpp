@@ -17,6 +17,9 @@ Frame::Frame(const cv::Mat &imGray, const double &timeStamp, ORBextractor* extra
 {
     mnId = nNextId++;
 
+    // Store Image
+    mImgs.push_back(imGray.clone());
+
     // Single image case
     std::vector<cv::KeyPoint> keys;
     cv::Mat descriptors;
@@ -33,6 +36,11 @@ Frame::Frame(const std::vector<cv::Mat> &faceImgs, const double &timeStamp, ORBe
 {
     mnId = nNextId++;
     N = 0;
+
+    // Store Images
+    for(const auto& img : faceImgs) {
+        mImgs.push_back(img.clone());
+    }
 
     // Extract features for each face
     for (size_t i = 0; i < faceImgs.size(); ++i) {

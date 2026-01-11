@@ -9,7 +9,7 @@
 *   **Vulkan Compute:** GPU-accelerated conversion of Equirectangular images to CubeMap faces.
 *   **Neural Depth:** Integration structure for **Depth Any Camera (DAC)** foundation models (TFLite) for zero-shot metric scale recovery.
 *   **Mobile Gaussian Splatting:** Real-time visualization using a lightweight 3D Gaussian Splatting renderer (`MobileGS`).
-*   **Photosphere Capture:** Capture 360-degree environment maps (as PPM files) from the SLAM system in all supported platforms.
+*   **Photosphere Creator:** Create high-quality Equirectangular Panoramas from Monocular SLAM sessions (Mosaicing) or 360 cameras.
 *   **Map Persistence:** Robust Save/Load functionality for SLAM maps (Poses and Sparse Point Cloud), with Android UI integration.
 *   **Cross-Platform Core:** Shared C++ core (`core/`) used by Android, iOS, and Web modules.
 
@@ -89,6 +89,13 @@ override fun doFrame(frameTimeNanos: Long) {
 }
 ```
 
+#### 4. Create Photosphere
+To create a stitched photosphere from the current session (Monocular Mosaic):
+```kotlin
+// Will stitch all KeyFrames into a single Equirectangular image
+sphereSLAM.savePhotosphere(filePath)
+```
+
 ### Web (Experimental)
 
 The web module uses Emscripten to compile the core C++ logic to WebAssembly. It supports:
@@ -118,6 +125,7 @@ See `ios_app/` for the Xcode project structure.
 | **Android Frontend** | Kotlin | Handles Camera2 API, IMU Sensors, Permissions, and UI. |
 | **JNI Bridge** | C++ | Bridges Java calls to the native System controller. |
 | **SLAM Core** | C++ | `System`, `Tracking`, `LocalMapping`, `LoopClosing`. Implements the sparse tracking and mapping logic. |
+| **PhotosphereStitcher**| C++ | Stitches KeyFrames or CubeMap faces into Equirectangular Panoramas. |
 | **VulkanCompute** | C++/GLSL | Handles GPU image transformations. |
 | **MobileGS** | C++/GLES | Renders the 3D Gaussian Splats to a `SurfaceView`. |
 

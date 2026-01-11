@@ -45,6 +45,9 @@ public:
     // Pose (World to Camera)
     cv::Mat mTcw;
 
+    // Source Images (Color) - Stored for Photosphere Creation
+    std::vector<cv::Mat> mImgs;
+
 private:
     ORBextractor* mpORBextractor;
 };
