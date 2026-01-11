@@ -13,14 +13,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-release:
+  android-build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       issues: write
       pull-requests: write
-      checks: read
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -68,9 +66,6 @@ jobs:
           cat build.log
           exit $EXIT_CODE
 
-      # ------------------------------------------------------------------
-      # FAILURE HANDLING
-      # ------------------------------------------------------------------
       - name: Report Failure to Jules
         if: failure() && steps.gradle-build.outcome == 'failure'
         uses: actions/github-script@v7
@@ -103,9 +98,18 @@ jobs:
               });
             }
 
-      # ------------------------------------------------------------------
-      # WEB BUILD VERIFICATION
-      # ------------------------------------------------------------------
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/*.apk
+
+  web-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
         with:
@@ -124,11 +128,25 @@ jobs:
           emcmake cmake .. -DOPENCV_DIR=../../libs/opencv-wasm
           emmake make
 
-      # ------------------------------------------------------------------
-      # RELEASE STEPS (Only run on PUSH, not Pull Requests)
-      # ------------------------------------------------------------------
+  release:
+    needs: android-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: github.event_name == 'push'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download APK Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug
+
       - name: Prepare Release Variables
-        if: success() && github.event_name == 'push'
         id: release_vars
         run: |
           export BUILD_NUMBER=$(git rev-list --count HEAD)
@@ -175,13 +193,23 @@ jobs:
           echo "APK_FILE=$TARGET_NAME" >> $GITHUB_ENV
           
           # Package Build Tools (Optional)
+          # Note: We need to reconstruct this part or upload these as artifacts too if we want them in release.
+          # The previous job "android-build" had access to src/main/assets and jniLibs.
+          # "release" job has checked out source, so it has assets.
+          # But it doesn't have the built native libs unless we build them or download them.
+          # The jniLibs in app/src/main/jniLibs are pre-built or source?
+          # If they are source, we have them. If they are build output, we don't.
+          # The script copies from "app/src/main/jniLibs/arm64-v8a". This is usually where imported libs are.
+          # So checking out source should be enough if they are committed.
+          # If they are generated during build, we miss them.
+          # Assuming they are in source control or fetched.
+
           mkdir -p build_tools_package/tools build_tools_package/native
           [ -d "app/src/main/assets/tools" ] && cp -r app/src/main/assets/tools/* build_tools_package/tools/ || true
           [ -d "app/src/main/jniLibs/arm64-v8a" ] && cp -r app/src/main/jniLibs/arm64-v8a/* build_tools_package/native/ || true
           cd build_tools_package && zip -r ../build-tools.zip . && cd ..
 
       - name: Publish Release
-        if: success() && github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
