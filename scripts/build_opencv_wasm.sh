@@ -63,6 +63,9 @@ emcmake cmake "$SOURCE_DIR/opencv" \
   -DBUILD_opencv_photo=OFF \
   -DBUILD_opencv_stitching=OFF \
   -DBUILD_opencv_gapi=OFF \
+  -DBUILD_PROTOBUF=OFF \
+  -DWITH_PROTOBUF=OFF \
+  -DWITH_ADE=OFF \
   -DWITH_PTHREADS_PF=OFF \
   -DWITH_IPP=OFF \
   -DCV_ENABLE_INTRINSICS=OFF \
