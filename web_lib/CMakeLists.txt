@@ -21,21 +21,23 @@ if(DEFINED OPENCV_DIR)
     endif()
 
     message(STATUS "Web Build: OPENCV_DIR is set to ${OPENCV_DIR}. Resolved to ${OPENCV_ABS}. Using provided headers for compilation.")
-    include_directories(${OPENCV_ABS}/include/opencv4)
-    link_directories(${OPENCV_ABS}/lib)
-    # Add common locations for 3rdparty static libs in OpenCV static builds
-    link_directories(${OPENCV_ABS}/lib/opencv4/3rdparty)
-    link_directories(${OPENCV_ABS}/share/OpenCV/3rdparty/lib)
+
+    # Use find_package to locate OpenCV and its dependencies
+    find_package(OpenCV REQUIRED PATHS "${OPENCV_ABS}" NO_DEFAULT_PATH)
+    message(STATUS "Found OpenCV: ${OpenCV_LIBS}")
+    include_directories(${OpenCV_INCLUDE_DIRS})
+
 else()
     # Fallback to hardcoded path if OPENCV_DIR is not set
     # Assuming standard project structure if not provided
     set(DEFAULT_OPENCV_PATH "${CMAKE_SOURCE_DIR}/../libs/opencv-wasm")
     if(EXISTS "${DEFAULT_OPENCV_PATH}")
         message(STATUS "Web Build: OPENCV_DIR not set. Defaulting to ${DEFAULT_OPENCV_PATH}.")
-        include_directories(${DEFAULT_OPENCV_PATH}/include/opencv4)
-        link_directories(${DEFAULT_OPENCV_PATH}/lib)
-        link_directories(${DEFAULT_OPENCV_PATH}/lib/opencv4/3rdparty)
-        link_directories(${DEFAULT_OPENCV_PATH}/share/OpenCV/3rdparty/lib)
+        find_package(OpenCV REQUIRED PATHS "${DEFAULT_OPENCV_PATH}" NO_DEFAULT_PATH)
+        message(STATUS "Found OpenCV: ${OpenCV_LIBS}")
+        include_directories(${OpenCV_INCLUDE_DIRS})
+    else()
+        message(FATAL_ERROR "OPENCV_DIR not set and default path ${DEFAULT_OPENCV_PATH} does not exist.")
     endif()
 endif()
 
@@ -48,34 +50,8 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/../core/Thirdparty/glm
 )
 
-# Emscripten specific flags
-# We rely on OpenCV's built-in static libraries for PNG, ZLIB, JPEG, etc.
-# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -s USE_LIBPNG=1 -s USE_ZLIB=1")
-# set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s USE_LIBPNG=1 -s USE_ZLIB=1")
-
 # Core Sources
 file(GLOB_RECURSE CORE_SOURCES "${CMAKE_SOURCE_DIR}/../core/src/SLAM/*.cpp")
-
-# Find 3rd Party Libraries
-set(CV_3RD_PARTY_PATH "${OPENCV_ABS}/lib/opencv4/3rdparty")
-set(CV_3RD_PARTY_PATH_2 "${OPENCV_ABS}/share/OpenCV/3rdparty/lib")
-set(CV_3RD_PARTY_PATH_3 "${OPENCV_ABS}/lib")
-
-macro(find_cv_lib VAR NAMES)
-    find_library(${VAR} NAMES ${NAMES} PATHS ${CV_3RD_PARTY_PATH} ${CV_3RD_PARTY_PATH_2} ${CV_3RD_PARTY_PATH_3} NO_DEFAULT_PATH)
-    # Check for empty or NOTFOUND explicitly
-    if(NOT ${VAR} OR "${${VAR}}" MATCHES "NOTFOUND")
-        message(WARNING "Could not find library: ${NAMES} in paths:\n  ${CV_3RD_PARTY_PATH}\n  ${CV_3RD_PARTY_PATH_2}\n  ${CV_3RD_PARTY_PATH_3}")
-    else()
-        message(STATUS "Found ${NAMES}: ${${VAR}}")
-    endif()
-endmacro()
-
-find_cv_lib(LIB_OPENJP2 "liblibopenjp2;libopenjp2;openjp2")
-find_cv_lib(LIB_JPEG    "liblibjpeg-turbo;liblibjpeg;libjpeg-turbo;libjpeg;jpeg")
-find_cv_lib(LIB_PNG     "liblibpng;libpng;png")
-find_cv_lib(LIB_WEBP    "liblibwebp;libwebp;webp")
-find_cv_lib(LIB_Z       "libz;z;zlib")
 
 # Define sources explicitly to ensure CMake picks them up
 set(WEB_SOURCES
@@ -92,20 +68,7 @@ add_executable(sphereslam_web ${WEB_SOURCES})
 # Link OpenCV Static Libraries (Order matters!)
 # Emscripten usually compiles to .a
 target_link_libraries(sphereslam_web
-    opencv_calib3d
-    opencv_features2d
-    opencv_flann
-    opencv_imgcodecs
-    opencv_imgproc
-    opencv_core
-
-    # 3rd Party Dependencies (OpenCV built-ins)
-    # Use find_library to handle naming inconsistencies (libjpeg.a vs liblibjpeg.a)
-    ${LIB_OPENJP2}
-    ${LIB_JPEG}
-    ${LIB_PNG}
-    ${LIB_WEBP}
-    ${LIB_Z}
+    ${OpenCV_LIBS}
 )
 
 # Emscripten Linker Flags
