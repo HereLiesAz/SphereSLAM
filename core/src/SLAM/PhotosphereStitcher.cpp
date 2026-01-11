@@ -7,8 +7,8 @@
 #include <iostream>
 
 bool PhotosphereStitcher::StitchCubeMap(const std::vector<cv::Mat>& faces, cv::Mat& outputEqui) {
-    if (faces.size() != 6) {
-        std::cerr << "PhotosphereStitcher: Expected 6 faces, got " << faces.size() << std::endl;
+    if (faces.size() != 6 || faces[0].empty()) {
+        std::cerr << "PhotosphereStitcher: Expected 6 non-empty faces, but got " << faces.size() << std::endl;
         return false;
     }
 
@@ -39,9 +39,6 @@ bool PhotosphereStitcher::StitchCubeMap(const std::vector<cv::Mat>& faces, cv::M
     // Output size: 4*w x 2*w (standard equirectangular 2:1)
     int outW = 4 * w;
     int outH = 2 * w;
-
-    cv::Mat mapX(outH, outW, CV_32F);
-    cv::Mat mapY(outH, outW, CV_32F);
 
     // Prepare separate maps for each face to minimize branching in loop?
     // No, standard remap requires one map per source image.
@@ -159,31 +156,28 @@ bool PhotosphereStitcher::StitchCubeMap(const std::vector<cv::Mat>& faces, cv::M
     // [ 1  0  0]
     Rs[1] = (cv::Mat_<float>(3,3) << 0,0,-1, 0,1,0, 1,0,0);
 
-    // Face 2 (Top): Points Z to -Y (opencv Y is Down). So Rotate X by -90?
-    // [ 1  0  0]
-    // [ 0  0  1]
-    // [ 0 -1  0]
-    Rs[2] = (cv::Mat_<float>(3,3) << 1,0,0, 0,0,1, 0,-1,0);
-
-    // Face 3 (Bottom): Points Z to +Y. Rotate X by +90.
+    // Face 2 (Top): Points Z to -Y (up). Rotate X by -90.
     // [ 1  0  0]
     // [ 0  0 -1]
     // [ 0  1  0]
-    Rs[3] = (cv::Mat_<float>(3,3) << 1,0,0, 0,0,-1, 0,1,0);
+    Rs[2] = (cv::Mat_<float>(3,3) << 1,0,0, 0,0,-1, 0,1,0);
+
+    // Face 3 (Bottom): Points Z to +Y (down). Rotate X by +90.
+    // [ 1  0  0]
+    // [ 0  0  1]
+    // [ 0 -1  0]
+    Rs[3] = (cv::Mat_<float>(3,3) << 1,0,0, 0,0,1, 0,-1,0);
 
     // Blend Loop
     for (int i = 0; i < 6; ++i) {
         if(faces[i].empty()) continue;
 
-        cv::Mat K_face = K.clone();
-        cv::Mat R_face = Rs[i];
-
         // Warp
         cv::Mat warped_img;
         cv::Mat mask = cv::Mat::ones(faces[i].size(), CV_8U) * 255;
         cv::Mat warped_mask;
-        cv::Point tl = warper->warp(faces[i], K_face, R_face, cv::INTER_CUBIC, 0, warped_img);
-        warper->warp(mask, K_face, R_face, cv::INTER_NEAREST, 0, warped_mask);
+        cv::Point tl = warper->warp(faces[i], K, Rs[i], cv::INTER_CUBIC, 0, warped_img);
+        warper->warp(mask, K, Rs[i], cv::INTER_NEAREST, 0, warped_mask);
 
         // Feed to Blender
         blender.feed(warped_img, warped_mask, tl);
@@ -192,6 +186,6 @@ bool PhotosphereStitcher::StitchCubeMap(const std::vector<cv::Mat>& faces, cv::M
     cv::Mat result, result_mask;
     blender.blend(result, result_mask);
 
-    result.convertTo(outputEqui, CV_8U);
+    result.convertTo(outputEqui, CV_8UC3);
     return true;
 }
