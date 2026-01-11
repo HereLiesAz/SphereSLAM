@@ -37,3 +37,5 @@ google-services.json
 scripts/private.key
 libs/opencv-4.12.0
 libs/litert_sdk/
+libs/opencv-wasm/
+libs/opencv-source/

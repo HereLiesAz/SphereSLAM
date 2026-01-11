@@ -1,32 +1,43 @@
 #!/bin/bash
 set -e
 
-# Define installation path
-INSTALL_DIR="$(pwd)/libs/opencv-wasm"
+# Check for emcmake
+if ! command -v emcmake &> /dev/null; then
+    echo "Error: emcmake is not found. Please ensure the Emscripten SDK is activated."
+    echo "Try: source path/to/emsdk/emsdk_env.sh"
+    exit 1
+fi
 
-# Force rebuild to ensure new flags are applied and libraries are present
-rm -rf "$INSTALL_DIR"
+# Define paths
+SOURCE_DIR="$(pwd)/libs/opencv-source"
+INSTALL_DIR="$(pwd)/libs/opencv-wasm"
 
 echo "Building OpenCV for WebAssembly..."
 
-# Create temp build directories
-mkdir -p build_opencv_wasm_temp
-cd build_opencv_wasm_temp
+# Create source directory if it doesn't exist
+mkdir -p "$SOURCE_DIR"
 
-# Clone OpenCV
-if [ ! -d "opencv" ]; then
+# Clean install directory to ensure a fresh build artifact
+rm -rf "$INSTALL_DIR"
+
+# Clone OpenCV if not present in the persistent source directory
+if [ ! -d "$SOURCE_DIR/opencv" ]; then
   echo "Cloning OpenCV 4.12.0..."
-  git clone --depth 1 --branch 4.12.0 https://github.com/opencv/opencv.git
+  git clone --depth 1 --branch 4.12.0 https://github.com/opencv/opencv.git "$SOURCE_DIR/opencv"
 fi
 
-mkdir -p build
-cd build
+# Create and enter build directory
+BUILD_DIR="$SOURCE_DIR/build"
+mkdir -p "$BUILD_DIR"
+cd "$BUILD_DIR"
+
+# Clean build directory contents to ensure cmake runs fresh
+rm -rf *
 
 # Configure CMake
 # We disable as much as possible to keep build time low and artifact size small.
-# We need: core, features2d, imgproc, calib3d, flann, imgcodecs.
 echo "Configuring OpenCV..."
-emcmake cmake ../opencv \
+emcmake cmake "$SOURCE_DIR/opencv" \
   -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
   -DBUILD_SHARED_LIBS=OFF \
   -DBUILD_opencv_apps=OFF \
@@ -71,10 +82,6 @@ emmake make -j$(nproc)
 # Install
 echo "Installing OpenCV..."
 emmake make install
-
-# Cleanup
-cd ../..
-rm -rf build_opencv_wasm_temp
 
 echo "OpenCV Wasm build complete."
 echo "Listing installed libraries:"
