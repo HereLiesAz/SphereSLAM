@@ -1,6 +1,7 @@
 #include "System.h"
 #include "Settings.h"
 #include "ORBVocabulary.h"
+#include "PhotosphereStitcher.h"
 #include <iostream>
 #include <fstream>
 #include <iomanip>
@@ -212,68 +213,13 @@ void System::SavePhotosphere(const std::string &filename) {
         }
     }
 
-    CubeMapCamera* pCubeCam = dynamic_cast<CubeMapCamera*>(mpCamera);
-    if (!pCubeCam) {
-        if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "Camera is not a CubeMapCamera.");
+    // Use Real Photosphere Stitcher
+    cv::Mat equiImg;
+    bool stitched = PhotosphereStitcher::StitchCubeMap(faces, equiImg);
+
+    if (!stitched || equiImg.empty()) {
+        if (mpPlatform) mpPlatform->Log(LogLevel::ERROR, "System", "Failed to stitch photosphere.");
         return;
-    }
-
-    // Create Equirectangular Image
-    // Width = 2 * Height. For 512 faces, let's use 2048x1024 or 1024x512.
-    int outW = 2048;
-    int outH = 1024;
-    cv::Mat equiImg(outH, outW, CV_8UC3);
-
-    const float PI = 3.14159265358979323846f;
-
-    for (int v = 0; v < outH; ++v) {
-        for (int u = 0; u < outW; ++u) {
-            // Normalized UV [0,1]
-            float uf = (float)u / outW;
-            float vf = (float)v / outH;
-
-            // Longitude (phi) [-PI, PI], Latitude (theta) [-PI/2, PI/2]
-            float phi = (uf - 0.5f) * 2.0f * PI;
-            float theta = -(vf - 0.5f) * PI; // Y-Down convention
-
-            // Spherical to Cartesian (Camera Frame)
-            // Should match Densifier convention
-            float cosTheta = cos(theta);
-            float sinTheta = sin(theta);
-            float cosPhi = cos(phi);
-            float sinPhi = sin(phi);
-
-            // Unit Vector
-            float x = cosTheta * sinPhi;
-            float y = -sinTheta;
-            float z = cosTheta * cosPhi;
-
-            cv::Point3f p3D(x, y, z);
-
-            // Project to CubeMap Face
-            int faceIdx = pCubeCam->GetFace(p3D);
-            if (faceIdx < 0 || faceIdx >= 6) continue;
-
-            cv::Point2f uv = pCubeCam->Project(p3D);
-
-            // Sample
-            int x_face = (int)uv.x;
-            int y_face = (int)uv.y;
-
-            // Bounds check
-            const cv::Mat& faceImg = faces[faceIdx];
-            if (x_face >= 0 && x_face < faceImg.cols && y_face >= 0 && y_face < faceImg.rows) {
-                // Determine input type (Gray or Color)
-                if (faceImg.channels() == 3) {
-                    equiImg.at<cv::Vec3b>(v, u) = faceImg.at<cv::Vec3b>(y_face, x_face);
-                } else if (faceImg.channels() == 1) {
-                    uchar gray = faceImg.at<uchar>(y_face, x_face);
-                    equiImg.at<cv::Vec3b>(v, u) = cv::Vec3b(gray, gray, gray);
-                }
-            } else {
-                equiImg.at<cv::Vec3b>(v, u) = cv::Vec3b(0, 0, 0);
-            }
-        }
     }
 
     std::string outputFilename = filename;

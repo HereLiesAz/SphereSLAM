@@ -51,6 +51,7 @@ add_library( # Sets the name of the library.
              ../../../../core/src/SLAM/Optimizer.cpp
              ../../../../core/src/SLAM/Settings.cpp
              ../../../../core/src/SLAM/Initializer.cpp
+             ../../../../core/src/SLAM/PhotosphereStitcher.cpp
              )
 
 # Searches for a specified prebuilt library and stores the path as a
