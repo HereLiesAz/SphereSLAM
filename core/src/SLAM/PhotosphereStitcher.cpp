@@ -1,5 +1,6 @@
 #include "PhotosphereStitcher.h"
 #include "SLAM/KeyFrame.h"
+#include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/stitching/detail/warpers.hpp>
 #include <opencv2/stitching/detail/blenders.hpp>
