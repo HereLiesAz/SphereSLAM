@@ -14,6 +14,8 @@ public:
                     cv::Mat &R21, cv::Mat &t21, std::vector<cv::Point3f> &vP3D,
                     std::vector<bool> &vbTriangulated);
 
+    const Frame& GetReferenceFrame() const { return mInitialFrame; }
+
 private:
     Frame mInitialFrame;
     float mSigma;
