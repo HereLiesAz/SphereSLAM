@@ -42,6 +42,7 @@ class SphereCameraManager(
         private const val TAG = "SphereCameraManager"
         private val TARGET_YUV_SIZE = Size(1280, 720)
         private const val MAX_JPEG_PIXELS = 4096 * 3072 // Limit to ~12MP for stability
+        private const val MAX_IMAGES = 5 // Increased to avoid "maxImages has already been acquired"
     }
 
     fun startBackgroundThread() {
@@ -96,20 +97,29 @@ class SphereCameraManager(
             Log.d(TAG, "Selected YUV size: $yuvSize, JPEG size: $jpegSize")
 
             imageReaderYUV?.close()
-            imageReaderYUV = ImageReader.newInstance(yuvSize.width, yuvSize.height, ImageFormat.YUV_420_888, 2)
+            imageReaderYUV = ImageReader.newInstance(yuvSize.width, yuvSize.height, ImageFormat.YUV_420_888, MAX_IMAGES)
             imageReaderYUV?.setOnImageAvailableListener({ reader ->
-                val image = try { reader.acquireLatestImage() } catch (e: Exception) { null }
-                if (image != null) {
-                    onImageAvailable(image)
+                try {
+                    val image = reader.acquireLatestImage()
+                    if (image != null) {
+                        onImageAvailable(image)
+                    }
+                } catch (e: IllegalStateException) {
+                    Log.e(TAG, "Too many images acquired from YUV Reader", e)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error acquiring YUV image", e)
                 }
             }, backgroundHandler)
 
             imageReaderJPEG?.close()
             imageReaderJPEG = ImageReader.newInstance(jpegSize.width, jpegSize.height, ImageFormat.JPEG, 2)
             imageReaderJPEG?.setOnImageAvailableListener({ reader ->
-                val image = try { reader.acquireLatestImage() } catch (e: Exception) { null }
-                // Process image for Photosphere capture if needed
-                image?.close()
+                try {
+                    val image = reader.acquireLatestImage()
+                    image?.close()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error acquiring/closing JPEG image", e)
+                }
             }, backgroundHandler)
 
             if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -159,6 +169,8 @@ class SphereCameraManager(
 
             val surfaces = mutableListOf<Surface>()
             if (yuvSurface?.isValid == true) surfaces.add(yuvSurface)
+            // Some devices fail if we have a JPEG surface in a regular session if not used properly.
+            // For now, let's keep it but handle configuration failures more gracefully.
             if (jpegSurface?.isValid == true) surfaces.add(jpegSurface)
 
             if (surfaces.isEmpty()) {
@@ -169,13 +181,9 @@ class SphereCameraManager(
             val sessionCallback = object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     val currentDevice = cameraDevice
-                    if (currentDevice == null) {
-                        Log.w(TAG, "CameraDevice is null in onConfigured")
-                        return
-                    }
+                    if (currentDevice == null) return
                     cameraCaptureSession = session
                     try {
-                        // Use TEMPLATE_PREVIEW instead of TEMPLATE_RECORD for better compatibility
                         val captureRequest = currentDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
                         imageReaderYUV?.surface?.let { if (it.isValid) captureRequest.addTarget(it) }
 
@@ -184,17 +192,18 @@ class SphereCameraManager(
 
                         session.setRepeatingRequest(captureRequest.build(), null, backgroundHandler)
                         Log.d(TAG, "Capture session configured and repeating request started")
-                    } catch (e: CameraAccessException) {
-                        Log.e(TAG, "Camera access exception during session config", e)
-                    } catch (e: IllegalStateException) {
-                        Log.e(TAG, "Session or device state error", e)
                     } catch (e: Exception) {
-                        Log.e(TAG, "Unexpected error in onConfigured", e)
+                        Log.e(TAG, "Error starting repeating request", e)
                     }
                 }
 
                 override fun onConfigureFailed(session: CameraCaptureSession) {
                     Log.e(TAG, "Configuration failed: Failed to create capture session")
+                    // If it fails with both, try YUV only as a fallback
+                    if (surfaces.size > 1) {
+                        Log.w(TAG, "Retrying with YUV surface only...")
+                        createYuvOnlySession()
+                    }
                 }
 
                 override fun onClosed(session: CameraCaptureSession) {
@@ -218,12 +227,34 @@ class SphereCameraManager(
                 device.createCaptureSession(surfaces, sessionCallback, backgroundHandler)
             }
 
-        } catch (e: CameraAccessException) {
-            Log.e(TAG, "Camera access exception in createCameraPreviewSession", e)
-        } catch (e: IllegalArgumentException) {
-            Log.e(TAG, "Invalid surfaces provided to createCaptureSession", e)
         } catch (e: Exception) {
             Log.e(TAG, "Unexpected error creating session", e)
+        }
+    }
+
+    private fun createYuvOnlySession() {
+        val device = cameraDevice ?: return
+        val yuvSurface = imageReaderYUV?.surface ?: return
+        if (!yuvSurface.isValid) return
+
+        try {
+            val surfaces = listOf(yuvSurface)
+            device.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
+                override fun onConfigured(session: CameraCaptureSession) {
+                    cameraCaptureSession = session
+                    try {
+                        val request = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                        request.addTarget(yuvSurface)
+                        session.setRepeatingRequest(request.build(), null, backgroundHandler)
+                        Log.d(TAG, "YUV-only session configured")
+                    } catch (e: Exception) { Log.e(TAG, "Error in YUV-only session", e) }
+                }
+                override fun onConfigureFailed(session: CameraCaptureSession) {
+                    Log.e(TAG, "YUV-only configuration failed")
+                }
+            }, backgroundHandler)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error creating YUV-only session", e)
         }
     }
 
