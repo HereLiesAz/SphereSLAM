@@ -10,12 +10,14 @@ import kotlin.math.sqrt
  * Reconstructed LightCycleTargetManager (The "Blue Dot" System).
  * Manages the augmented reality targets (Blue Dots) for spherical capture.
  * Uses a Fibonacci Lattice to distribute points evenly on a sphere.
+ * 
+ * Logic strictly follows the reconstruction of Google's LightCycle engine.
  */
 class LightCycleTargetManager(numTargets: Int) {
 
     companion object {
         // The Golden Ratio
-        private const val PHI = 1.618033988749895 // (1.0 + Math.sqrt(5.0)) / 2.0
+        private const val PHI = 1.618033988749895 
         
         // Threshold to trigger auto-capture (approx 3 degrees)
         private const val CAPTURE_THRESHOLD_RAD = 0.052f 
@@ -31,19 +33,19 @@ class LightCycleTargetManager(numTargets: Int) {
 
     /**
      * Generates target points using the Fibonacci Sphere algorithm.
-     * Math: lat = arccos(2i/N), lon = 2*pi*i / PHI
+     * Aligns the vertical axis of the Fibonacci spiral with the World Z axis (Up).
      */
     private fun generateFibonacciSphere(n: Int) {
         for (i in 0 until n) {
-            // Map i to range [-1, 1]
-            val y = 1.0f - (i / (n - 1).toFloat()) * 2.0f
-            val radius = sqrt(1.0f - y * y)
+            // Fibonacci vertical component (range -1 to 1)
+            val z = 1.0f - (i / (n - 1).toFloat()) * 2.0f
+            val radius = sqrt(1.0f - z * z)
             val theta = (2.0 * Math.PI * i / PHI).toFloat()
 
             val x = (cos(theta.toDouble()) * radius).toFloat()
-            val z = (sin(theta.toDouble()) * radius).toFloat()
+            val y = (sin(theta.toDouble()) * radius).toFloat()
 
-            // Store vector (x, y, z)
+            // World coordinates: Z is up.
             mTargetVectors.add(floatArrayOf(x, y, z))
             mTargetCaptured[i] = false
         }
@@ -51,16 +53,16 @@ class LightCycleTargetManager(numTargets: Int) {
 
     /**
      * Checks if the camera is aligned with the current target.
-     * @param rotationMatrix 4x4 rotation matrix from SensorManager
+     * @param rotationMatrix 4x4 rotation matrix mapping device to world.
      * @return true if capture should trigger
      */
     fun checkAlignment(rotationMatrix: FloatArray): Boolean {
-        // Camera's forward vector is typically -Z in OpenGL
+        // Camera's forward vector is typically -Z in the device local frame
         val lookAt = floatArrayOf(0f, 0f, -1f, 1f)
-        val currentVector = FloatArray(4)
+        val worldForward = FloatArray(4)
           
-        // Transform the look vector by the device rotation
-        Matrix.multiplyMV(currentVector, 0, rotationMatrix, 0, lookAt, 0)
+        // Transform the local look vector (-Z) into the world frame
+        Matrix.multiplyMV(worldForward, 0, rotationMatrix, 0, lookAt, 0)
 
         // Find closest uncaptured target
         var closestIdx = -1
@@ -70,7 +72,9 @@ class LightCycleTargetManager(numTargets: Int) {
             if (mTargetCaptured[i]) continue
 
             val target = mTargetVectors[i]
-            val dot = dotProduct(currentVector, target)
+            // Standard 3D dot product (ignoring W component of worldForward)
+            val dot = worldForward[0] * target[0] + worldForward[1] * target[1] + worldForward[2] * target[2]
+            
             if (dot > maxDotProduct) {
                 maxDotProduct = dot
                 closestIdx = i
@@ -79,10 +83,12 @@ class LightCycleTargetManager(numTargets: Int) {
 
         mCurrentTargetIndex = closestIdx
 
-        // Dot product of 1.0 means perfect alignment.   
         // Threshold check: acos(dot) < threshold
-        if (maxDotProduct > -1.0f && acos(maxDotProduct.toDouble().coerceIn(-1.0, 1.0)) < CAPTURE_THRESHOLD_RAD) {
-            return true   
+        if (maxDotProduct > -1.0f) {
+            val angle = acos(maxDotProduct.toDouble().coerceIn(-1.0, 1.0))
+            if (angle < CAPTURE_THRESHOLD_RAD) {
+                return true
+            }
         }
         return false
     }
@@ -92,14 +98,15 @@ class LightCycleTargetManager(numTargets: Int) {
             mTargetCaptured[mCurrentTargetIndex] = true
         }
     }
-      
-    private fun dotProduct(a: FloatArray, b: FloatArray): Float {
-        // Dot product implementation: a[0]*b[0] + a[1]*b[1] + a[2]*b[2]
-        return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-    }
 
+    fun getCurrentTargetIndex(): Int = mCurrentTargetIndex
     fun getTargetVectors(): List<FloatArray> = mTargetVectors
     fun getCapturedFlags(): BooleanArray = mTargetCaptured
     fun getTargetCount(): Int = mTargetVectors.size
     fun getCapturedCount(): Int = mTargetCaptured.count { it }
+    
+    fun reset() {
+        for (i in mTargetCaptured.indices) mTargetCaptured[i] = false
+        mCurrentTargetIndex = -1
+    }
 }

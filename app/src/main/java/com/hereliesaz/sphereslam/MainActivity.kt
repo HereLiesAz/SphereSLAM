@@ -8,6 +8,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.media.Image
 import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
@@ -94,6 +95,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     private val STABILITY_THRESHOLD = 0.12f // Gyro magnitude rad/s
     private var currentGyroMagnitude = 0f
 
+    private var mLastImage: Image? = null
+    private val mImageMutex = Any()
+
     // Frame Queue
     private data class QueuedFrame(
         val image: android.media.Image, val address: Long, val timestamp: Double,
@@ -136,7 +140,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
                 try {
                     val frame = frameQueue.take()
                     sphereSLAM.processFrame(frame.address, frame.timestamp, frame.width, frame.height, frame.stride)
-                    frame.image.close()
+                    
+                    synchronized(mImageMutex) {
+                        mLastImage?.close()
+                        mLastImage = frame.image
+                    }
                 } catch (e: Exception) { LogManager.e(TAG, "Error processing frame", e) }
             }
         }
@@ -318,10 +326,32 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
             val alpha = acos(dot.toDouble().coerceIn(-1.0, 1.0)).toFloat()
             
             if (alpha < CAPTURE_THRESHOLD_RAD && currentGyroMagnitude < STABILITY_THRESHOLD) {
-                targetCaptured[i] = true
-                totalCapturedCount++
-                capturedOne = true
-                sphereSLAM.addFrameToMosaic()
+                synchronized(mImageMutex) {
+                    val image = mLastImage
+                    if (image != null) {
+                        try {
+                            val yBuffer = image.planes[0].buffer
+                            val uBuffer = image.planes[1].buffer
+                            val vBuffer = image.planes[2].buffer
+                            
+                            val ySize = yBuffer.remaining()
+                            val uSize = uBuffer.remaining()
+                            val vSize = vBuffer.remaining()
+                            
+                            val yvu = ByteArray(ySize + uSize + vSize)
+                            yBuffer.get(yvu, 0, ySize)
+                            vBuffer.get(yvu, ySize, vSize)
+                            uBuffer.get(yvu, ySize + vSize, uSize)
+                            
+                            targetCaptured[i] = true
+                            totalCapturedCount++
+                            capturedOne = true
+                            sphereSLAM.addFrameToMosaic(yvu, currentOrientationMatrix)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error extracting bytes from image", e)
+                        }
+                    }
+                }
                 break 
             }
         }
