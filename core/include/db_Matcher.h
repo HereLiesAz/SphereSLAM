@@ -8,7 +8,7 @@
 #define DB_MATCHER_H
 
 #include <vector>
-#include "Mosaic.h"
+#include "db_Types.h"
 
 namespace lightcycle {
 

@@ -8,12 +8,9 @@
 
 #include <vector>
 #include <opencv2/core.hpp>
+#include "db_Types.h"
 
 namespace lightcycle {
-
-struct Feature {
-    float x, y;
-};
 
 class CornerDetector {
 public:

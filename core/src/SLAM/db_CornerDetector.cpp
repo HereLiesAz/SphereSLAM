@@ -1,5 +1,7 @@
 #include "db_CornerDetector.h"
 #include <opencv2/imgproc.hpp>
+#include <opencv2/features2d.hpp>
+#include <algorithm>
 
 namespace lightcycle {
 

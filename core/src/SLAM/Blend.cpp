@@ -13,10 +13,6 @@ Blend::~Blend() {}
 void Blend::runBlend(std::vector<Frame>& warpedFrames, cv::Mat& finalMosaic) {
     if (warpedFrames.empty()) return;
 
-    // 1. Create pyramids for each frame
-    // This is handled internally by OpenCV's MultiBandBlender
-    // but the doc describes the manual process.
-
     int outW = 4096;
     int outH = 2048;
 
@@ -24,12 +20,17 @@ void Blend::runBlend(std::vector<Frame>& warpedFrames, cv::Mat& finalMosaic) {
     blender.prepare(cv::Rect(0, 0, outW, outH));
 
     for (auto& frame : warpedFrames) {
-        // Assume frame.image is already warped to equirectangular space
-        // In a full implementation, we'd use the globalTransform here.
+        if (!frame.image) continue;
 
-        cv::Mat mask = cv::Mat::ones(frame.image.size(), CV_8U) * 255;
+        // Wrap the raw pointer into a cv::Mat.
+        // Note: Assuming the image in 'Frame' is already the correct size for blending
+        // or equirectangular. If it's NV21 or similar, it needs conversion.
+        // For the purpose of this fix, we wrap it based on stored dimensions.
+        cv::Mat img(frame.height, frame.width, CV_8UC3, frame.image);
+
+        cv::Mat mask = cv::Mat::ones(img.size(), CV_8U) * 255;
         // Feeds the Laplacian pyramid
-        blender.feed(frame.image, mask, cv::Point(0,0));
+        blender.feed(img, mask, cv::Point(0,0));
     }
 
     // 2. Blend each level and collapse

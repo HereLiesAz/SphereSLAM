@@ -8,6 +8,7 @@
 #include "db_CornerDetector.h"
 #include <opencv2/imgproc.hpp>
 #include <iostream>
+#include <cstring>
 
 namespace lightcycle {
 
@@ -70,7 +71,7 @@ int Mosaic::addFrame(unsigned char* imageYVU, float* rotationMatrix) {
     return MOSAIC_RET_OK;
 }
 
-void Mosaic::createMosaic(bool highRes) {
+void Mosaic::createMosaic(bool highRes, const std::string& path) {
     std::lock_guard<std::mutex> lock(mMutex);
     if (mFrames.empty()) return;
 

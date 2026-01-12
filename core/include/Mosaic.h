@@ -10,6 +10,7 @@
 #include <vector>
 #include <mutex>
 #include <string>
+#include "db_CornerDetector.h"
 
 namespace lightcycle {
 
@@ -38,14 +39,17 @@ public:
 
     // Final Stitching
     // Uses Ceres Solver for bundle adjustment
-    void createMosaic(bool highRes);
+    void createMosaic(bool highRes, const std::string& path = "");
 
     // Rendering
     // Retrieves the Equirectangular projection
     unsigned char* getFinalMosaicNV21();
 
 private:
+    void runGlobalOptimization();
+
     int mWidth, mHeight;
+    double mSharedFocalLength;
 
     // Internal Modules identified in symbols
     class Align* mAligner;
@@ -55,11 +59,6 @@ private:
     class Optimizer* mOptimizer;
 
     // Frame storage (Section 3.1)
-    struct Frame {
-        int id;
-        unsigned char* image;
-        float globalTransform[5]; // Reconstructed as 5-parameter model
-    };
     std::vector<Frame> mFrames;
     std::mutex mMutex;
 

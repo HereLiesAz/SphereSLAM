@@ -3,7 +3,7 @@
 
 #include <vector>
 #include <opencv2/core.hpp>
-#include "Mosaic.h"
+#include "db_Types.h"
 
 namespace lightcycle {
 

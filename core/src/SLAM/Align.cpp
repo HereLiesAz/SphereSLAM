@@ -8,6 +8,7 @@
 #include "db_CornerDetector.h"
 #include "db_Matcher.h"
 #include <opencv2/calib3d.hpp>
+#include <cstring>
 
 namespace lightcycle {
 
@@ -32,6 +33,7 @@ int Align::addFrame(const cv::Mat& image, float* rotationMatrix, std::vector<Fra
     if (frames.empty()) {
         Frame firstFrame;
         firstFrame.id = 0;
+        firstFrame.image = nullptr;
         // LightCycle logic: first frame is identity or pure sensor orientation
         memcpy(firstFrame.globalTransform, rotationMatrix, 9 * sizeof(float));
         firstFrame.features = features;
@@ -59,6 +61,7 @@ int Align::addFrame(const cv::Mat& image, float* rotationMatrix, std::vector<Fra
     // 5. Store Frame with refined orientation
     Frame newFrame;
     newFrame.id = static_cast<int>(frames.size());
+    newFrame.image = nullptr;
     newFrame.features = features;
     newFrame.matches = matches;
 
@@ -84,9 +87,8 @@ int Align::runRANSAC(const std::vector<Match>& matches, cv::Mat& refinedRotation
 
     std::vector<cv::Point2f> pts1, pts2;
     for (const auto& m : matches) {
-        pts1.emplace_back(m.x, m.y); // Current
-        // Note: m.x2/y2 would be in neighbor frame.
-        // Reconstructing Match struct usage to match Section 3.2 logic
+        pts1.emplace_back(m.x1, m.y1); // Current
+        pts2.emplace_back(m.x2, m.y2); // Neighbor
     }
 
     // Placeholder for real 2-view spherical rotation estimation
