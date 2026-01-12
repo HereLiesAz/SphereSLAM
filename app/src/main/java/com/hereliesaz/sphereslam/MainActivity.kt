@@ -39,6 +39,10 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.LinkedBlockingQueue
 import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.math.acos
+import kotlin.math.sqrt
 
 class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Callback, Choreographer.FrameCallback {
 
@@ -60,6 +64,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     private var rotationVector: Sensor? = null
 
     private lateinit var surfaceView: SurfaceView
+    private lateinit var centerCircle: View
     private lateinit var fpsText: TextView
     private lateinit var statsText: TextView
     private lateinit var instructionText: TextView
@@ -70,9 +75,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     private var statsTextUpdateFrameCounter: Int = 0
 
     // Creation State
-    private val coverageGrid = Array(8) { BooleanArray(16) }
+    private val targetPositions = mutableListOf<FloatArray>() // 3D points
+    private val capturedFlags = mutableListOf<Boolean>()
     private var totalCoverage = 0
-    private val MAX_CELLS = 8 * 16
+    private var isScanning = false
 
     // Frame Queue
     private data class QueuedFrame(
@@ -91,12 +97,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         setContentView(R.layout.activity_main)
 
         surfaceView = findViewById(R.id.surfaceView)
+        centerCircle = findViewById(R.id.centerCircle)
         surfaceView.holder.addCallback(this)
         fpsText = findViewById(R.id.fpsText)
         statsText = findViewById(R.id.statsText)
         instructionText = findViewById(R.id.instructionText)
         
-        modeButton = findViewById(R.id.resetButton) // Reusing as Mode Toggle for now
+        modeButton = findViewById(R.id.resetButton)
         modeButton.text = "Switch to Tracking"
         
         actionButton = findViewById(R.id.captureButton)
@@ -111,16 +118,17 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
 
         sphereSLAM = SphereSLAM(this)
 
+        // Initialize capture targets (dots on a sphere)
+        initCaptureTargets()
+
         lifecycleScope.launch(Dispatchers.IO) {
             while (true) {
                 try {
                     val frame = frameQueue.take()
-                    // Only process SLAM if in Tracking mode
                     if (currentMode == AppMode.TRACKING) {
                         sphereSLAM.processFrame(frame.address, frame.timestamp, frame.width, frame.height, frame.stride)
                     } else {
-                        // In Creation mode, we might want a separate "CaptureFrame" logic
-                        // For now, we still process to keep Vulkan buffers alive, but we could optimize.
+                        // In creation mode, we still process to update the background texture
                         sphereSLAM.processFrame(frame.address, frame.timestamp, frame.width, frame.height, frame.stride)
                     }
                     frame.image.close()
@@ -155,6 +163,42 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         else ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), CAMERA_PERMISSION_REQUEST_CODE)
     }
 
+    private fun initCaptureTargets() {
+        targetPositions.clear()
+        capturedFlags.clear()
+        val radius = 5.0f // 5 meters away
+        val rows = 6
+        val cols = 12
+        for (i in 1..rows) {
+            val phi = (PI * i / (rows + 1)).toFloat()
+            for (j in 0 until cols) {
+                val theta = (2 * PI * j / cols).toFloat()
+                val x = radius * sin(phi) * cos(theta)
+                val y = radius * cos(phi)
+                val z = radius * sin(phi) * sin(theta)
+                targetPositions.add(floatArrayOf(x, y, z))
+                capturedFlags.add(false)
+            }
+        }
+        // Top and bottom dots
+        targetPositions.add(floatArrayOf(0f, radius, 0f))
+        capturedFlags.add(false)
+        targetPositions.add(floatArrayOf(0f, -radius, 0f))
+        capturedFlags.add(false)
+        
+        syncTargetsToNative()
+    }
+
+    private fun syncTargetsToNative() {
+        val posArray = FloatArray(targetPositions.size * 3)
+        for (i in targetPositions.indices) {
+            posArray[i * 3] = targetPositions[i][0]
+            posArray[i * 3 + 1] = targetPositions[i][1]
+            posArray[i * 3 + 2] = targetPositions[i][2]
+        }
+        sphereSLAM.setCaptureTargets(posArray, capturedFlags.toBooleanArray())
+    }
+
     private fun toggleMode() {
         currentMode = if (currentMode == AppMode.CREATION) AppMode.TRACKING else AppMode.CREATION
         updateUiForMode()
@@ -167,39 +211,39 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
             if (currentMode == AppMode.CREATION) {
                 modeButton.text = "Switch to Tracking"
                 actionButton.text = "Start Scan"
-                instructionText.text = "Creation Mode: Rotate to scan 360°"
+                instructionText.text = "Align dots with the center circle"
+                centerCircle.visibility = View.VISIBLE
                 resetCoverage()
             } else {
                 modeButton.text = "Switch to Creation"
                 actionButton.text = "Start Tracking"
-                instructionText.text = "Tracking Mode: Move camera to initialize SLAM"
+                instructionText.text = "Tracking Mode: Move camera to initialize"
+                centerCircle.visibility = View.GONE
             }
         }
     }
-
-    private var isScanning = false
 
     private fun handleAction() {
         if (currentMode == AppMode.CREATION) {
             if (!isScanning) {
                 isScanning = true
                 actionButton.text = "Finish & Stitch"
-                Toast.makeText(this, "Slowly rotate in all directions", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Point the phone at the dots", Toast.LENGTH_SHORT).show()
             } else {
                 isScanning = false
                 actionButton.text = "Start Scan"
                 generatePhotosphere()
             }
         } else {
-            // Tracking mode action (e.g. Relocalize or Reset)
             sphereSLAM.resetSystem()
             Toast.makeText(this, "SLAM System Reset", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun resetCoverage() {
-        for (i in 0 until 8) for (j in 0 until 16) coverageGrid[i][j] = false
+        for (i in capturedFlags.indices) capturedFlags[i] = false
         totalCoverage = 0
+        syncTargetsToNative()
     }
 
     private fun generatePhotosphere() {
@@ -208,14 +252,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
             val documentsDir = getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS) ?: return@launch
             val destDir = File(documentsDir, "SphereSLAM_Captures/$timestamp").apply { mkdirs() }
-            
             try {
                 val photosphereFile = File(destDir, "photosphere.jpg")
                 sphereSLAM.savePhotosphere(photosphereFile.absolutePath)
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@MainActivity, "Creation Complete!", Toast.LENGTH_LONG).show()
-                    // Auto-switch to tracking after successful creation?
-                    // toggleMode() 
                 }
             } catch (e: Exception) { LogManager.e(TAG, "Stitching failed", e) }
         }
@@ -224,27 +265,52 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     override fun onSensorChanged(event: SensorEvent?) {
         event ?: return
         if (event.sensor.type == Sensor.TYPE_ROTATION_VECTOR) {
-            val rotationMatrix = FloatArray(9)
-            SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
-            val orientation = FloatArray(3)
-            SensorManager.getOrientation(rotationMatrix, orientation)
-            
             if (currentMode == AppMode.CREATION && isScanning) {
-                updateCoverage(orientation[0], orientation[1])
+                checkHit(event.values)
             }
         }
         sphereSLAM.processIMU(event.sensor.type, event.values[0], event.values[1], event.values[2], event.timestamp)
     }
 
-    private fun updateCoverage(azimuth: Float, pitch: Float) {
-        val col = (((azimuth + PI) / (2 * PI)) * 16).toInt().coerceIn(0, 15)
-        val row = (((pitch + PI/2) / PI) * 8).toInt().coerceIn(0, 7)
-        if (!coverageGrid[row][col]) {
-            coverageGrid[row][col] = true
-            totalCoverage++
-            val percentage = (totalCoverage.toFloat() / MAX_CELLS * 100).toInt()
+    private fun checkHit(rotationVector: FloatArray) {
+        val rotationMatrix = FloatArray(9)
+        SensorManager.getRotationMatrixFromVector(rotationMatrix, rotationVector)
+        
+        // Current look vector in world space (typically -Z in camera space)
+        // Camera space -Z is (0, 0, -1). 
+        // World space vector = R * [0, 0, -1]^T
+        val lookX = -rotationMatrix[2]
+        val lookY = -rotationMatrix[5]
+        val lookZ = -rotationMatrix[8]
+
+        var hitChanged = false
+        for (i in targetPositions.indices) {
+            if (capturedFlags[i]) continue
+            
+            val tx = targetPositions[i][0]
+            val ty = targetPositions[i][1]
+            val tz = targetPositions[i][2]
+            val dist = sqrt(tx*tx + ty*ty + tz*tz)
+            
+            // Normalize target vector
+            val nx = tx / dist
+            val ny = ty / dist
+            val nz = tz / dist
+            
+            // Cosine similarity
+            val dot = lookX * nx + lookY * ny + lookZ * nz
+            if (dot > 0.98) { // ~11 degrees threshold
+                capturedFlags[i] = true
+                totalCoverage++
+                hitChanged = true
+            }
+        }
+        
+        if (hitChanged) {
+            syncTargetsToNative()
+            val percentage = (totalCoverage.toFloat() / targetPositions.size * 100).toInt()
             runOnUiThread {
-                instructionText.text = "Scanning: $percentage% ($totalCoverage/$MAX_CELLS)"
+                instructionText.text = "Scanning: $percentage% ($totalCoverage/${targetPositions.size})"
             }
         }
     }
@@ -286,12 +352,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         
         runOnUiThread {
             fpsText.text = "Mode: ${currentMode.name} | SLAM: $stateStr"
-            if (currentMode == AppMode.TRACKING && !isScanning) {
+            if (currentMode == AppMode.TRACKING) {
                 instructionText.text = when(state) {
                     1 -> "Move camera slowly side-to-side to initialize"
                     2 -> "Tracking Active"
                     3 -> "Lost. Return to start"
-                    else -> instructionText.text
+                    else -> "Tracking Mode"
                 }
             }
         }
