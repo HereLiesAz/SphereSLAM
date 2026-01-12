@@ -22,6 +22,12 @@ class SphereSLAM(private val context: Context) {
     external fun setCameraPose(matrix: FloatArray)
     external fun setCaptureTargets(positions: FloatArray, captured: BooleanArray)
     external fun setTargetSize(pixels: Float)
+    
+    // --- LightCycle Mosaic Native Interface ---
+    external fun allocateMosaicMemory(width: Int, height: Int)
+    external fun freeMosaicMemory()
+    external fun addFrameToMosaic(imageYVU: ByteArray, rotationMatrix: FloatArray): Int
+
     external fun manipulateView(dx: Float, dy: Float)
     external fun getTrackingState(): Int
     external fun resetSystem()

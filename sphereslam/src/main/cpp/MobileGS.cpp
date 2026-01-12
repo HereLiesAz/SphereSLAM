@@ -53,14 +53,9 @@ void main() {
     float distSq = dot(coord, coord);
     if (distSq > 0.25) discard;
 
-    // Antialiased edge
-    float alpha = smoothstep(0.25, 0.23, distSq) * 0.7;
-
-    if (vCaptured > 0.5) {
-        FragColor = vec4(0.0, 1.0, 0.0, alpha); // Green
-    } else {
-        FragColor = vec4(1.0, 0.0, 0.0, alpha); // Red
-    }
+    // Smooth circle with "Photo Sphere Blue" color
+    float alpha = smoothstep(0.25, 0.22, distSq) * 0.8;
+    FragColor = vec4(0.25, 0.65, 1.0, alpha);
 }
 )";
 

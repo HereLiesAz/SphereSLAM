@@ -10,13 +10,10 @@
 #include <opencv2/imgproc.hpp>
 #include <cmath>
 
-// GLM is a custom minimal header in this project
 #include "glm/glm.hpp"
-
 #include "SLAM/System.h"
 #include "SLAM/KeyFrame.h"
-#include "VulkanCompute.h"
-#include "DepthAnyCamera.h"
+#include "Mosaic.h"
 #include "MobileGS.h"
 #include "Densifier.h"
 #include "PlatformAndroid.h"
@@ -26,8 +23,7 @@
 // Global Pointers
 JavaVM* g_vm = nullptr;
 System* slamSystem = nullptr;
-VulkanCompute* vulkanCompute = nullptr;
-DepthAnyCamera* depthEstimator = nullptr;
+lightcycle::Mosaic* mosaicer = nullptr;
 MobileGS* renderer = nullptr;
 PlatformAndroid* platformAndroid = nullptr;
 
@@ -40,7 +36,6 @@ bool mUseManualPose = false;
 int screenWidth = 1080;
 int screenHeight = 1920;
 
-// Minimal perspective implementation since project uses a custom GLM
 namespace glm_ext {
     inline glm::mat4 perspective(float fovy, float aspect, float zNear, float zFar) {
         float const tanHalfFovy = tan(fovy / 2.0f);
@@ -52,10 +47,7 @@ namespace glm_ext {
         Result[3][2] = -(2.0f * zFar * zNear) / (zFar - zNear);
         return Result;
     }
-
-    inline float radians(float degrees) {
-        return degrees * 0.01745329251994329576923690768489f;
-    }
+    inline float radians(float degrees) { return degrees * 0.0174532925f; }
 }
 
 extern "C" JNIEXPORT jint JNICALL
@@ -67,80 +59,55 @@ JNI_OnLoad(JavaVM* vm, void* reserved) {
 extern "C" JNIEXPORT void JNICALL
 Java_com_hereliesaz_sphereslam_SphereSLAM_initNative(JNIEnv* env, jobject thiz, jobject assetManager, jstring cacheDir) {
     AAssetManager* mgr = AAssetManager_fromJava(env, assetManager);
-
     const char *path = env->GetStringUTFChars(cacheDir, 0);
     std::string strCacheDir(path);
     env->ReleaseStringUTFChars(cacheDir, path);
 
     KeyFrame::msCacheDir = strCacheDir;
     platformAndroid = new PlatformAndroid(mgr, g_vm);
-    vulkanCompute = new VulkanCompute(mgr);
-    vulkanCompute->initialize();
-
-    depthEstimator = new DepthAnyCamera(mgr);
-    depthEstimator->initialize(strCacheDir);
-
     renderer = new MobileGS();
     renderer->initialize();
 
     slamSystem = new System("", "", System::IMU_MONOCULAR, platformAndroid, false);
-    Densifier* densifier = new Densifier(depthEstimator);
-    slamSystem->SetDensifier(densifier);
+    mosaicer = new lightcycle::Mosaic();
 
-    __android_log_print(ANDROID_LOG_INFO, TAG, "Native Systems Initialized");
+    __android_log_print(ANDROID_LOG_INFO, TAG, "LightCycle Native Initialized");
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_hereliesaz_sphereslam_SphereSLAM_destroyNative(JNIEnv* env, jobject thiz) {
     if (slamSystem) { delete slamSystem; slamSystem = nullptr; }
-    if (vulkanCompute) { delete vulkanCompute; vulkanCompute = nullptr; }
-    if (depthEstimator) { delete depthEstimator; depthEstimator = nullptr; }
+    if (mosaicer) { delete mosaicer; mosaicer = nullptr; }
     if (renderer) { delete renderer; renderer = nullptr; }
     if (platformAndroid) { delete platformAndroid; platformAndroid = nullptr; }
 }
 
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_hereliesaz_sphereslam_SphereSLAM_getBufferAddress(JNIEnv* env, jobject thiz, jobject buffer) {
-    void* address = env->GetDirectBufferAddress(buffer);
-    return (jlong)address;
+    return (jlong)env->GetDirectBufferAddress(buffer);
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_hereliesaz_sphereslam_SphereSLAM_processFrame(JNIEnv* env, jobject thiz, jlong matAddr, jdouble timestamp, jint width, jint height, jint stride) {
-    if (slamSystem && vulkanCompute) {
-        uint8_t* ptr = reinterpret_cast<uint8_t*>(matAddr);
-        if (!ptr) return;
+    uint8_t* ptr = reinterpret_cast<uint8_t*>(matAddr);
+    if (!ptr) return;
 
-        size_t step = (stride > 0) ? (size_t)stride : cv::Mat::AUTO_STEP;
-        cv::Mat inputWrapper(height, width, CV_8UC1, ptr, step);
-        cv::Mat inputImage = inputWrapper.clone();
+    size_t step = (stride > 0) ? (size_t)stride : cv::Mat::AUTO_STEP;
+    cv::Mat inputWrapper(height, width, CV_8UC1, ptr, step);
+    cv::Mat inputImage = inputWrapper.clone();
 
-        // Rotate camera view 90 degrees clockwise
-        cv::rotate(inputImage, inputImage, cv::ROTATE_90_CLOCKWISE);
-        int rotatedWidth = inputImage.cols;
-        int rotatedHeight = inputImage.rows;
+    cv::rotate(inputImage, inputImage, cv::ROTATE_90_CLOCKWISE);
 
-        // Pass frame to renderer for background display
-        if (renderer) {
-            renderer->updateBackground(inputImage);
-        }
+    if (renderer) renderer->updateBackground(inputImage);
 
-        vulkanCompute->processImage(inputImage.data, rotatedWidth, rotatedHeight);
-        std::vector<cv::Mat> faces = vulkanCompute->getAllOutputFaces();
-
-        if (faces.size() != 6) {
-             faces.clear();
-             for(int i=0; i<6; ++i) faces.push_back(inputImage.clone());
-        }
-
+    if (slamSystem) {
+        std::vector<cv::Mat> faces;
+        for(int i=0; i<6; ++i) faces.push_back(inputImage.clone());
         cv::Mat Tcw = slamSystem->TrackCubeMap(faces, timestamp);
-
-        {
-            std::unique_lock<std::mutex> lock(mMutexPose);
-            if (!Tcw.empty()) {
-                mCurrentPose = Tcw.clone();
-                mUseManualPose = false;
-            }
+        std::unique_lock<std::mutex> lock(mMutexPose);
+        if (!Tcw.empty()) {
+            mCurrentPose = Tcw.clone();
+            mUseManualPose = false;
         }
     }
 }
@@ -172,11 +139,7 @@ Java_com_hereliesaz_sphereslam_SphereSLAM_setCameraPose(JNIEnv* env, jobject thi
     jfloat* m = env->GetFloatArrayElements(matrix, nullptr);
     {
         std::unique_lock<std::mutex> lock(mMutexPose);
-        for(int i=0; i<4; ++i) {
-            for(int j=0; j<4; ++j) {
-                mManualPose[i][j] = m[i*4 + j];
-            }
-        }
+        for(int i=0; i<4; ++i) for(int j=0; j<4; ++j) mManualPose[i][j] = m[i*4 + j];
         mUseManualPose = true;
     }
     env->ReleaseFloatArrayElements(matrix, m, JNI_ABORT);
@@ -188,23 +151,45 @@ Java_com_hereliesaz_sphereslam_SphereSLAM_renderFrame(JNIEnv* env, jobject thiz)
         glm::mat4 viewMatrix(1.0f);
         {
             std::unique_lock<std::mutex> lock(mMutexPose);
-            if (mUseManualPose) {
-                viewMatrix = mManualPose;
-            } else if (!mCurrentPose.empty() && mCurrentPose.rows == 4 && mCurrentPose.cols == 4) {
-                for(int i=0; i<4; ++i) {
-                    for(int j=0; j<4; ++j) {
-                        viewMatrix[j][i] = mCurrentPose.at<float>(i, j);
-                    }
-                }
+            if (mUseManualPose) viewMatrix = mManualPose;
+            else {
+                for(int i=0; i<4; ++i) for(int j=0; j<4; ++j) viewMatrix[j][i] = mCurrentPose.at<float>(i, j);
             }
         }
-
         float aspect = (float)screenWidth / (float)screenHeight;
         glm::mat4 projMatrix = glm_ext::perspective(glm_ext::radians(60.0f), aspect, 0.1f, 100.0f);
-
         renderer->updateCamera(viewMatrix, projMatrix);
         renderer->draw();
     }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_hereliesaz_sphereslam_SphereSLAM_allocateMosaicMemory(JNIEnv* env, jobject thiz, jint width, jint height) {
+    if (mosaicer) mosaicer->allocateMosaicMemory(width, height);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_hereliesaz_sphereslam_SphereSLAM_freeMosaicMemory(JNIEnv* env, jobject thiz) {
+    if (mosaicer) mosaicer->freeMosaicMemory();
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_hereliesaz_sphereslam_SphereSLAM_addFrameToMosaic(JNIEnv* env, jobject thiz, jbyteArray imageYVU, jfloatArray rotationMatrix) {
+    if (!mosaicer) return -1;
+    jbyte* imgData = env->GetByteArrayElements(imageYVU, nullptr);
+    jfloat* rotData = env->GetFloatArrayElements(rotationMatrix, nullptr);
+
+    // LightCycle engine expects a specific YVU format.
+    // For this blueprint, we wrap it in cv::Mat.
+    // In actual implementation, we'd use the width/height from allocateMosaicMemory.
+    // Assuming 1280x720 for now or passed from somewhere.
+
+    // Mosaicer::addFrame Reconstruction
+    int result = mosaicer->addFrame(reinterpret_cast<unsigned char*>(imgData), rotData);
+
+    env->ReleaseByteArrayElements(imageYVU, imgData, JNI_ABORT);
+    env->ReleaseFloatArrayElements(rotationMatrix, rotData, JNI_ABORT);
+    return result;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -213,16 +198,13 @@ Java_com_hereliesaz_sphereslam_SphereSLAM_setCaptureTargets(JNIEnv* env, jobject
         jsize len = env->GetArrayLength(positions);
         float* p = env->GetFloatArrayElements(positions, nullptr);
         jboolean* c = env->GetBooleanArrayElements(captured, nullptr);
-
         std::vector<glm::vec3> targets;
         std::vector<bool> capturedFlags;
         for (int i = 0; i < len / 3; ++i) {
             targets.push_back(glm::vec3(p[i * 3], p[i * 3 + 1], p[i * 3 + 2]));
             capturedFlags.push_back(c[i] == JNI_TRUE);
         }
-
         renderer->setCaptureTargets(targets, capturedFlags);
-
         env->ReleaseFloatArrayElements(positions, p, JNI_ABORT);
         env->ReleaseBooleanArrayElements(captured, c, JNI_ABORT);
     }
@@ -230,14 +212,7 @@ Java_com_hereliesaz_sphereslam_SphereSLAM_setCaptureTargets(JNIEnv* env, jobject
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_hereliesaz_sphereslam_SphereSLAM_setTargetSize(JNIEnv* env, jobject thiz, jfloat pixels) {
-    if (renderer) {
-        renderer->setTargetSize(pixels);
-    }
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_hereliesaz_sphereslam_SphereSLAM_manipulateView(JNIEnv* env, jobject thiz, jfloat dx, jfloat dy) {
-    if (renderer) renderer->handleInput(dx, dy);
+    if (renderer) renderer->setTargetSize(pixels);
 }
 
 extern "C" JNIEXPORT jint JNICALL
@@ -249,51 +224,13 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_hereliesaz_sphereslam_SphereSLAM_resetSystem(JNIEnv* env, jobject thiz) {
     if (slamSystem) slamSystem->Reset();
     if (renderer) renderer->reset();
-}
-
-extern "C" JNIEXPORT jstring JNICALL
-Java_com_hereliesaz_sphereslam_SphereSLAM_getMapStats(JNIEnv* env, jobject thiz) {
-    return env->NewStringUTF(slamSystem ? slamSystem->GetMapStats().c_str() : "System Not Init");
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_hereliesaz_sphereslam_SphereSLAM_saveMap(JNIEnv* env, jobject thiz, jstring filePath) {
-    if (!slamSystem) return;
-    const char* p = env->GetStringUTFChars(filePath, nullptr);
-    slamSystem->SaveMap(p);
-    env->ReleaseStringUTFChars(filePath, p);
+    if (mosaicer) mosaicer->freeMosaicMemory();
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_hereliesaz_sphereslam_SphereSLAM_savePhotosphere(JNIEnv* env, jobject thiz, jstring filePath) {
-    if (!slamSystem) return;
+    if (!mosaicer) return;
     const char* p = env->GetStringUTFChars(filePath, nullptr);
-    slamSystem->SavePhotosphere(p);
+    mosaicer->createMosaic(true, p);
     env->ReleaseStringUTFChars(filePath, p);
-}
-
-extern "C" JNIEXPORT jboolean JNICALL
-Java_com_hereliesaz_sphereslam_SphereSLAM_loadMap(JNIEnv* env, jobject thiz, jstring filePath) {
-    const char* p = env->GetStringUTFChars(filePath, nullptr);
-    std::string path(p);
-    env->ReleaseStringUTFChars(filePath, p);
-    if (!slamSystem) return false;
-    bool success = slamSystem->LoadMap(path);
-    if (success && renderer) {
-        renderer->reset();
-        auto vMPs = slamSystem->GetAllMapPoints();
-        std::vector<Gaussian> gs;
-        for(auto mp : vMPs) {
-            cv::Point3f pos = mp->GetWorldPos();
-            Gaussian g;
-            g.position = glm::vec3(pos.x, pos.y, pos.z);
-            g.rotation = {1, 0, 0, 0};
-            g.scale = {0.05, 0.05, 0.05};
-            g.opacity = 1.0;
-            g.color_sh = {1, 1, 1};
-            gs.push_back(g);
-        }
-        renderer->addGaussians(gs);
-    }
-    return success;
 }

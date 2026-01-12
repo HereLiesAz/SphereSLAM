@@ -20,6 +20,7 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
 import android.widget.Button
+import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -39,10 +40,20 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.LinkedBlockingQueue
 import kotlin.math.PI
+import kotlin.math.acos
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
 
+/**
+ * Technical Implementation of Google Photo Sphere (LightCycle) Capture.
+ * 
+ * Key Features:
+ * 1. Fibonacci Lattice for uniform target distribution.
+ * 2. Auto-shutter state machine (Alignment + Stability).
+ * 3. AR-fixed disappearing targets.
+ * 4. Concentric circular progress indicator.
+ */
 class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Callback, Choreographer.FrameCallback {
 
     private val TAG = "MainActivity"
@@ -60,21 +71,28 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
 
     private lateinit var surfaceView: SurfaceView
     private lateinit var centerCircle: View
+    private lateinit var captureProgressBar: ProgressBar
     private lateinit var fpsText: TextView
     private lateinit var statsText: TextView
     private lateinit var instructionText: TextView
     private lateinit var modeButton: Button
     private lateinit var actionButton: Button
     
-    private var lastFrameTime = 0L
     private var statsTextUpdateFrameCounter: Int = 0
 
-    // Creation State
-    private val targetPositions = mutableListOf<FloatArray>()
-    private val capturedFlags = mutableListOf<Boolean>()
-    private var totalCoverage = 0
+    // --- LightCycle Core State ---
+    private val targetVectors = mutableListOf<FloatArray>()
+    private val targetCaptured = mutableListOf<Boolean>()
+    private var totalCapturedCount = 0
     private var isScanning = false
-    private var currentRemappedMatrix = FloatArray(9)
+    private var currentOrientationMatrix = FloatArray(9)
+    
+    // LightCycle Constants
+    private val NUM_TARGETS = 26 
+    private val GOLDEN_RATIO = (1.0 + sqrt(5.0)) / 2.0
+    private val CAPTURE_THRESHOLD_RAD = 0.05f // ~2.8 degrees
+    private val STABILITY_THRESHOLD = 0.12f // Gyro magnitude rad/s
+    private var currentGyroMagnitude = 0f
 
     // Frame Queue
     private data class QueuedFrame(
@@ -82,7 +100,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         val width: Int, val height: Int, val stride: Int
     )
     private val frameQueue = LinkedBlockingQueue<QueuedFrame>(2)
-    private var framesProcessedCount = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -90,16 +107,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
 
         surfaceView = findViewById(R.id.surfaceView)
         centerCircle = findViewById(R.id.centerCircle)
+        captureProgressBar = findViewById(R.id.captureProgressBar)
         surfaceView.holder.addCallback(this)
         fpsText = findViewById(R.id.fpsText)
         statsText = findViewById(R.id.statsText)
         instructionText = findViewById(R.id.instructionText)
         
         modeButton = findViewById(R.id.resetButton)
-        modeButton.text = "Switch to Tracking"
-        
         actionButton = findViewById(R.id.captureButton)
-        actionButton.text = "Start Creation"
 
         modeButton.setOnClickListener { toggleMode() }
         actionButton.setOnClickListener { handleAction() }
@@ -110,13 +125,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
 
         sphereSLAM = SphereSLAM(this)
 
-        // Set target dot size based on the UI circle overlay
         centerCircle.post {
-            val sizePx = centerCircle.width.toFloat()
-            sphereSLAM.setTargetSize(sizePx * 1.5f) // Make it slightly larger than the circle for easier alignment
+            sphereSLAM.setTargetSize(centerCircle.width.toFloat())
         }
 
-        initCaptureTargets()
+        initLightCycleTargets()
 
         lifecycleScope.launch(Dispatchers.IO) {
             while (true) {
@@ -124,7 +137,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
                     val frame = frameQueue.take()
                     sphereSLAM.processFrame(frame.address, frame.timestamp, frame.width, frame.height, frame.stride)
                     frame.image.close()
-                    framesProcessedCount++
                 } catch (e: Exception) { LogManager.e(TAG, "Error processing frame", e) }
             }
         }
@@ -151,71 +163,69 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         else ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), CAMERA_PERMISSION_REQUEST_CODE)
     }
 
-    private fun initCaptureTargets() {
-        targetPositions.clear()
-        capturedFlags.clear()
+    /**
+     * Implements Fibonacci Lattice distribution exactly as defined in Section 4.1 of doc.
+     */
+    private fun initLightCycleTargets() {
+        targetVectors.clear()
+        targetCaptured.clear()
         val radius = 5.0f
         
-        // 18 targets total for better UX
-        // Horizon (8)
-        for (i in 0 until 8) {
-            val a = (2 * PI * i / 8).toFloat()
-            targetPositions.add(floatArrayOf(radius * cos(a), radius * sin(a), 0f))
-            capturedFlags.add(false)
+        for (i in 0 until NUM_TARGETS) {
+            // y goes from 1 to -1 (Vertical axis in doc)
+            val docY = 1.0f - (i / (NUM_TARGETS - 1).toFloat()) * 2.0f
+            val docRadius = sqrt(1.0f - docY * docY)
+            val theta = (2.0 * PI * i / GOLDEN_RATIO).toFloat()
+
+            val docX = (cos(theta.toDouble()) * docRadius).toFloat()
+            val docZ = (sin(theta.toDouble()) * docRadius).toFloat()
+            
+            // Map doc coords to Android World coords: docY -> WorldZ (Up)
+            targetVectors.add(floatArrayOf(docX * radius, docZ * radius, docY * radius))
+            targetCaptured.add(false)
         }
-        // Upper 45 deg (4)
-        for (i in 0 until 4) {
-            val a = (2 * PI * i / 4).toFloat()
-            val r = radius * 0.707f
-            targetPositions.add(floatArrayOf(r * cos(a), r * sin(a), radius * 0.707f))
-            capturedFlags.add(false)
-        }
-        // Lower 45 deg (4)
-        for (i in 0 until 4) {
-            val a = (2 * PI * i / 4).toFloat()
-            val r = radius * 0.707f
-            targetPositions.add(floatArrayOf(r * cos(a), r * sin(a), -radius * 0.707f))
-            capturedFlags.add(false)
-        }
-        // Poles (2)
-        targetPositions.add(floatArrayOf(0f, 0f, radius))
-        capturedFlags.add(false)
-        targetPositions.add(floatArrayOf(0f, 0f, -radius))
-        capturedFlags.add(false)
         
         syncTargetsToNative()
     }
 
     private fun syncTargetsToNative() {
-        val posArray = FloatArray(targetPositions.size * 3)
-        for (i in targetPositions.indices) {
-            posArray[i * 3] = targetPositions[i][0]
-            posArray[i * 3 + 1] = targetPositions[i][1]
-            posArray[i * 3 + 2] = targetPositions[i][2]
+        // Implementation: Disappearing dots. Only send uncaptured targets to native renderer.
+        val uncapturedPositions = mutableListOf<Float>()
+        val dummyCaptured = mutableListOf<Boolean>()
+        
+        for (i in targetVectors.indices) {
+            if (!targetCaptured[i]) {
+                uncapturedPositions.add(targetVectors[i][0])
+                uncapturedPositions.add(targetVectors[i][1])
+                uncapturedPositions.add(targetVectors[i][2])
+                dummyCaptured.add(false)
+            }
         }
-        sphereSLAM.setCaptureTargets(posArray, capturedFlags.toBooleanArray())
+        
+        sphereSLAM.setCaptureTargets(uncapturedPositions.toFloatArray(), dummyCaptured.toBooleanArray())
     }
 
     private fun toggleMode() {
         currentMode = if (currentMode == AppMode.CREATION) AppMode.TRACKING else AppMode.CREATION
         updateUiForMode()
         sphereSLAM.resetSystem()
-        framesProcessedCount = 0
     }
 
     private fun updateUiForMode() {
         runOnUiThread {
             if (currentMode == AppMode.CREATION) {
                 modeButton.text = "Switch to Tracking"
-                actionButton.text = "Start Scan"
-                instructionText.text = "Align red dots with the center circle"
+                actionButton.text = "Start Creation"
+                instructionText.text = "Align the dot inside the circle"
                 centerCircle.visibility = View.VISIBLE
-                resetCoverage()
+                captureProgressBar.visibility = View.GONE
+                resetLightCycle()
             } else {
                 modeButton.text = "Switch to Creation"
                 actionButton.text = "Start Tracking"
-                instructionText.text = "Tracking Mode: Move camera to initialize"
+                instructionText.text = "Tracking Mode"
                 centerCircle.visibility = View.GONE
+                captureProgressBar.visibility = View.GONE
             }
         }
     }
@@ -224,27 +234,29 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         if (currentMode == AppMode.CREATION) {
             if (!isScanning) {
                 isScanning = true
-                actionButton.text = "Finish & Stitch"
-                Toast.makeText(this, "Collect all red dots", Toast.LENGTH_SHORT).show()
+                actionButton.text = "Stop & Stitch"
+                captureProgressBar.visibility = View.VISIBLE
+                captureProgressBar.progress = 0
+                Toast.makeText(this, "Auto-shutter active", Toast.LENGTH_SHORT).show()
             } else {
                 isScanning = false
-                actionButton.text = "Start Scan"
-                generatePhotosphere()
+                actionButton.text = "Start Creation"
+                captureProgressBar.visibility = View.GONE
+                runStitchingPipeline()
             }
         } else {
             sphereSLAM.resetSystem()
-            Toast.makeText(this, "SLAM System Reset", Toast.LENGTH_SHORT).show()
         }
     }
 
-    private fun resetCoverage() {
-        for (i in capturedFlags.indices) capturedFlags[i] = false
-        totalCoverage = 0
+    private fun resetLightCycle() {
+        for (i in targetCaptured.indices) targetCaptured[i] = false
+        totalCapturedCount = 0
         syncTargetsToNative()
     }
 
-    private fun generatePhotosphere() {
-        Toast.makeText(this, "Stitching Photosphere...", Toast.LENGTH_SHORT).show()
+    private fun runStitchingPipeline() {
+        Toast.makeText(this, "Stitching...", Toast.LENGTH_SHORT).show()
         lifecycleScope.launch(Dispatchers.IO) {
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
             val documentsDir = getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS) ?: return@launch
@@ -253,7 +265,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
                 val photosphereFile = File(destDir, "photosphere.jpg")
                 sphereSLAM.savePhotosphere(photosphereFile.absolutePath)
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "Creation Complete!", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, "Photosphere Saved!", Toast.LENGTH_LONG).show()
                 }
             } catch (e: Exception) { LogManager.e(TAG, "Stitching failed", e) }
         }
@@ -261,62 +273,68 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
 
     override fun onSensorChanged(event: SensorEvent?) {
         event ?: return
-        if (event.sensor.type == Sensor.TYPE_ROTATION_VECTOR) {
-            updatePoseFromIMU(event.values)
-            if (currentMode == AppMode.CREATION && isScanning) {
-                checkHit()
+        when (event.sensor.type) {
+            Sensor.TYPE_ROTATION_VECTOR -> {
+                val r = FloatArray(9)
+                SensorManager.getRotationMatrixFromVector(r, event.values)
+                val outR = FloatArray(9)
+                SensorManager.remapCoordinateSystem(r, SensorManager.AXIS_Y, SensorManager.AXIS_MINUS_X, outR)
+                currentOrientationMatrix = outR
+                
+                // Drive AR renderer
+                val viewM = FloatArray(16)
+                viewM[0] = outR[0]; viewM[1] = outR[3]; viewM[2] = outR[6]; viewM[3] = 0f
+                viewM[4] = outR[1]; viewM[5] = outR[4]; viewM[6] = outR[7]; viewM[7] = 0f
+                viewM[8] = outR[2]; viewM[9] = outR[5]; viewM[10] = outR[8]; viewM[11] = 0f
+                viewM[12] = 0f; viewM[13] = 0f; viewM[14] = 0f; viewM[15] = 1f
+                sphereSLAM.setCameraPose(viewM)
+                
+                if (currentMode == AppMode.CREATION && isScanning) {
+                    processAutoShutter()
+                }
+            }
+            Sensor.TYPE_GYROSCOPE -> {
+                currentGyroMagnitude = sqrt(event.values[0]*event.values[0] + event.values[1]*event.values[1] + event.values[2]*event.values[2])
             }
         }
         sphereSLAM.processIMU(event.sensor.type, event.values[0], event.values[1], event.values[2], event.timestamp)
     }
 
-    private fun updatePoseFromIMU(rotationVector: FloatArray) {
-        val r = FloatArray(9)
-        SensorManager.getRotationMatrixFromVector(r, rotationVector)
-        
-        // Remap to account for 90-degree clockwise image rotation
-        val outR = FloatArray(9)
-        SensorManager.remapCoordinateSystem(r, SensorManager.AXIS_Y, SensorManager.AXIS_MINUS_X, outR)
-        currentRemappedMatrix = outR
-        
-        // OpenGL View Matrix (Transpose of rotation)
-        val viewMatrix = FloatArray(16)
-        viewMatrix[0] = outR[0]; viewMatrix[1] = outR[3]; viewMatrix[2] = outR[6]; viewMatrix[3] = 0f
-        viewMatrix[4] = outR[1]; viewMatrix[5] = outR[4]; viewMatrix[6] = outR[7]; viewMatrix[7] = 0f
-        viewMatrix[8] = outR[2]; viewMatrix[9] = outR[5]; viewMatrix[10] = outR[8]; viewMatrix[11] = 0f
-        viewMatrix[12] = 0f; viewMatrix[13] = 0f; viewMatrix[14] = 0f; viewMatrix[15] = 1f
-        
-        sphereSLAM.setCameraPose(viewMatrix)
-    }
+    /**
+     * Implements Section 4.2 Auto-Shutter logic from doc.
+     */
+    private fun processAutoShutter() {
+        val camLX = -currentOrientationMatrix[2]
+        val camLY = -currentOrientationMatrix[5]
+        val camLZ = -currentOrientationMatrix[8]
 
-    private fun checkHit() {
-        // Look vector is the remapped "Forward" direction (-Z in camera space)
-        // Which is column 2 of the remapped rotation matrix
-        val lx = -currentRemappedMatrix[2]
-        val ly = -currentRemappedMatrix[5]
-        val lz = -currentRemappedMatrix[8]
-
-        var hitChanged = false
-        for (i in targetPositions.indices) {
-            if (capturedFlags[i]) continue
-            val tx = targetPositions[i][0]; val ty = targetPositions[i][1]; val tz = targetPositions[i][2]
-            val dist = sqrt(tx*tx + ty*ty + tz*tz)
-            val dot = lx * (tx/dist) + ly * (ty/dist) + lz * (tz/dist)
+        var capturedOne = false
+        for (i in targetVectors.indices) {
+            if (targetCaptured[i]) continue
             
-            if (dot > 0.97) { // Approx 14 degrees threshold
-                capturedFlags[i] = true
-                totalCoverage++
-                hitChanged = true
+            val tv = targetVectors[i]
+            val mag = sqrt(tv[0]*tv[0] + tv[1]*tv[1] + tv[2]*tv[2])
+            val dot = camLX*(tv[0]/mag) + camLY*(tv[1]/mag) + camLZ*(tv[2]/mag)
+            val alpha = acos(dot.toDouble().coerceIn(-1.0, 1.0)).toFloat()
+            
+            if (alpha < CAPTURE_THRESHOLD_RAD && currentGyroMagnitude < STABILITY_THRESHOLD) {
+                targetCaptured[i] = true
+                totalCapturedCount++
+                capturedOne = true
+                sphereSLAM.addFrameToMosaic()
+                break 
             }
         }
-        if (hitChanged) {
+        
+        if (capturedOne) {
             syncTargetsToNative()
-            val percentage = (totalCoverage.toFloat() / targetPositions.size * 100).toInt()
-            runOnUiThread { 
-                instructionText.text = "Scanning: $percentage% ($totalCoverage/${targetPositions.size})" 
-                if (percentage >= 100) {
+            runOnUiThread {
+                val progress = (totalCapturedCount.toFloat() / NUM_TARGETS * 100).toInt()
+                captureProgressBar.progress = progress
+                instructionText.text = "Captured $totalCapturedCount/$NUM_TARGETS"
+                if (progress >= 100) {
                     instructionText.setTextColor(ContextCompat.getColor(this, android.R.color.holo_green_light))
-                    instructionText.text = "Ready to Stitch!"
+                    instructionText.text = "Done! Tap Stop & Stitch"
                 }
             }
         }
@@ -328,7 +346,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         cameraManager.startBackgroundThread()
         if (allPermissionsGranted()) startCamera()
         sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_FASTEST)
-        sensorManager.registerListener(this, gyroscope, SensorManager.SENSOR_DELAY_FASTEST)
+        sensorManager.registerListener(this, gyroscope, SensorManager.SENSOR_DELAY_GAME)
         sensorManager.registerListener(this, rotationVector, SensorManager.SENSOR_DELAY_GAME)
         Choreographer.getInstance().postFrameCallback(this)
     }
@@ -348,14 +366,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     override fun doFrame(frameTimeNanos: Long) {
         sphereSLAM.renderFrame()
         val state = sphereSLAM.getTrackingState()
-        val stateStr = when(state) { -1 -> "READY?"; 0 -> "NO IMGS"; 1 -> "INIT"; 2 -> "TRACKING"; 3 -> "LOST"; else -> "???" }
-        runOnUiThread {
-            fpsText.text = "Mode: ${currentMode.name} | SLAM: $stateStr"
-            if (currentMode == AppMode.TRACKING) {
-                instructionText.text = when(state) { 1 -> "Move side-to-side"; 2 -> "Tracking Active"; 3 -> "Lost"; else -> "Tracking Mode" }
-            }
-        }
-        if (++statsTextUpdateFrameCounter % 60 == 0) statsText.text = sphereSLAM.getMapStats()
+        fpsText.text = "Mode: ${currentMode.name} | SLAM State: $state"
         Choreographer.getInstance().postFrameCallback(this)
     }
 
