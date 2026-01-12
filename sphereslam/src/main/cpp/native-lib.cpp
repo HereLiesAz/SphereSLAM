@@ -7,7 +7,10 @@
 #include <vector>
 #include <mutex>
 #include <opencv2/core.hpp>
-#include <glm/gtc/matrix_transform.hpp>
+#include <cmath>
+
+// GLM is a custom minimal header in this project
+#include "glm/glm.hpp"
 
 #include "SLAM/System.h"
 #include "SLAM/KeyFrame.h"
@@ -32,6 +35,24 @@ std::mutex mMutexPose;
 cv::Mat mCurrentPose = cv::Mat::eye(4, 4, CV_32F);
 int screenWidth = 1080;
 int screenHeight = 1920;
+
+// Minimal perspective implementation since project uses a custom GLM
+namespace glm_ext {
+    inline glm::mat4 perspective(float fovy, float aspect, float zNear, float zFar) {
+        float const tanHalfFovy = tan(fovy / 2.0f);
+        glm::mat4 Result(0.0f);
+        Result[0][0] = 1.0f / (aspect * tanHalfFovy);
+        Result[1][1] = 1.0f / (tanHalfFovy);
+        Result[2][2] = -(zFar + zNear) / (zFar - zNear);
+        Result[2][3] = -1.0f;
+        Result[3][2] = -(2.0f * zFar * zNear) / (zFar - zNear);
+        return Result;
+    }
+
+    inline float radians(float degrees) {
+        return degrees * 0.01745329251994329576923690768489f;
+    }
+}
 
 extern "C" JNIEXPORT jint JNICALL
 JNI_OnLoad(JavaVM* vm, void* reserved) {
@@ -149,9 +170,8 @@ Java_com_hereliesaz_sphereslam_SphereSLAM_renderFrame(JNIEnv* env, jobject thiz)
             }
         }
 
-        // Apply a proper projection matrix
         float aspect = (float)screenWidth / (float)screenHeight;
-        glm::mat4 projMatrix = glm::perspective(glm::radians(60.0f), aspect, 0.1f, 100.0f);
+        glm::mat4 projMatrix = glm_ext::perspective(glm_ext::radians(60.0f), aspect, 0.1f, 100.0f);
 
         renderer->updateCamera(viewMatrix, projMatrix);
         renderer->draw();

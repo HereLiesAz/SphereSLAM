@@ -44,8 +44,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
 
     private val TAG = "MainActivity"
     private val CAMERA_PERMISSION_REQUEST_CODE = 100
-    private val CREATE_FILE_REQUEST_CODE = 101
-    private val OPEN_FILE_REQUEST_CODE = 102
+
+    enum class AppMode {
+        CREATION,   // Mode to capture and stitch a photosphere
+        TRACKING    // Mode to perform SLAM tracking
+    }
+
+    private var currentMode = AppMode.CREATION
     
     private lateinit var cameraManager: SphereCameraManager
     private lateinit var sphereSLAM: SphereSLAM
@@ -58,13 +63,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     private lateinit var fpsText: TextView
     private lateinit var statsText: TextView
     private lateinit var instructionText: TextView
-    private lateinit var captureButton: Button
+    private lateinit var modeButton: Button
+    private lateinit var actionButton: Button
     
     private var lastFrameTime = 0L
     private var statsTextUpdateFrameCounter: Int = 0
 
-    // Guided Capture State
-    private var isCapturing = false
+    // Creation State
     private val coverageGrid = Array(8) { BooleanArray(16) }
     private var totalCoverage = 0
     private val MAX_CELLS = 8 * 16
@@ -90,21 +95,16 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         fpsText = findViewById(R.id.fpsText)
         statsText = findViewById(R.id.statsText)
         instructionText = findViewById(R.id.instructionText)
-        captureButton = findViewById(R.id.captureButton)
+        
+        modeButton = findViewById(R.id.resetButton) // Reusing as Mode Toggle for now
+        modeButton.text = "Switch to Tracking"
+        
+        actionButton = findViewById(R.id.captureButton)
+        actionButton.text = "Start Creation"
 
-        findViewById<Button>(R.id.resetButton).setOnClickListener {
-            sphereSLAM.resetSystem()
-            framesProcessedCount = 0
-            resetCoverage()
-            isCapturing = false
-            captureButton.text = "Start Capture"
-            Toast.makeText(this, "System Reset", Toast.LENGTH_SHORT).show()
-        }
+        modeButton.setOnClickListener { toggleMode() }
+        actionButton.setOnClickListener { handleAction() }
 
-        captureButton.setOnClickListener { toggleCapture() }
-
-        findViewById<Button>(R.id.saveMapButton).setOnClickListener { saveMapExplicit() }
-        findViewById<Button>(R.id.loadMapButton).setOnClickListener { loadMapExplicit() }
         findViewById<Button>(R.id.logsButton).setOnClickListener {
             LogBottomSheetFragment().show(supportFragmentManager, "LogBottomSheet")
         }
@@ -115,7 +115,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
             while (true) {
                 try {
                     val frame = frameQueue.take()
-                    sphereSLAM.processFrame(frame.address, frame.timestamp, frame.width, frame.height, frame.stride)
+                    // Only process SLAM if in Tracking mode
+                    if (currentMode == AppMode.TRACKING) {
+                        sphereSLAM.processFrame(frame.address, frame.timestamp, frame.width, frame.height, frame.stride)
+                    } else {
+                        // In Creation mode, we might want a separate "CaptureFrame" logic
+                        // For now, we still process to keep Vulkan buffers alive, but we could optimize.
+                        sphereSLAM.processFrame(frame.address, frame.timestamp, frame.width, frame.height, frame.stride)
+                    }
                     frame.image.close()
                     framesProcessedCount++
                 } catch (e: Exception) {
@@ -142,26 +149,51 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
         rotationVector = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
 
+        updateUiForMode()
+
         if (allPermissionsGranted()) startCamera()
         else ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), CAMERA_PERMISSION_REQUEST_CODE)
     }
 
-    private fun toggleCapture() {
-        val state = sphereSLAM.getTrackingState()
-        if (state != 2) {
-            Toast.makeText(this, "Wait for TRACKING state (Move camera slowly side-to-side)", Toast.LENGTH_SHORT).show()
-            return
-        }
+    private fun toggleMode() {
+        currentMode = if (currentMode == AppMode.CREATION) AppMode.TRACKING else AppMode.CREATION
+        updateUiForMode()
+        sphereSLAM.resetSystem()
+        framesProcessedCount = 0
+    }
 
-        if (!isCapturing) {
-            isCapturing = true
-            captureButton.text = "Finish & Stitch"
-            resetCoverage()
-            Toast.makeText(this, "Slowly rotate to cover all directions", Toast.LENGTH_LONG).show()
+    private fun updateUiForMode() {
+        runOnUiThread {
+            if (currentMode == AppMode.CREATION) {
+                modeButton.text = "Switch to Tracking"
+                actionButton.text = "Start Scan"
+                instructionText.text = "Creation Mode: Rotate to scan 360°"
+                resetCoverage()
+            } else {
+                modeButton.text = "Switch to Creation"
+                actionButton.text = "Start Tracking"
+                instructionText.text = "Tracking Mode: Move camera to initialize SLAM"
+            }
+        }
+    }
+
+    private var isScanning = false
+
+    private fun handleAction() {
+        if (currentMode == AppMode.CREATION) {
+            if (!isScanning) {
+                isScanning = true
+                actionButton.text = "Finish & Stitch"
+                Toast.makeText(this, "Slowly rotate in all directions", Toast.LENGTH_SHORT).show()
+            } else {
+                isScanning = false
+                actionButton.text = "Start Scan"
+                generatePhotosphere()
+            }
         } else {
-            isCapturing = false
-            captureButton.text = "Start Capture"
-            capturePhotosphere()
+            // Tracking mode action (e.g. Relocalize or Reset)
+            sphereSLAM.resetSystem()
+            Toast.makeText(this, "SLAM System Reset", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -170,67 +202,23 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         totalCoverage = 0
     }
 
-    private fun updateCoverage(azimuth: Float, pitch: Float) {
-        if (!isCapturing) return
-        val col = (((azimuth + PI) / (2 * PI)) * 16).toInt().coerceIn(0, 15)
-        val row = (((pitch + PI/2) / PI) * 8).toInt().coerceIn(0, 7)
-        if (!coverageGrid[row][col]) {
-            coverageGrid[row][col] = true
-            totalCoverage++
-            updateInstruction()
-        }
-    }
-
-    private fun updateInstruction() {
-        val percentage = (totalCoverage.toFloat() / MAX_CELLS * 100).toInt()
-        runOnUiThread {
-            instructionText.text = "Coverage: $percentage% ($totalCoverage/$MAX_CELLS)"
-            if (percentage >= 95) {
-                instructionText.setTextColor(ContextCompat.getColor(this, android.R.color.holo_green_light))
-                instructionText.text = "Done! Tap Finish to Stitch."
-            } else {
-                instructionText.setTextColor(ContextCompat.getColor(this, android.R.color.white))
-            }
-        }
-    }
-
-    private fun capturePhotosphere() {
+    private fun generatePhotosphere() {
         Toast.makeText(this, "Stitching Photosphere...", Toast.LENGTH_SHORT).show()
-        lifecycleScope.launch {
+        lifecycleScope.launch(Dispatchers.IO) {
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
             val documentsDir = getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS) ?: return@launch
             val destDir = File(documentsDir, "SphereSLAM_Captures/$timestamp").apply { mkdirs() }
-
-            withContext(Dispatchers.IO) {
-                try {
-                    sphereSLAM.saveMap(File(cacheDir, "map_$timestamp.bin").absolutePath)
-                    copyCacheContents(destDir)
-                    val photosphereFile = File(destDir, "photosphere.jpg")
-                    sphereSLAM.savePhotosphere(photosphereFile.absolutePath)
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(this@MainActivity, "Photosphere Saved to Documents!", Toast.LENGTH_LONG).show()
-                    }
-                } catch (e: Exception) { LogManager.e(TAG, "Capture failed", e) }
-            }
-            captureScreenshot(destDir)
-        }
-    }
-
-    private suspend fun copyCacheContents(destDir: File) {
-        cacheDir.listFiles()?.filter { it.isFile }?.forEach { it.copyTo(File(destDir, it.name), true) }
-    }
-
-    private fun captureScreenshot(destDir: File) {
-        val screenshotFile = File(destDir, "preview.jpg")
-        val bitmap = Bitmap.createBitmap(surfaceView.width, surfaceView.height, Bitmap.Config.ARGB_8888)
-        PixelCopy.request(surfaceView, bitmap, { result ->
-            if (result == PixelCopy.SUCCESS) {
-                lifecycleScope.launch(Dispatchers.IO) {
-                    FileOutputStream(screenshotFile).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
-                    bitmap.recycle()
+            
+            try {
+                val photosphereFile = File(destDir, "photosphere.jpg")
+                sphereSLAM.savePhotosphere(photosphereFile.absolutePath)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "Creation Complete!", Toast.LENGTH_LONG).show()
+                    // Auto-switch to tracking after successful creation?
+                    // toggleMode() 
                 }
-            }
-        }, Handler(Looper.getMainLooper()))
+            } catch (e: Exception) { LogManager.e(TAG, "Stitching failed", e) }
+        }
     }
 
     override fun onSensorChanged(event: SensorEvent?) {
@@ -240,9 +228,24 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
             SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
             val orientation = FloatArray(3)
             SensorManager.getOrientation(rotationMatrix, orientation)
-            updateCoverage(orientation[0], orientation[1])
-        } else {
-            sphereSLAM.processIMU(event.sensor.type, event.values[0], event.values[1], event.values[2], event.timestamp)
+            
+            if (currentMode == AppMode.CREATION && isScanning) {
+                updateCoverage(orientation[0], orientation[1])
+            }
+        }
+        sphereSLAM.processIMU(event.sensor.type, event.values[0], event.values[1], event.values[2], event.timestamp)
+    }
+
+    private fun updateCoverage(azimuth: Float, pitch: Float) {
+        val col = (((azimuth + PI) / (2 * PI)) * 16).toInt().coerceIn(0, 15)
+        val row = (((pitch + PI/2) / PI) * 8).toInt().coerceIn(0, 7)
+        if (!coverageGrid[row][col]) {
+            coverageGrid[row][col] = true
+            totalCoverage++
+            val percentage = (totalCoverage.toFloat() / MAX_CELLS * 100).toInt()
+            runOnUiThread {
+                instructionText.text = "Scanning: $percentage% ($totalCoverage/$MAX_CELLS)"
+            }
         }
     }
 
@@ -275,19 +278,19 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         val stateStr = when(state) {
             -1 -> "READY?"
             0 -> "NO IMGS"
-            1 -> "INITIALIZING..."
+            1 -> "INIT"
             2 -> "TRACKING"
             3 -> "LOST"
             else -> "???"
         }
         
         runOnUiThread {
-            fpsText.text = "State: $stateStr | Processed: $framesProcessedCount"
-            if (!isCapturing) {
+            fpsText.text = "Mode: ${currentMode.name} | SLAM: $stateStr"
+            if (currentMode == AppMode.TRACKING && !isScanning) {
                 instructionText.text = when(state) {
-                    1 -> "Move camera slowly side-to-side to initialize SLAM"
-                    2 -> "Ready! Tap 'Start Capture' to begin"
-                    3 -> "Lost tracking. Return to a known area"
+                    1 -> "Move camera slowly side-to-side to initialize"
+                    2 -> "Tracking Active"
+                    3 -> "Lost. Return to start"
                     else -> instructionText.text
                 }
             }
@@ -299,6 +302,4 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
 
     private fun startCamera() { cameraManager.openCamera() }
     private fun allPermissionsGranted() = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-    private fun saveMapExplicit() { /* ... Same as before ... */ }
-    private fun loadMapExplicit() { /* ... Same as before ... */ }
 }
