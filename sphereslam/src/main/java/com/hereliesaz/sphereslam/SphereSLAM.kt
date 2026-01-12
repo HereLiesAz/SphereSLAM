@@ -19,6 +19,7 @@ class SphereSLAM(private val context: Context) {
     external fun processIMU(type: Int, x: Float, y: Float, z: Float, timestamp: Long)
     external fun setNativeWindow(surface: Surface?)
     external fun renderFrame()
+    external fun setCameraPose(matrix: FloatArray)
     external fun setCaptureTargets(positions: FloatArray, captured: BooleanArray)
     external fun manipulateView(dx: Float, dy: Float)
     external fun getTrackingState(): Int

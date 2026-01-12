@@ -34,6 +34,9 @@ PlatformAndroid* platformAndroid = nullptr;
 // Thread safety for Pose
 std::mutex mMutexPose;
 cv::Mat mCurrentPose = cv::Mat::eye(4, 4, CV_32F);
+glm::mat4 mManualPose = glm::mat4(1.0f);
+bool mUseManualPose = false;
+
 int screenWidth = 1080;
 int screenHeight = 1920;
 
@@ -136,6 +139,7 @@ Java_com_hereliesaz_sphereslam_SphereSLAM_processFrame(JNIEnv* env, jobject thiz
             std::unique_lock<std::mutex> lock(mMutexPose);
             if (!Tcw.empty()) {
                 mCurrentPose = Tcw.clone();
+                mUseManualPose = false;
             }
         }
     }
@@ -164,19 +168,33 @@ Java_com_hereliesaz_sphereslam_SphereSLAM_setNativeWindow(JNIEnv* env, jobject t
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_hereliesaz_sphereslam_SphereSLAM_setCameraPose(JNIEnv* env, jobject thiz, jfloatArray matrix) {
+    jfloat* m = env->GetFloatArrayElements(matrix, nullptr);
+    {
+        std::unique_lock<std::mutex> lock(mMutexPose);
+        for(int i=0; i<4; ++i) {
+            for(int j=0; j<4; ++j) {
+                mManualPose[i][j] = m[i*4 + j];
+            }
+        }
+        mUseManualPose = true;
+    }
+    env->ReleaseFloatArrayElements(matrix, m, JNI_ABORT);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_hereliesaz_sphereslam_SphereSLAM_renderFrame(JNIEnv* env, jobject thiz) {
     if (renderer) {
-        cv::Mat pose;
+        glm::mat4 viewMatrix(1.0f);
         {
             std::unique_lock<std::mutex> lock(mMutexPose);
-            pose = mCurrentPose.clone();
-        }
-
-        glm::mat4 viewMatrix(1.0f);
-        if (!pose.empty() && pose.rows == 4 && pose.cols == 4) {
-            for(int i=0; i<4; ++i) {
-                for(int j=0; j<4; ++j) {
-                    viewMatrix[j][i] = pose.at<float>(i, j);
+            if (mUseManualPose) {
+                viewMatrix = mManualPose;
+            } else if (!mCurrentPose.empty() && mCurrentPose.rows == 4 && mCurrentPose.cols == 4) {
+                for(int i=0; i<4; ++i) {
+                    for(int j=0; j<4; ++j) {
+                        viewMatrix[j][i] = mCurrentPose.at<float>(i, j);
+                    }
                 }
             }
         }

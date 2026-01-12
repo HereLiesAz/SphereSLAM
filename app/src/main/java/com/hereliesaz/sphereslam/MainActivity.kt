@@ -41,7 +41,6 @@ import java.util.concurrent.LinkedBlockingQueue
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
-import kotlin.math.acos
 import kotlin.math.sqrt
 
 class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Callback, Choreographer.FrameCallback {
@@ -75,7 +74,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     private var statsTextUpdateFrameCounter: Int = 0
 
     // Creation State
-    private val targetPositions = mutableListOf<FloatArray>() // 3D points
+    private val targetPositions = mutableListOf<FloatArray>()
     private val capturedFlags = mutableListOf<Boolean>()
     private var totalCoverage = 0
     private var isScanning = false
@@ -117,20 +116,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         }
 
         sphereSLAM = SphereSLAM(this)
-
-        // Initialize capture targets (dots on a sphere)
         initCaptureTargets()
 
         lifecycleScope.launch(Dispatchers.IO) {
             while (true) {
                 try {
                     val frame = frameQueue.take()
-                    if (currentMode == AppMode.TRACKING) {
-                        sphereSLAM.processFrame(frame.address, frame.timestamp, frame.width, frame.height, frame.stride)
-                    } else {
-                        // In creation mode, we still process to update the background texture
-                        sphereSLAM.processFrame(frame.address, frame.timestamp, frame.width, frame.height, frame.stride)
-                    }
+                    // Always process frame to update background texture
+                    sphereSLAM.processFrame(frame.address, frame.timestamp, frame.width, frame.height, frame.stride)
                     frame.image.close()
                     framesProcessedCount++
                 } catch (e: Exception) {
@@ -166,7 +159,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     private fun initCaptureTargets() {
         targetPositions.clear()
         capturedFlags.clear()
-        val radius = 5.0f // 5 meters away
+        val radius = 5.0f
         val rows = 6
         val cols = 12
         for (i in 1..rows) {
@@ -180,12 +173,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
                 capturedFlags.add(false)
             }
         }
-        // Top and bottom dots
         targetPositions.add(floatArrayOf(0f, radius, 0f))
         capturedFlags.add(false)
         targetPositions.add(floatArrayOf(0f, -radius, 0f))
         capturedFlags.add(false)
-        
         syncTargetsToNative()
     }
 
@@ -265,6 +256,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     override fun onSensorChanged(event: SensorEvent?) {
         event ?: return
         if (event.sensor.type == Sensor.TYPE_ROTATION_VECTOR) {
+            updatePoseFromIMU(event.values)
             if (currentMode == AppMode.CREATION && isScanning) {
                 checkHit(event.values)
             }
@@ -272,13 +264,36 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         sphereSLAM.processIMU(event.sensor.type, event.values[0], event.values[1], event.values[2], event.timestamp)
     }
 
+    private fun updatePoseFromIMU(rotationVector: FloatArray) {
+        val rotationMatrix = FloatArray(9)
+        SensorManager.getRotationMatrixFromVector(rotationMatrix, rotationVector)
+        
+        // Convert 3x3 rotation matrix to 4x4 OpenGL View Matrix
+        // Tcw = [R | t] where t=0 for now.
+        // Rotation matrix from Android is World -> Device (R_wd)
+        // OpenGL View Matrix is World -> Camera (T_wc_inv)
+        
+        val viewMatrix = FloatArray(16)
+        // Column 0
+        viewMatrix[0] = rotationMatrix[0]; viewMatrix[1] = rotationMatrix[3]; viewMatrix[2] = rotationMatrix[6]; viewMatrix[3] = 0f
+        // Column 1
+        viewMatrix[4] = rotationMatrix[1]; viewMatrix[5] = rotationMatrix[4]; viewMatrix[6] = rotationMatrix[7]; viewMatrix[7] = 0f
+        // Column 2
+        viewMatrix[8] = rotationMatrix[2]; viewMatrix[9] = rotationMatrix[5]; viewMatrix[10] = rotationMatrix[8]; viewMatrix[11] = 0f
+        // Column 3
+        viewMatrix[12] = 0f; viewMatrix[13] = 0f; viewMatrix[14] = 0f; viewMatrix[15] = 1f
+        
+        sphereSLAM.setCameraPose(viewMatrix)
+    }
+
     private fun checkHit(rotationVector: FloatArray) {
         val rotationMatrix = FloatArray(9)
         SensorManager.getRotationMatrixFromVector(rotationMatrix, rotationVector)
         
-        // Current look vector in world space (typically -Z in camera space)
-        // Camera space -Z is (0, 0, -1). 
-        // World space vector = R * [0, 0, -1]^T
+        // Android rotation matrix is World-to-Device. 
+        // Device's "forward" vector in World space is Row 2 (the Z components)
+        // But since we rotated the camera 90 deg, "forward" might be different.
+        // Assuming default portrait: -Z is into the screen.
         val lookX = -rotationMatrix[2]
         val lookY = -rotationMatrix[5]
         val lookZ = -rotationMatrix[8]
@@ -286,32 +301,19 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         var hitChanged = false
         for (i in targetPositions.indices) {
             if (capturedFlags[i]) continue
-            
-            val tx = targetPositions[i][0]
-            val ty = targetPositions[i][1]
-            val tz = targetPositions[i][2]
+            val tx = targetPositions[i][0]; val ty = targetPositions[i][1]; val tz = targetPositions[i][2]
             val dist = sqrt(tx*tx + ty*ty + tz*tz)
-            
-            // Normalize target vector
-            val nx = tx / dist
-            val ny = ty / dist
-            val nz = tz / dist
-            
-            // Cosine similarity
-            val dot = lookX * nx + lookY * ny + lookZ * nz
-            if (dot > 0.98) { // ~11 degrees threshold
+            val dot = lookX * (tx/dist) + lookY * (ty/dist) + lookZ * (tz/dist)
+            if (dot > 0.985) { // ~10 degrees
                 capturedFlags[i] = true
                 totalCoverage++
                 hitChanged = true
             }
         }
-        
         if (hitChanged) {
             syncTargetsToNative()
             val percentage = (totalCoverage.toFloat() / targetPositions.size * 100).toInt()
-            runOnUiThread {
-                instructionText.text = "Scanning: $percentage% ($totalCoverage/${targetPositions.size})"
-            }
+            runOnUiThread { instructionText.text = "Scanning: $percentage% ($totalCoverage/${targetPositions.size})" }
         }
     }
 
@@ -341,27 +343,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     override fun doFrame(frameTimeNanos: Long) {
         sphereSLAM.renderFrame()
         val state = sphereSLAM.getTrackingState()
-        val stateStr = when(state) {
-            -1 -> "READY?"
-            0 -> "NO IMGS"
-            1 -> "INIT"
-            2 -> "TRACKING"
-            3 -> "LOST"
-            else -> "???"
-        }
-        
+        val stateStr = when(state) { -1 -> "READY?"; 0 -> "NO IMGS"; 1 -> "INIT"; 2 -> "TRACKING"; 3 -> "LOST"; else -> "???" }
         runOnUiThread {
             fpsText.text = "Mode: ${currentMode.name} | SLAM: $stateStr"
             if (currentMode == AppMode.TRACKING) {
-                instructionText.text = when(state) {
-                    1 -> "Move camera slowly side-to-side to initialize"
-                    2 -> "Tracking Active"
-                    3 -> "Lost. Return to start"
-                    else -> "Tracking Mode"
-                }
+                instructionText.text = when(state) { 1 -> "Move slowly side-to-side"; 2 -> "Tracking Active"; 3 -> "Lost"; else -> "Tracking Mode" }
             }
         }
-
         if (++statsTextUpdateFrameCounter % 60 == 0) statsText.text = sphereSLAM.getMapStats()
         Choreographer.getInstance().postFrameCallback(this)
     }
