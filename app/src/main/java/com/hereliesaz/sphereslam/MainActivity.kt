@@ -39,8 +39,6 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.LinkedBlockingQueue
 import kotlin.math.PI
-import kotlin.math.atan2
-import kotlin.math.sqrt
 
 class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Callback, Choreographer.FrameCallback {
 
@@ -67,7 +65,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
 
     // Guided Capture State
     private var isCapturing = false
-    private val coverageGrid = Array(8) { BooleanArray(16) } // 8 rows (altitude), 16 cols (azimuth)
+    private val coverageGrid = Array(8) { BooleanArray(16) }
     private var totalCoverage = 0
     private val MAX_CELLS = 8 * 16
 
@@ -91,7 +89,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         surfaceView.holder.addCallback(this)
         fpsText = findViewById(R.id.fpsText)
         statsText = findViewById(R.id.statsText)
-        instructionText = findViewById(R.id.instructionText) ?: statsText // Fallback if not in layout
+        instructionText = findViewById(R.id.instructionText)
         captureButton = findViewById(R.id.captureButton)
 
         findViewById<Button>(R.id.resetButton).setOnClickListener {
@@ -103,9 +101,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
             Toast.makeText(this, "System Reset", Toast.LENGTH_SHORT).show()
         }
 
-        captureButton.setOnClickListener {
-            toggleCapture()
-        }
+        captureButton.setOnClickListener { toggleCapture() }
 
         findViewById<Button>(R.id.saveMapButton).setOnClickListener { saveMapExplicit() }
         findViewById<Button>(R.id.loadMapButton).setOnClickListener { loadMapExplicit() }
@@ -153,7 +149,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     private fun toggleCapture() {
         val state = sphereSLAM.getTrackingState()
         if (state != 2) {
-            Toast.makeText(this, "Wait for TRACKING state (Move camera slowly)", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Wait for TRACKING state (Move camera slowly side-to-side)", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -176,13 +172,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
 
     private fun updateCoverage(azimuth: Float, pitch: Float) {
         if (!isCapturing) return
-        
-        // Map angles to grid
-        // Azimuth: -PI to PI -> 0 to 15
         val col = (((azimuth + PI) / (2 * PI)) * 16).toInt().coerceIn(0, 15)
-        // Pitch: -PI/2 to PI/2 -> 0 to 7
         val row = (((pitch + PI/2) / PI) * 8).toInt().coerceIn(0, 7)
-
         if (!coverageGrid[row][col]) {
             coverageGrid[row][col] = true
             totalCoverage++
@@ -216,13 +207,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
                     copyCacheContents(destDir)
                     val photosphereFile = File(destDir, "photosphere.jpg")
                     sphereSLAM.savePhotosphere(photosphereFile.absolutePath)
-                    
                     withContext(Dispatchers.Main) {
                         Toast.makeText(this@MainActivity, "Photosphere Saved to Documents!", Toast.LENGTH_LONG).show()
                     }
-                } catch (e: Exception) {
-                    LogManager.e(TAG, "Capture failed", e)
-                }
+                } catch (e: Exception) { LogManager.e(TAG, "Capture failed", e) }
             }
             captureScreenshot(destDir)
         }
@@ -252,7 +240,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
             SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
             val orientation = FloatArray(3)
             SensorManager.getOrientation(rotationMatrix, orientation)
-            // orientation[0] is azimuth, [1] is pitch, [2] is roll
             updateCoverage(orientation[0], orientation[1])
         } else {
             sphereSLAM.processIMU(event.sensor.type, event.values[0], event.values[1], event.values[2], event.timestamp)
@@ -288,12 +275,24 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         val stateStr = when(state) {
             -1 -> "READY?"
             0 -> "NO IMGS"
-            1 -> "INIT..."
+            1 -> "INITIALIZING..."
             2 -> "TRACKING"
             3 -> "LOST"
             else -> "???"
         }
-        fpsText.text = "State: $stateStr | Processed: $framesProcessedCount"
+        
+        runOnUiThread {
+            fpsText.text = "State: $stateStr | Processed: $framesProcessedCount"
+            if (!isCapturing) {
+                instructionText.text = when(state) {
+                    1 -> "Move camera slowly side-to-side to initialize SLAM"
+                    2 -> "Ready! Tap 'Start Capture' to begin"
+                    3 -> "Lost tracking. Return to a known area"
+                    else -> instructionText.text
+                }
+            }
+        }
+
         if (++statsTextUpdateFrameCounter % 60 == 0) statsText.text = sphereSLAM.getMapStats()
         Choreographer.getInstance().postFrameCallback(this)
     }
