@@ -10,16 +10,9 @@
 #include <vector>
 #include <mutex>
 #include <string>
-#include "db_CornerDetector.h"
+#include "db_Types.h"
 
 namespace lightcycle {
-
-// Return codes observed in debug strings
-enum MosaicStatus {
-    MOSAIC_RET_OK = 0,
-    MOSAIC_RET_ERROR = -1,
-    MOSAIC_RET_FEW_INLIERS = -2
-};
 
 /**
  * Orchestrates the stitching pipeline.
@@ -56,7 +49,7 @@ private:
     class Blend* mBlender;
     class CDelaunay* mMesher;
     class CornerDetector* mDetector;
-    class Optimizer* mOptimizer;
+    class dbOptimizer* mOptimizer;
 
     // Frame storage (Section 3.1)
     std::vector<Frame> mFrames;

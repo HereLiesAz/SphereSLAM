@@ -1,8 +1,6 @@
 package com.hereliesaz.sphereslam
 
 import android.opengl.Matrix
-import java.util.ArrayList
-import java.util.List
 import kotlin.math.acos
 import kotlin.math.cos
 import kotlin.math.sin
@@ -23,7 +21,7 @@ class LightCycleTargetManager(numTargets: Int) {
         private const val CAPTURE_THRESHOLD_RAD = 0.052f 
     }
 
-    private val mTargetVectors: ArrayList<FloatArray> = ArrayList()
+    private val mTargetVectors: MutableList<FloatArray> = ArrayList()
     private val mTargetCaptured: BooleanArray = BooleanArray(numTargets)
     private var mCurrentTargetIndex = -1
 
