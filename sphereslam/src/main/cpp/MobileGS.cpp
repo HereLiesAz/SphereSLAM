@@ -34,10 +34,11 @@ layout(location = 0) in vec3 aPos;
 layout(location = 1) in float aCaptured;
 uniform mat4 viewMatrix;
 uniform mat4 projMatrix;
+uniform float targetSize;
 out float vCaptured;
 void main() {
     gl_Position = projMatrix * viewMatrix * vec4(aPos, 1.0);
-    gl_PointSize = 40.0;
+    gl_PointSize = targetSize;
     vCaptured = aCaptured;
 }
 )";
@@ -49,16 +50,21 @@ in float vCaptured;
 out vec4 FragColor;
 void main() {
     vec2 coord = gl_PointCoord - vec2(0.5);
-    if (dot(coord, coord) > 0.25) discard;
+    float distSq = dot(coord, coord);
+    if (distSq > 0.25) discard;
+
+    // Antialiased edge
+    float alpha = smoothstep(0.25, 0.23, distSq) * 0.7;
+
     if (vCaptured > 0.5) {
-        FragColor = vec4(0.0, 1.0, 0.0, 0.8); // Green for captured
+        FragColor = vec4(0.0, 1.0, 0.0, alpha); // Green
     } else {
-        FragColor = vec4(1.0, 0.0, 0.0, 0.8); // Red for target
+        FragColor = vec4(1.0, 0.0, 0.0, alpha); // Red
     }
 }
 )";
 
-// Existing Gaussian shaders... (skipped for brevity but should be kept in real impl)
+// Gaussian Shaders
 const char* gsVertexShader = R"(#version 300 es
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec4 aRot;
@@ -90,7 +96,7 @@ void main() {
 MobileGS::MobileGS() : mWindow(nullptr), mUserOffset(0,0,0), mUserRotation(0,0,0), mBufferDirty(false),
     mDisplay(EGL_NO_DISPLAY), mSurface(EGL_NO_SURFACE), mContext(EGL_NO_CONTEXT), mEglInitialized(false),
     mProgram(0), mVAO(0), mVBO(0), mBgProgram(0), mBgVAO(0), mBgVBO(0), mBgTexture(0), mBgDirty(false),
-    mTargetProgram(0), mTargetVAO(0), mTargetVBO(0) {
+    mTargetProgram(0), mTargetVAO(0), mTargetVBO(0), mTargetSize(100.0f) {
     mViewMatrix = glm::mat4(1.0f);
     mProjMatrix = glm::mat4(1.0f);
 }
@@ -198,6 +204,10 @@ void MobileGS::setCaptureTargets(const std::vector<glm::vec3>& targets, const st
     mCapturedFlags = captured;
 }
 
+void MobileGS::setTargetSize(float pixels) {
+    mTargetSize = pixels;
+}
+
 void MobileGS::drawBackground() {
     {
         std::unique_lock<std::mutex> lock(mMutexBg);
@@ -225,6 +235,7 @@ void MobileGS::drawTargets() {
     glUseProgram(mTargetProgram);
     glUniformMatrix4fv(glGetUniformLocation(mTargetProgram, "viewMatrix"), 1, GL_FALSE, &mViewMatrix[0][0]);
     glUniformMatrix4fv(glGetUniformLocation(mTargetProgram, "projMatrix"), 1, GL_FALSE, &mProjMatrix[0][0]);
+    glUniform1f(glGetUniformLocation(mTargetProgram, "targetSize"), mTargetSize);
     glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(TargetData), (void*)0);
     glEnableVertexAttribArray(1); glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, sizeof(TargetData), (void*)(3*4));
     glDrawArrays(GL_POINTS, 0, data.size());
@@ -236,7 +247,6 @@ void MobileGS::draw() {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     drawBackground();
     drawTargets();
-    // draw Gaussians... (rest of existing logic)
     eglSwapBuffers(mDisplay, mSurface);
 }
 

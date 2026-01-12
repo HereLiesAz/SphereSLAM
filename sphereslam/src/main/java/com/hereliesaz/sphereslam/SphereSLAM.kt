@@ -21,6 +21,7 @@ class SphereSLAM(private val context: Context) {
     external fun renderFrame()
     external fun setCameraPose(matrix: FloatArray)
     external fun setCaptureTargets(positions: FloatArray, captured: BooleanArray)
+    external fun setTargetSize(pixels: Float)
     external fun manipulateView(dx: Float, dy: Float)
     external fun getTrackingState(): Int
     external fun resetSystem()

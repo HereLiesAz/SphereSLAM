@@ -229,6 +229,13 @@ Java_com_hereliesaz_sphereslam_SphereSLAM_setCaptureTargets(JNIEnv* env, jobject
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_hereliesaz_sphereslam_SphereSLAM_setTargetSize(JNIEnv* env, jobject thiz, jfloat pixels) {
+    if (renderer) {
+        renderer->setTargetSize(pixels);
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_hereliesaz_sphereslam_SphereSLAM_manipulateView(JNIEnv* env, jobject thiz, jfloat dx, jfloat dy) {
     if (renderer) renderer->handleInput(dx, dy);
 }

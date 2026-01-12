@@ -32,6 +32,9 @@ public:
     // Update capture targets (dots)
     void setCaptureTargets(const std::vector<glm::vec3>& targets, const std::vector<bool>& captured);
 
+    // Set size of targets in pixels
+    void setTargetSize(float pixels);
+
     // Handle user input to offset the camera
     void handleInput(float dx, float dy);
 
@@ -55,6 +58,7 @@ private:
     std::vector<glm::vec3> mTargets;
     std::vector<bool> mCapturedFlags;
     std::mutex mMutexTargets;
+    float mTargetSize;
 
     // Background Texture
     GLuint mBgTexture;

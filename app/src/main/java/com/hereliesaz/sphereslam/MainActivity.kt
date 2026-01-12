@@ -48,11 +48,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     private val TAG = "MainActivity"
     private val CAMERA_PERMISSION_REQUEST_CODE = 100
 
-    enum class AppMode {
-        CREATION,   // Mode to capture and stitch a photosphere
-        TRACKING    // Mode to perform SLAM tracking
-    }
-
+    enum class AppMode { CREATION, TRACKING }
     private var currentMode = AppMode.CREATION
     
     private lateinit var cameraManager: SphereCameraManager
@@ -78,15 +74,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
     private val capturedFlags = mutableListOf<Boolean>()
     private var totalCoverage = 0
     private var isScanning = false
+    private var currentRemappedMatrix = FloatArray(9)
 
     // Frame Queue
     private data class QueuedFrame(
-        val image: android.media.Image,
-        val address: Long,
-        val timestamp: Double,
-        val width: Int,
-        val height: Int,
-        val stride: Int
+        val image: android.media.Image, val address: Long, val timestamp: Double,
+        val width: Int, val height: Int, val stride: Int
     )
     private val frameQueue = LinkedBlockingQueue<QueuedFrame>(2)
     private var framesProcessedCount = 0
@@ -116,19 +109,23 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         }
 
         sphereSLAM = SphereSLAM(this)
+
+        // Set target dot size based on the UI circle overlay
+        centerCircle.post {
+            val sizePx = centerCircle.width.toFloat()
+            sphereSLAM.setTargetSize(sizePx * 1.5f) // Make it slightly larger than the circle for easier alignment
+        }
+
         initCaptureTargets()
 
         lifecycleScope.launch(Dispatchers.IO) {
             while (true) {
                 try {
                     val frame = frameQueue.take()
-                    // Always process frame to update background texture
                     sphereSLAM.processFrame(frame.address, frame.timestamp, frame.width, frame.height, frame.stride)
                     frame.image.close()
                     framesProcessedCount++
-                } catch (e: Exception) {
-                    LogManager.e(TAG, "Error processing frame", e)
-                }
+                } catch (e: Exception) { LogManager.e(TAG, "Error processing frame", e) }
             }
         }
 
@@ -140,9 +137,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
                     frameQueue.poll()?.image?.close()
                     frameQueue.offer(frame)
                 }
-            } else {
-                image.close()
-            }
+            } else { image.close() }
         }
 
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
@@ -160,23 +155,34 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         targetPositions.clear()
         capturedFlags.clear()
         val radius = 5.0f
-        val rows = 6
-        val cols = 12
-        for (i in 1..rows) {
-            val phi = (PI * i / (rows + 1)).toFloat()
-            for (j in 0 until cols) {
-                val theta = (2 * PI * j / cols).toFloat()
-                val x = radius * sin(phi) * cos(theta)
-                val y = radius * cos(phi)
-                val z = radius * sin(phi) * sin(theta)
-                targetPositions.add(floatArrayOf(x, y, z))
-                capturedFlags.add(false)
-            }
+        
+        // 18 targets total for better UX
+        // Horizon (8)
+        for (i in 0 until 8) {
+            val a = (2 * PI * i / 8).toFloat()
+            targetPositions.add(floatArrayOf(radius * cos(a), radius * sin(a), 0f))
+            capturedFlags.add(false)
         }
-        targetPositions.add(floatArrayOf(0f, radius, 0f))
+        // Upper 45 deg (4)
+        for (i in 0 until 4) {
+            val a = (2 * PI * i / 4).toFloat()
+            val r = radius * 0.707f
+            targetPositions.add(floatArrayOf(r * cos(a), r * sin(a), radius * 0.707f))
+            capturedFlags.add(false)
+        }
+        // Lower 45 deg (4)
+        for (i in 0 until 4) {
+            val a = (2 * PI * i / 4).toFloat()
+            val r = radius * 0.707f
+            targetPositions.add(floatArrayOf(r * cos(a), r * sin(a), -radius * 0.707f))
+            capturedFlags.add(false)
+        }
+        // Poles (2)
+        targetPositions.add(floatArrayOf(0f, 0f, radius))
         capturedFlags.add(false)
-        targetPositions.add(floatArrayOf(0f, -radius, 0f))
+        targetPositions.add(floatArrayOf(0f, 0f, -radius))
         capturedFlags.add(false)
+        
         syncTargetsToNative()
     }
 
@@ -202,7 +208,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
             if (currentMode == AppMode.CREATION) {
                 modeButton.text = "Switch to Tracking"
                 actionButton.text = "Start Scan"
-                instructionText.text = "Align dots with the center circle"
+                instructionText.text = "Align red dots with the center circle"
                 centerCircle.visibility = View.VISIBLE
                 resetCoverage()
             } else {
@@ -219,7 +225,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
             if (!isScanning) {
                 isScanning = true
                 actionButton.text = "Finish & Stitch"
-                Toast.makeText(this, "Point the phone at the dots", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Collect all red dots", Toast.LENGTH_SHORT).show()
             } else {
                 isScanning = false
                 actionButton.text = "Start Scan"
@@ -258,53 +264,46 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         if (event.sensor.type == Sensor.TYPE_ROTATION_VECTOR) {
             updatePoseFromIMU(event.values)
             if (currentMode == AppMode.CREATION && isScanning) {
-                checkHit(event.values)
+                checkHit()
             }
         }
         sphereSLAM.processIMU(event.sensor.type, event.values[0], event.values[1], event.values[2], event.timestamp)
     }
 
     private fun updatePoseFromIMU(rotationVector: FloatArray) {
-        val rotationMatrix = FloatArray(9)
-        SensorManager.getRotationMatrixFromVector(rotationMatrix, rotationVector)
+        val r = FloatArray(9)
+        SensorManager.getRotationMatrixFromVector(r, rotationVector)
         
-        // Convert 3x3 rotation matrix to 4x4 OpenGL View Matrix
-        // Tcw = [R | t] where t=0 for now.
-        // Rotation matrix from Android is World -> Device (R_wd)
-        // OpenGL View Matrix is World -> Camera (T_wc_inv)
+        // Remap to account for 90-degree clockwise image rotation
+        val outR = FloatArray(9)
+        SensorManager.remapCoordinateSystem(r, SensorManager.AXIS_Y, SensorManager.AXIS_MINUS_X, outR)
+        currentRemappedMatrix = outR
         
+        // OpenGL View Matrix (Transpose of rotation)
         val viewMatrix = FloatArray(16)
-        // Column 0
-        viewMatrix[0] = rotationMatrix[0]; viewMatrix[1] = rotationMatrix[3]; viewMatrix[2] = rotationMatrix[6]; viewMatrix[3] = 0f
-        // Column 1
-        viewMatrix[4] = rotationMatrix[1]; viewMatrix[5] = rotationMatrix[4]; viewMatrix[6] = rotationMatrix[7]; viewMatrix[7] = 0f
-        // Column 2
-        viewMatrix[8] = rotationMatrix[2]; viewMatrix[9] = rotationMatrix[5]; viewMatrix[10] = rotationMatrix[8]; viewMatrix[11] = 0f
-        // Column 3
+        viewMatrix[0] = outR[0]; viewMatrix[1] = outR[3]; viewMatrix[2] = outR[6]; viewMatrix[3] = 0f
+        viewMatrix[4] = outR[1]; viewMatrix[5] = outR[4]; viewMatrix[6] = outR[7]; viewMatrix[7] = 0f
+        viewMatrix[8] = outR[2]; viewMatrix[9] = outR[5]; viewMatrix[10] = outR[8]; viewMatrix[11] = 0f
         viewMatrix[12] = 0f; viewMatrix[13] = 0f; viewMatrix[14] = 0f; viewMatrix[15] = 1f
         
         sphereSLAM.setCameraPose(viewMatrix)
     }
 
-    private fun checkHit(rotationVector: FloatArray) {
-        val rotationMatrix = FloatArray(9)
-        SensorManager.getRotationMatrixFromVector(rotationMatrix, rotationVector)
-        
-        // Android rotation matrix is World-to-Device. 
-        // Device's "forward" vector in World space is Row 2 (the Z components)
-        // But since we rotated the camera 90 deg, "forward" might be different.
-        // Assuming default portrait: -Z is into the screen.
-        val lookX = -rotationMatrix[2]
-        val lookY = -rotationMatrix[5]
-        val lookZ = -rotationMatrix[8]
+    private fun checkHit() {
+        // Look vector is the remapped "Forward" direction (-Z in camera space)
+        // Which is column 2 of the remapped rotation matrix
+        val lx = -currentRemappedMatrix[2]
+        val ly = -currentRemappedMatrix[5]
+        val lz = -currentRemappedMatrix[8]
 
         var hitChanged = false
         for (i in targetPositions.indices) {
             if (capturedFlags[i]) continue
             val tx = targetPositions[i][0]; val ty = targetPositions[i][1]; val tz = targetPositions[i][2]
             val dist = sqrt(tx*tx + ty*ty + tz*tz)
-            val dot = lookX * (tx/dist) + lookY * (ty/dist) + lookZ * (tz/dist)
-            if (dot > 0.985) { // ~10 degrees
+            val dot = lx * (tx/dist) + ly * (ty/dist) + lz * (tz/dist)
+            
+            if (dot > 0.97) { // Approx 14 degrees threshold
                 capturedFlags[i] = true
                 totalCoverage++
                 hitChanged = true
@@ -313,7 +312,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         if (hitChanged) {
             syncTargetsToNative()
             val percentage = (totalCoverage.toFloat() / targetPositions.size * 100).toInt()
-            runOnUiThread { instructionText.text = "Scanning: $percentage% ($totalCoverage/${targetPositions.size})" }
+            runOnUiThread { 
+                instructionText.text = "Scanning: $percentage% ($totalCoverage/${targetPositions.size})" 
+                if (percentage >= 100) {
+                    instructionText.setTextColor(ContextCompat.getColor(this, android.R.color.holo_green_light))
+                    instructionText.text = "Ready to Stitch!"
+                }
+            }
         }
     }
 
@@ -324,7 +329,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         if (allPermissionsGranted()) startCamera()
         sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_FASTEST)
         sensorManager.registerListener(this, gyroscope, SensorManager.SENSOR_DELAY_FASTEST)
-        sensorManager.registerListener(this, rotationVector, SensorManager.SENSOR_DELAY_UI)
+        sensorManager.registerListener(this, rotationVector, SensorManager.SENSOR_DELAY_GAME)
         Choreographer.getInstance().postFrameCallback(this)
     }
 
@@ -347,7 +352,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, SurfaceHolder.Cal
         runOnUiThread {
             fpsText.text = "Mode: ${currentMode.name} | SLAM: $stateStr"
             if (currentMode == AppMode.TRACKING) {
-                instructionText.text = when(state) { 1 -> "Move slowly side-to-side"; 2 -> "Tracking Active"; 3 -> "Lost"; else -> "Tracking Mode" }
+                instructionText.text = when(state) { 1 -> "Move side-to-side"; 2 -> "Tracking Active"; 3 -> "Lost"; else -> "Tracking Mode" }
             }
         }
         if (++statsTextUpdateFrameCounter % 60 == 0) statsText.text = sphereSLAM.getMapStats()
