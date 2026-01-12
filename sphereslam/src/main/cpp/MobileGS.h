@@ -7,6 +7,7 @@
 #include <glm/glm.hpp>
 #include <android/native_window.h>
 #include <mutex>
+#include <opencv2/core.hpp>
 #include "Gaussian.h"
 
 class MobileGS {
@@ -25,6 +26,12 @@ public:
     // Update the virtual camera pose
     void updateCamera(const glm::mat4& viewMatrix, const glm::mat4& projectionMatrix);
 
+    // Update background camera frame
+    void updateBackground(const cv::Mat& frame);
+
+    // Update capture targets (dots)
+    void setCaptureTargets(const std::vector<glm::vec3>& targets, const std::vector<bool>& captured);
+
     // Handle user input to offset the camera
     void handleInput(float dx, float dy);
 
@@ -38,13 +45,24 @@ public:
     void draw();
 
 private:
-    // Double Buffer
+    // Double Buffer for Gaussians
     std::vector<Gaussian> mFrontBuffer;
     std::vector<Gaussian> mBackBuffer;
     bool mBufferDirty;
     std::mutex mMutexBuffer;
 
-    std::vector<glm::mat4> keyFramePoses; // New: Store poses for visualization
+    // Capture Targets
+    std::vector<glm::vec3> mTargets;
+    std::vector<bool> mCapturedFlags;
+    std::mutex mMutexTargets;
+
+    // Background Texture
+    GLuint mBgTexture;
+    cv::Mat mPendingBgFrame;
+    std::mutex mMutexBg;
+    bool mBgDirty;
+
+    std::vector<glm::mat4> keyFramePoses;
     ANativeWindow* mWindow;
 
     // EGL State
@@ -58,6 +76,16 @@ private:
     GLuint mVAO;
     GLuint mVBO;
 
+    // Background GL State
+    GLuint mBgProgram;
+    GLuint mBgVAO;
+    GLuint mBgVBO;
+
+    // Target GL State (Dots)
+    GLuint mTargetProgram;
+    GLuint mTargetVAO;
+    GLuint mTargetVBO;
+
     // Camera State
     glm::mat4 mViewMatrix;
     glm::mat4 mProjMatrix;
@@ -68,6 +96,8 @@ private:
     void terminateEGL();
     void compileShaders();
     GLuint loadShader(GLenum type, const char* shaderSrc);
+    void drawBackground();
+    void drawTargets();
     void drawFrustums();
 };
 

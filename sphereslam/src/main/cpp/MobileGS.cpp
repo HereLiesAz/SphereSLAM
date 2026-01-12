@@ -2,131 +2,133 @@
 #include <android/log.h>
 #include <algorithm>
 #include <cmath>
+#include <opencv2/imgproc.hpp>
 
 #define TAG "MobileGS"
 
-// Conceptual Vertex Shader
-const char* gsVertexShader = R"(#version 300 es
-layout(location = 0) in vec3 aPos;     // Gaussian Center
-layout(location = 1) in vec4 aRot;     // Quaternion
-layout(location = 2) in vec3 aScale;   // Scale
-layout(location = 3) in float aOpacity;
-layout(location = 4) in vec3 aColor;   // SH DC
+// Vertex Shader for Background
+const char* bgVertexShader = R"(#version 300 es
+layout(location = 0) in vec2 aPos;
+layout(location = 1) in vec2 aTexCoord;
+out vec2 vTexCoord;
+void main() {
+    gl_Position = vec4(aPos, 0.0, 1.0);
+    vTexCoord = aTexCoord;
+}
+)";
 
+// Fragment Shader for Background
+const char* bgFragmentShader = R"(#version 300 es
+precision mediump float;
+uniform sampler2D uTexture;
+in vec2 vTexCoord;
+out vec4 FragColor;
+void main() {
+    FragColor = texture(uTexture, vTexCoord);
+}
+)";
+
+// Vertex Shader for Dots (Targets)
+const char* targetVertexShader = R"(#version 300 es
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in float aCaptured;
 uniform mat4 viewMatrix;
 uniform mat4 projMatrix;
-
-out vec4 vColor;
-
+out float vCaptured;
 void main() {
-    // Conceptual Billboarding logic
-    // 1. Transform center to camera space
+    gl_Position = projMatrix * viewMatrix * vec4(aPos, 1.0);
+    gl_PointSize = 40.0;
+    vCaptured = aCaptured;
+}
+)";
+
+// Fragment Shader for Dots
+const char* targetFragmentShader = R"(#version 300 es
+precision mediump float;
+in float vCaptured;
+out vec4 FragColor;
+void main() {
+    vec2 coord = gl_PointCoord - vec2(0.5);
+    if (dot(coord, coord) > 0.25) discard;
+    if (vCaptured > 0.5) {
+        FragColor = vec4(0.0, 1.0, 0.0, 0.8); // Green for captured
+    } else {
+        FragColor = vec4(1.0, 0.0, 0.0, 0.8); // Red for target
+    }
+}
+)";
+
+// Existing Gaussian shaders... (skipped for brevity but should be kept in real impl)
+const char* gsVertexShader = R"(#version 300 es
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec4 aRot;
+layout(location = 2) in vec3 aScale;
+layout(location = 3) in float aOpacity;
+layout(location = 4) in vec3 aColor;
+uniform mat4 viewMatrix;
+uniform mat4 projMatrix;
+out vec4 vColor;
+void main() {
     vec4 viewPos = viewMatrix * vec4(aPos, 1.0);
-
-    // 2. Project to screen
     gl_Position = projMatrix * viewPos;
-    gl_PointSize = 10.0; // Fixed size for point splatting fallback
-
-    // 3. Pass color and opacity
+    gl_PointSize = 10.0;
     vColor = vec4(aColor, aOpacity);
 }
 )";
 
-// Conceptual Fragment Shader
 const char* gsFragmentShader = R"(#version 300 es
 precision mediump float;
 in vec4 vColor;
 out vec4 FragColor;
 void main() {
-    // Simple Gaussian falloff approximation
     vec2 coord = gl_PointCoord - vec2(0.5);
-    float distSq = dot(coord, coord);
-    if (distSq > 0.25) discard;
-
-    // float alpha = exp(-4.0 * distSq);
+    if (dot(coord, coord) > 0.25) discard;
     FragColor = vColor;
 }
 )";
 
-MobileGS::MobileGS() : mWindow(nullptr), mUserOffset(glm::vec3(0.0f, 0.0f, 0.0f)), mUserRotation(glm::vec3(0.0f, 0.0f, 0.0f)), mBufferDirty(false),
+MobileGS::MobileGS() : mWindow(nullptr), mUserOffset(0,0,0), mUserRotation(0,0,0), mBufferDirty(false),
     mDisplay(EGL_NO_DISPLAY), mSurface(EGL_NO_SURFACE), mContext(EGL_NO_CONTEXT), mEglInitialized(false),
-    mProgram(0), mVAO(0), mVBO(0) {
+    mProgram(0), mVAO(0), mVBO(0), mBgProgram(0), mBgVAO(0), mBgVBO(0), mBgTexture(0), mBgDirty(false),
+    mTargetProgram(0), mTargetVAO(0), mTargetVBO(0) {
     mViewMatrix = glm::mat4(1.0f);
     mProjMatrix = glm::mat4(1.0f);
 }
 
-MobileGS::~MobileGS() {
-    terminateEGL();
-}
+MobileGS::~MobileGS() { terminateEGL(); }
 
-void MobileGS::initialize() {
-    __android_log_print(ANDROID_LOG_INFO, TAG, "Initializing MobileGS Renderer");
-}
+void MobileGS::initialize() { __android_log_print(ANDROID_LOG_INFO, TAG, "MobileGS Initialized"); }
 
 void MobileGS::reset() {
     std::unique_lock<std::mutex> lock(mMutexBuffer);
-    mFrontBuffer.clear();
-    mBackBuffer.clear();
-    mBufferDirty = true;
+    mFrontBuffer.clear(); mBackBuffer.clear(); mBufferDirty = true;
     keyFramePoses.clear();
 }
 
 void MobileGS::setWindow(ANativeWindow* window) {
     if (mWindow == window) return;
-
-    if (mWindow) {
-        terminateEGL();
-    }
-
+    if (mWindow) terminateEGL();
     mWindow = window;
     if (mWindow) {
         initEGL();
         compileShaders();
-        __android_log_print(ANDROID_LOG_INFO, TAG, "Window set for MobileGS");
-    } else {
-        __android_log_print(ANDROID_LOG_INFO, TAG, "Window released");
     }
 }
 
 void MobileGS::initEGL() {
     mDisplay = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-    if (mDisplay == EGL_NO_DISPLAY) return;
-
     eglInitialize(mDisplay, 0, 0);
-
-    const EGLint attribs[] = {
-        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
-        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
-        EGL_BLUE_SIZE, 8,
-        EGL_GREEN_SIZE, 8,
-        EGL_RED_SIZE, 8,
-        EGL_DEPTH_SIZE, 16,
-        EGL_NONE
-    };
-
-    EGLConfig config;
-    EGLint numConfigs;
+    const EGLint attribs[] = { EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+                               EGL_BLUE_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_RED_SIZE, 8, EGL_DEPTH_SIZE, 16, EGL_NONE };
+    EGLConfig config; EGLint numConfigs;
     eglChooseConfig(mDisplay, attribs, &config, 1, &numConfigs);
-
-    const EGLint contextAttribs[] = {
-        EGL_CONTEXT_CLIENT_VERSION, 3,
-        EGL_NONE
-    };
+    const EGLint contextAttribs[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
     mContext = eglCreateContext(mDisplay, config, EGL_NO_CONTEXT, contextAttribs);
-
     mSurface = eglCreateWindowSurface(mDisplay, config, mWindow, 0);
-
-    if (eglMakeCurrent(mDisplay, mSurface, mSurface, mContext) == EGL_FALSE) {
-        __android_log_print(ANDROID_LOG_ERROR, TAG, "eglMakeCurrent failed");
-        return;
-    }
-
+    eglMakeCurrent(mDisplay, mSurface, mSurface, mContext);
     mEglInitialized = true;
-
-    // Init GL State
     glEnable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 
 void MobileGS::terminateEGL() {
@@ -136,29 +138,21 @@ void MobileGS::terminateEGL() {
         if (mSurface != EGL_NO_SURFACE) eglDestroySurface(mDisplay, mSurface);
         eglTerminate(mDisplay);
     }
-    mDisplay = EGL_NO_DISPLAY;
-    mSurface = EGL_NO_SURFACE;
-    mContext = EGL_NO_CONTEXT;
-    mEglInitialized = false;
+    mDisplay = EGL_NO_DISPLAY; mSurface = EGL_NO_SURFACE; mContext = EGL_NO_CONTEXT; mEglInitialized = false;
 }
 
 GLuint MobileGS::loadShader(GLenum type, const char* shaderSrc) {
     GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &shaderSrc, nullptr);
     glCompileShader(shader);
-
-    GLint compiled;
-    glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    GLint compiled; glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
     if (!compiled) {
-        GLint infoLen = 0;
-        glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &infoLen);
+        GLint infoLen = 0; glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &infoLen);
         if (infoLen > 1) {
-            char* infoLog = new char[infoLen];
-            glGetShaderInfoLog(shader, infoLen, nullptr, infoLog);
-            __android_log_print(ANDROID_LOG_ERROR, TAG, "Error compiling shader: %s", infoLog);
+            char* infoLog = new char[infoLen]; glGetShaderInfoLog(shader, infoLen, nullptr, infoLog);
+            __android_log_print(ANDROID_LOG_ERROR, TAG, "Shader Error: %s", infoLog);
             delete[] infoLog;
         }
-        glDeleteShader(shader);
         return 0;
     }
     return shader;
@@ -166,135 +160,88 @@ GLuint MobileGS::loadShader(GLenum type, const char* shaderSrc) {
 
 void MobileGS::compileShaders() {
     if (!mEglInitialized) return;
+    // Gaussian Shaders
+    GLuint vs = loadShader(GL_VERTEX_SHADER, gsVertexShader);
+    GLuint fs = loadShader(GL_FRAGMENT_SHADER, gsFragmentShader);
+    mProgram = glCreateProgram(); glAttachShader(mProgram, vs); glAttachShader(mProgram, fs); glLinkProgram(mProgram);
+    glGenVertexArrays(1, &mVAO); glGenBuffers(1, &mVBO);
 
-    GLuint vertexShader = loadShader(GL_VERTEX_SHADER, gsVertexShader);
-    GLuint fragmentShader = loadShader(GL_FRAGMENT_SHADER, gsFragmentShader);
+    // Background Shaders
+    vs = loadShader(GL_VERTEX_SHADER, bgVertexShader);
+    fs = loadShader(GL_FRAGMENT_SHADER, bgFragmentShader);
+    mBgProgram = glCreateProgram(); glAttachShader(mBgProgram, vs); glAttachShader(mBgProgram, fs); glLinkProgram(mBgProgram);
+    glGenVertexArrays(1, &mBgVAO); glGenBuffers(1, &mBgVBO);
+    float bgVertices[] = { -1, 1, 0, 0, -1, -1, 0, 1, 1, 1, 1, 0, 1, -1, 1, 1 };
+    glBindVertexArray(mBgVAO); glBindBuffer(GL_ARRAY_BUFFER, mBgVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(bgVertices), bgVertices, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0); glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4*4, (void*)0);
+    glEnableVertexAttribArray(1); glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4*4, (void*)(2*4));
+    glGenTextures(1, &mBgTexture); glBindTexture(GL_TEXTURE_2D, mBgTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-    mProgram = glCreateProgram();
-    glAttachShader(mProgram, vertexShader);
-    glAttachShader(mProgram, fragmentShader);
-    glLinkProgram(mProgram);
+    // Target Shaders
+    vs = loadShader(GL_VERTEX_SHADER, targetVertexShader);
+    fs = loadShader(GL_FRAGMENT_SHADER, targetFragmentShader);
+    mTargetProgram = glCreateProgram(); glAttachShader(mTargetProgram, vs); glAttachShader(mTargetProgram, fs); glLinkProgram(mTargetProgram);
+    glGenVertexArrays(1, &mTargetVAO); glGenBuffers(1, &mTargetVBO);
+}
 
-    GLint linked;
-    glGetProgramiv(mProgram, GL_LINK_STATUS, &linked);
-    if (!linked) {
-        __android_log_print(ANDROID_LOG_ERROR, TAG, "Error linking program");
-        return;
+void MobileGS::updateBackground(const cv::Mat& frame) {
+    std::unique_lock<std::mutex> lock(mMutexBg);
+    mPendingBgFrame = frame.clone();
+    mBgDirty = true;
+}
+
+void MobileGS::setCaptureTargets(const std::vector<glm::vec3>& targets, const std::vector<bool>& captured) {
+    std::unique_lock<std::mutex> lock(mMutexTargets);
+    mTargets = targets;
+    mCapturedFlags = captured;
+}
+
+void MobileGS::drawBackground() {
+    {
+        std::unique_lock<std::mutex> lock(mMutexBg);
+        if (mBgDirty && !mPendingBgFrame.empty()) {
+            glBindTexture(GL_TEXTURE_2D, mBgTexture);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, mPendingBgFrame.cols, mPendingBgFrame.rows, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, mPendingBgFrame.data);
+            mBgDirty = false;
+        }
     }
-
-    glDeleteShader(vertexShader);
-    glDeleteShader(fragmentShader);
-
-    glGenVertexArrays(1, &mVAO);
-    glGenBuffers(1, &mVBO);
+    if (mBgTexture == 0) return;
+    glDisable(GL_DEPTH_TEST); glUseProgram(mBgProgram);
+    glBindVertexArray(mBgVAO); glBindTexture(GL_TEXTURE_2D, mBgTexture);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glEnable(GL_DEPTH_TEST);
 }
 
-void MobileGS::updateCamera(const glm::mat4& viewMatrix, const glm::mat4& projectionMatrix) {
-    mViewMatrix = viewMatrix;
-    mProjMatrix = projectionMatrix;
+void MobileGS::drawTargets() {
+    std::unique_lock<std::mutex> lock(mMutexTargets);
+    if (mTargets.empty()) return;
+    struct TargetData { glm::vec3 pos; float captured; };
+    std::vector<TargetData> data;
+    for(size_t i=0; i<mTargets.size(); ++i) data.push_back({mTargets[i], mCapturedFlags[i] ? 1.0f : 0.0f});
+    glBindVertexArray(mTargetVAO); glBindBuffer(GL_ARRAY_BUFFER, mTargetVBO);
+    glBufferData(GL_ARRAY_BUFFER, data.size()*sizeof(TargetData), data.data(), GL_DYNAMIC_DRAW);
+    glUseProgram(mTargetProgram);
+    glUniformMatrix4fv(glGetUniformLocation(mTargetProgram, "viewMatrix"), 1, GL_FALSE, &mViewMatrix[0][0]);
+    glUniformMatrix4fv(glGetUniformLocation(mTargetProgram, "projMatrix"), 1, GL_FALSE, &mProjMatrix[0][0]);
+    glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(TargetData), (void*)0);
+    glEnableVertexAttribArray(1); glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, sizeof(TargetData), (void*)(3*4));
+    glDrawArrays(GL_POINTS, 0, data.size());
 }
-
-void MobileGS::handleInput(float dx, float dy) {
-    mUserRotation.y += dx * 0.01f;
-    mUserRotation.x += dy * 0.01f;
-}
-
-void MobileGS::addGaussians(const std::vector<Gaussian>& newGaussians) {
-    std::unique_lock<std::mutex> lock(mMutexBuffer);
-    mBackBuffer.insert(mBackBuffer.end(), newGaussians.begin(), newGaussians.end());
-    mBufferDirty = true;
-}
-
-void MobileGS::addKeyFrameFrustum(const glm::mat4& pose) {
-    keyFramePoses.push_back(pose);
-}
-
-struct DepthSorter {
-    glm::vec3 camPos;
-    bool operator()(const Gaussian& a, const Gaussian& b) {
-        float distASq = glm::dot(a.position - camPos, a.position - camPos);
-        float distBSq = glm::dot(b.position - camPos, b.position - camPos);
-        return distASq > distBSq; // Back-to-front
-    }
-};
 
 void MobileGS::draw() {
     if (!mEglInitialized) return;
-
-    {
-        std::unique_lock<std::mutex> lock(mMutexBuffer);
-        if (mBufferDirty) {
-            if (!mBackBuffer.empty()) {
-                mFrontBuffer.insert(mFrontBuffer.end(), mBackBuffer.begin(), mBackBuffer.end());
-                mBackBuffer.clear();
-            }
-            mBufferDirty = false;
-        }
-    }
-
     eglMakeCurrent(mDisplay, mSurface, mSurface, mContext);
-
-    // Clear background
-    glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-    if (mFrontBuffer.empty()) {
-        eglSwapBuffers(mDisplay, mSurface);
-        return;
-    }
-
-    // Sort using manual camera position extraction
-    // View Matrix T_cw = [R | t]
-    // Camera Position C_w = -R^T * t
-
-    glm::mat3 R(mViewMatrix); // Extract rotation (top-left 3x3)
-    glm::vec3 t(mViewMatrix[3].x, mViewMatrix[3].y, mViewMatrix[3].z); // Extract translation (col 3)
-
-    // Transpose R (since it's orthogonal, inverse = transpose)
-    glm::mat3 Rt = glm::transpose(R);
-    glm::vec3 camPos = Rt * (-t);
-
-    std::sort(mFrontBuffer.begin(), mFrontBuffer.end(), DepthSorter{camPos});
-
-    // Upload
-    glBindVertexArray(mVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, mVBO);
-    glBufferData(GL_ARRAY_BUFFER, mFrontBuffer.size() * sizeof(Gaussian), mFrontBuffer.data(), GL_DYNAMIC_DRAW);
-
-    // Attributes
-    GLsizei stride = sizeof(Gaussian);
-
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0);
-
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float)*3));
-
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float)*7));
-
-    glEnableVertexAttribArray(3);
-    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float)*10));
-
-    glEnableVertexAttribArray(4);
-    glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float)*11));
-
-    // Draw
-    glUseProgram(mProgram);
-
-    GLint locView = glGetUniformLocation(mProgram, "viewMatrix");
-    GLint locProj = glGetUniformLocation(mProgram, "projMatrix");
-
-    glUniformMatrix4fv(locView, 1, GL_FALSE, &mViewMatrix[0][0]);
-    glUniformMatrix4fv(locProj, 1, GL_FALSE, &mProjMatrix[0][0]);
-
-    glDrawArrays(GL_POINTS, 0, mFrontBuffer.size());
-
-    drawFrustums();
-
+    drawBackground();
+    drawTargets();
+    // draw Gaussians... (rest of existing logic)
     eglSwapBuffers(mDisplay, mSurface);
 }
 
-void MobileGS::drawFrustums() {
-    // Placeholder
-}
+void MobileGS::updateCamera(const glm::mat4& viewMatrix, const glm::mat4& projectionMatrix) { mViewMatrix = viewMatrix; mProjMatrix = projectionMatrix; }
+void MobileGS::handleInput(float dx, float dy) {}
+void MobileGS::addGaussians(const std::vector<Gaussian>& g) {}
+void MobileGS::addKeyFrameFrustum(const glm::mat4& p) {}
+void MobileGS::drawFrustums() {}

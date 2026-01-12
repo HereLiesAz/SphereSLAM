@@ -7,6 +7,7 @@
 #include <vector>
 #include <mutex>
 #include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 #include <cmath>
 
 // GLM is a custom minimal header in this project
@@ -111,7 +112,17 @@ Java_com_hereliesaz_sphereslam_SphereSLAM_processFrame(JNIEnv* env, jobject thiz
         cv::Mat inputWrapper(height, width, CV_8UC1, ptr, step);
         cv::Mat inputImage = inputWrapper.clone();
 
-        vulkanCompute->processImage(inputImage.data, width, height);
+        // Rotate camera view 90 degrees clockwise
+        cv::rotate(inputImage, inputImage, cv::ROTATE_90_CLOCKWISE);
+        int rotatedWidth = inputImage.cols;
+        int rotatedHeight = inputImage.rows;
+
+        // Pass frame to renderer for background display
+        if (renderer) {
+            renderer->updateBackground(inputImage);
+        }
+
+        vulkanCompute->processImage(inputImage.data, rotatedWidth, rotatedHeight);
         std::vector<cv::Mat> faces = vulkanCompute->getAllOutputFaces();
 
         if (faces.size() != 6) {
@@ -175,6 +186,27 @@ Java_com_hereliesaz_sphereslam_SphereSLAM_renderFrame(JNIEnv* env, jobject thiz)
 
         renderer->updateCamera(viewMatrix, projMatrix);
         renderer->draw();
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_hereliesaz_sphereslam_SphereSLAM_setCaptureTargets(JNIEnv* env, jobject thiz, jfloatArray positions, jbooleanArray captured) {
+    if (renderer) {
+        jsize len = env->GetArrayLength(positions);
+        float* p = env->GetFloatArrayElements(positions, nullptr);
+        jboolean* c = env->GetBooleanArrayElements(captured, nullptr);
+
+        std::vector<glm::vec3> targets;
+        std::vector<bool> capturedFlags;
+        for (int i = 0; i < len / 3; ++i) {
+            targets.push_back(glm::vec3(p[i * 3], p[i * 3 + 1], p[i * 3 + 2]));
+            capturedFlags.push_back(c[i] == JNI_TRUE);
+        }
+
+        renderer->setCaptureTargets(targets, capturedFlags);
+
+        env->ReleaseFloatArrayElements(positions, p, JNI_ABORT);
+        env->ReleaseBooleanArrayElements(captured, c, JNI_ABORT);
     }
 }
 
