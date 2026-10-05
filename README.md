@@ -31,25 +31,45 @@ superseding the other.
 
 | Piece | State |
 |------|-------|
-| Classic planar KPM | **present as a source snapshot** (`sphereslam/`), imported verbatim from GraffitiXR |
-| Spherical coverage | **in development** in GraffitiXR; lands here once its native API is stable |
-| Standalone build / publish | **not yet** — see below |
+| Classic planar KPM | **present and wired** (`sphereslam/`) over the bundled native engine |
+| Spherical coverage | **native API extracted** — per-keyframe orientation storage, MiDaS-depth radial map placement, and the map-reloc tuning counters all live in `core/nativebridge` |
+| Native engine | **bundled** (`core/nativebridge`): artoolkitX KPM + MobileGS + OpenCV, with artoolkitX as a submodule |
+| Standalone Gradle project | **present** — root project, version catalog, wrapper; the Kotlin layer of all three modules compiles and its unit tests pass |
+| Native `.so` build / Maven publish | **pending on-device verification** — see Building |
 
-The classic module is currently a **source snapshot, not yet a standalone-buildable library.** It
-depends on the native engine through `com.hereliesaz.graffitixr.nativebridge.KpmBridge` (artoolkitX
-KPM + OpenCV, built in GraffitiXR's `core:nativebridge`), and `build.gradle.kts` still references
-GraffitiXR's module and version catalog. The follow-up extraction bundles the native KPM engine
-and a standalone Gradle/publish setup so both approaches build and ship from here.
+This repository now carries the engine, not just a source snapshot. `core/nativebridge` holds the
+native KPM/MobileGS C++ and JNI (package `com.hereliesaz.graffitixr.nativebridge`, kept verbatim so
+the JNI symbol names stay valid); `core/common` carries only the handful of model/sensor/util
+classes the engine needs, with GraffitiXR's Hilt, ARCore, and wearable/smart-glass couplings
+removed (`SlamManager` now takes a `SensorSource` directly). `sphereslam/` is unchanged and depends
+on `:core:nativebridge`.
+
+### Building
+
+The native engine depends on the pinned **artoolkitX** submodule and the **OpenCV** Maven
+artifact's Prefab part. After cloning:
+
+~~~bash
+git submodule update --init --recursive   # fetches third_party/artoolkitx @ the pinned commit
+./gradlew :sphereslam:assembleRelease      # NDK build (arm64-v8a, armeabi-v7a)
+~~~
+
+What is verified in CI / here: the Kotlin of `:core:common`, `:core:nativebridge`, and
+`:sphereslam` compiles, and their unit tests pass (including `NativeMethodAritySignatureTest`, which
+guards the JNI↔Kotlin boundary). What still needs a machine with the Android NDK and the submodule
+checked out: the CMake/`.so` build and an on-device run — the extraction could not exercise those
+remotely.
 
 ### Roadmap
 
-1. **Snapshot the classic approach** — done; preserved intact before the spherical-coverage rework
-   so it remains a first-class option.
-2. **Build spherical coverage** (in GraffitiXR first) — record per-keyframe gyro orientation, wire
-   monocular depth into geometry, add the guided sweep + surrounding feature map. This stabilizes
-   the native KPM/depth API.
-3. **Extract the full engine into this repo** — bundle the native engine (artoolkitX KPM + OpenCV)
-   and a standalone publish setup, bringing **both** approaches here as a real, buildable,
-   publishable library.
+1. **Snapshot the classic approach** — done.
+2. **Build spherical coverage** (in GraffitiXR first) — done: per-keyframe gyro orientation, MiDaS
+   depth wired into geometry, guided sweep + surrounding feature map. Stabilized the native API.
+3. **Extract the full engine into this repo** — done (this): native engine bundled, dependencies
+   decoupled, standalone Gradle project. Remaining: verify the NDK build on device, then wire a
+   Maven publish and bring the app-layer spherical-coverage helpers (MiDaS `DepthEstimator`,
+   `CompassHeadingProvider`, `SphereCoverage`) over as an optional module.
 
-Provenance: the classic module was imported verbatim from `HereLiesAz/GraffitiXR` @ `df9f121`.
+Provenance: the classic module was imported verbatim from `HereLiesAz/GraffitiXR` @ `df9f121`; the
+native engine and spherical-coverage native API were extracted from GraffitiXR `main` after Phases
+1b–4 of the sphere map merged.

@@ -1,0 +1,999 @@
+// FILE: core/nativebridge/src/main/java/com/hereliesaz/graffitixr/nativebridge/SlamManager.kt
+package com.hereliesaz.graffitixr.nativebridge
+
+import android.content.res.AssetManager
+import android.graphics.Bitmap
+import android.util.Log
+import com.hereliesaz.graffitixr.common.model.CorrobGate
+import com.hereliesaz.graffitixr.common.model.CorroborationDiagnostics
+import com.hereliesaz.graffitixr.common.model.GrowOutcome
+import com.hereliesaz.graffitixr.common.model.Fingerprint
+import com.hereliesaz.graffitixr.common.model.RelocDiagnostics
+import com.hereliesaz.graffitixr.common.model.RelocReject
+import com.hereliesaz.graffitixr.common.model.WallFeatureMap
+import com.hereliesaz.graffitixr.common.sensor.CameraFrame
+import com.hereliesaz.graffitixr.common.sensor.ImuSample
+import com.hereliesaz.graffitixr.common.sensor.PhoneSensorSource
+import com.hereliesaz.graffitixr.common.sensor.PixelFormat
+import com.hereliesaz.graffitixr.common.sensor.SensorSource
+import com.hereliesaz.graffitixr.common.util.NativeLibLoader
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+
+/**
+ * Width of the int[] `nativeGetRelocDiagnostics` packs its snapshot into (GraffitiJNI.cpp's
+ * `jint vals[RELOC_DIAGNOSTICS_ARRAY_SIZE]`). Named and referenced from
+ * [SlamManager.getRelocDiagnostics]'s KDoc instead of spelling the count out in prose there: that
+ * count has already gone stale three times (three, four, six, nine, and now fourteen) as the array
+ * grew, and `NativeMethodAritySignatureTest` asserts this constant against the array literal in
+ * GraffitiJNI.cpp, so a fifth drift fails a test instead of just a comment.
+ */
+const val RELOC_DIAGNOSTICS_ARRAY_SIZE = 14
+
+/**
+ * Extracted from GraffitiXR: a plain class (no Hilt). The consumer constructs one and holds it for
+ * the session, supplying the [SensorSource] frames and IMU are collected from. Defaults to a
+ * [PhoneSensorSource]; GraffitiXR's wearable/smart-glass multiplexing is app-layer concern and is
+ * not part of the engine.
+ */
+class SlamManager constructor(
+    private val sensorSource: SensorSource = PhoneSensorSource(),
+) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var collectionJob: Job? = null
+
+    init {
+        NativeLibLoader.loadAll()
+    }
+
+    // Guards native init/destroy. ensureInitialized() and destroy() are called from the
+    // GL thread, the sensor (Default) scope, and the UI thread; without this lock two
+    // threads could both pass the !isInitialized check and double-call nativeInitialize(),
+    // or init could race a concurrent destroy() (use-after-free in native code).
+    private val initLock = Any()
+    @Volatile private var isInitialized = false
+
+    fun ensureInitialized() {
+        synchronized(initLock) {
+            if (!isInitialized) {
+                nativeInitialize()
+                isInitialized = true
+            }
+        }
+    }
+
+    /**
+     * How many times the renderer has ESTABLISHED the primary anchor this session — not how many
+     * times an anchor pose has been written, and not merely whether one ever was.
+     *
+     * Two distinctions, each of which a simpler design got wrong.
+     *
+     * **Establishment, not any write.** `mAnchorMatrix` is constructed as the identity but does not
+     * stay that way: `refineAnchorFromBestPlane` runs every 30 frames *while the anchor is
+     * unestablished* and writes a provisional plane pose, as does the depth fallback. A flag set by
+     * `updateAnchorTransform` therefore flips within a second of scanning. Worse, the refiner builds
+     * its basis with the wall normal in **Z** while establishment takes ARCore's `hitPose`, whose
+     * normal is **+Y** — reading one where the other is meant is a ~90° frame error, not drift.
+     *
+     * **A counter, not a latch.** Every target confirmation re-establishes the anchor, so a boolean
+     * "has one ever been established" is permanently true after the first capture and every capture
+     * after it resolves instantly against the *previous* anchor's pose — the same off-by-an-anchor
+     * bug the flag existed to prevent. A caller snapshots this before requesting establishment and
+     * waits for it to advance.
+     */
+    private val _anchorGeneration = kotlinx.coroutines.flow.MutableStateFlow(0)
+    val anchorGeneration: kotlinx.coroutines.flow.StateFlow<Int> = _anchorGeneration
+
+    /**
+     * Whether an anchor exists right now, as distinct from how many have existed.
+     *
+     * Needed because the counter must be **monotonic**. Resetting it to 0 on teardown lets it go
+     * backwards, which strands any capture already waiting for `> N`: the next establishment
+     * produces 1, which is not greater than 1, so the wait burns its whole budget and reports
+     * "couldn't lock an anchor" for what was actually a torn-down session. Advancing the generation
+     * on teardown and clearing this flag says the same thing without lying about ordering.
+     */
+    @Volatile private var hasAnchor = false
+
+    /**
+     * Bumped every time the AR session is torn down, so a wait started in one session cannot be
+     * satisfied by an anchor established in the next.
+     *
+     * The monotonic generation counter alone cannot express this. It fixed a real bug — resetting to
+     * zero stranded in-flight waits — but it also turned a fail-CLOSED outcome into a fail-OPEN one:
+     * teardown then re-entry produces a generation strictly greater than the waiter's baseline with
+     * `hasAnchor` true again, so the wait resolves and hands the new session's anchor to the old
+     * session's capture. That capture back-projects its pixels through a foreign anchor and persists
+     * a structurally valid, geometrically meaningless target. Refusing is the correct outcome, and
+     * `PARAMETERS.md` §6 already states it as the contract.
+     */
+    @Volatile private var sessionEpoch = 0
+
+    /** Readable so a requester can pin it alongside [captureAnchorGenerationBaseline]. */
+    val sessionEpochValue: Int get() = sessionEpoch
+
+    /**
+     * The anchor generation as of the moment a capture asked for a new anchor.
+     *
+     * Lives here rather than being snapshotted by the waiter because only the requester can take it
+     * without racing: the request and the establishment are on different threads, and a snapshot
+     * taken after the request can already include the establishment it was meant to precede.
+     */
+    @Volatile var captureAnchorGenerationBaseline: Int = 0
+
+    /**
+     * The session epoch as of the same instant [captureAnchorGenerationBaseline] was taken.
+     *
+     * Pinned with the baseline rather than at the start of the wait, for the same reason the
+     * baseline is: the wait begins a dispatcher hop later, and an epoch read there can already
+     * include the teardown it was meant to exclude.
+     */
+    @Volatile var captureSessionEpochBaseline: Int = 0
+
+    fun updateAnchorTransform(transform: FloatArray) = nativeUpdateAnchorTransform(transform)
+
+    /**
+     * Announce that the primary anchor has been (re-)established. Call from the renderer at the
+     * moment it sets its own `anchorEstablished`, and nowhere else — every other anchor write is
+     * provisional.
+     */
+    @Synchronized
+    fun markAnchorEstablished() {
+        // Synchronized because this is a read-modify-write on the GL thread racing teardown on the
+        // main thread; @Volatile alone would let one of the two updates be lost.
+        hasAnchor = true
+        _anchorGeneration.value = _anchorGeneration.value + 1
+    }
+
+    /**
+     * The anchor pose, waiting up to [timeoutMs] for an establishment **newer than**
+     * [sinceGeneration] — which the capture path takes from [captureAnchorGenerationBaseline],
+     * recorded by the requester rather than snapshotted here, because only the requester can take it
+     * without racing the establishment it is meant to precede.
+     *
+     * Returns null on timeout rather than a pose, because every candidate fallback is a well-formed
+     * matrix that means the wrong thing: the identity reads as a real pose at the world origin, the
+     * plane refiner's provisional pose is in a different frame convention, and the previous
+     * anchor's pose is a plausible answer to a question about a different anchor.
+     */
+    suspend fun awaitAnchorTransform(
+        sinceGeneration: Int,
+        timeoutMs: Long = ANCHOR_WAIT_MS,
+        sinceEpoch: Int = captureSessionEpochBaseline,
+    ): FloatArray? {
+        // An anchor from a LATER session answers a different question than the one this capture
+        // asked, so the wait must expire rather than accept it. Defaulted from the requester's
+        // pinned value, not read here — reading here is a dispatcher hop too late.
+        val epochAtEntry = sinceEpoch
+        if (!(hasAnchor && _anchorGeneration.value > sinceGeneration)) {
+            kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+                _anchorGeneration.first { it > sinceGeneration && hasAnchor && sessionEpoch == epochAtEntry }
+            } ?: return null
+        }
+        if (sessionEpoch != epochAtEntry) return null
+        val m = nativeGetAnchorTransform()
+        // Native returns null (not a zeroed array) when the engine is gone -- see
+        // nativeGetAnchorTransform's own comment in GraffitiJNI.cpp. The size check below is a
+        // defensive belt-and-suspenders guard, not the primary "no engine" signal. A real anchor
+        // pose has a unit-length first rotation column; all three writers produce orthonormal
+        // matrices, so the orthonormality check below rejects only genuinely broken input.
+        if (m == null || m.size != 16) return null
+        val c0 = kotlin.math.sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2])
+        return if (kotlin.math.abs(c0 - 1f) < 1e-3f) m else null
+    }
+
+    /**
+     * Record that the anchor is gone. Call when tearing the AR session down: the ARCore session and
+     * its anchors do not survive it.
+     *
+     * Advances the generation rather than resetting it, so the counter only ever moves forwards. A
+     * reset to 0 makes old snapshots compare as *larger* than new generations — the opposite of the
+     * ordering the wait depends on — and strands any capture already inside it.
+     */
+    @Synchronized
+    fun clearAnchorEstablished() {
+        hasAnchor = false
+        sessionEpoch += 1
+        _anchorGeneration.value = _anchorGeneration.value + 1
+    }
+
+    /**
+     * Centroid of the matched fingerprint marks, expressed in the FINGERPRINT ANCHOR's local frame
+     * (the anchor PoseFusion converges the live render anchor toward), or null to fall back to the
+     * anchor's own position. Anchor-local (not world) so it survives a project reload into a new
+     * ARCore session: the renderer reconstructs the world point from the live anchor each frame. Set
+     * by the AR fingerprint builder on capture and re-published on project load; read by the AR
+     * renderer to center the artwork overlay on the marks instead of the screen-center anchor. Plain
+     * Kotlin state (not native) shared across the view models and the GL thread, hence @Volatile.
+     */
+    @Volatile var overlayMarkCenterLocal: FloatArray? = null
+
+    /**
+     * `IMPLEMENTATION.md` **0.9** — `Fingerprint.captureAnchorCam`, the anchor's pose in the CAPTURE
+     * camera's CV frame (`V_cv(capture) · anchorModel`), or null when the live fingerprint has none.
+     *
+     * Carried here for the same reason [overlayMarkCenterLocal] is: the renderer needs it every
+     * frame and does not hold the `Fingerprint`. It is the third factor of
+     * `PoseFusion.composeCorrected`, and it replaced a world-frame anchor that put the composition
+     * in the wrong frame entirely.
+     *
+     * **Null means do not correct.** A pre-Phase-2 fingerprint has no `captureAnchorCam`, and there
+     * is no way to compose the correction without it — the world-frame anchor that used to be passed
+     * is precisely the defect. Skipping the correction leaves relocalization off for such a project
+     * rather than pulling the overlay toward a pose computed in mixed frames, which is the failure
+     * `PAPER.md` §8.3 says is worse than not correcting at all.
+     */
+    @Volatile var captureAnchorCam: FloatArray? = null
+
+    /**
+     * A no-op in the current native engine: neither [angularVel] nor [linearVel] is read by any
+     * consumer there (there is no deblur or motion-compensation stage). Kept as a callable, logged
+     * no-op (native logs a warning once) rather than removed so this doesn't need to change ahead of
+     * a real consumer existing.
+     */
+    fun updateDeviceMotion(angularVel: FloatArray, linearVel: FloatArray) {
+        nativeUpdateDeviceMotion(angularVel, linearVel)
+    }
+
+    /**
+     * Fraction of the registered design the wall now answers for — a PROGRESS reading, on the
+     * timescale of hours and roughly monotonic. This is the number to show the artist.
+     */
+    fun getPaintingProgress(): Float = nativeGetPaintingProgress()
+
+    /**
+     * How strongly the wall corroborates the design on the most recent look — a CONFIDENCE reading,
+     * on the timescale of frames and moving both ways. This is the number [PoseFusion-style] pose
+     * correction should scale by, NOT painting progress: one scalar cannot mean both "the mural is
+     * 60% painted" and "I trust this frame", and using progress for both meant a momentary tracking
+     * hiccup decayed the progress bar and suppressed correction strength for seconds afterwards.
+     *
+     * @return `[0,1]` once measured, or **negative** if no attempt has produced a measurement yet.
+     *   That is deliberately distinct from `0f`, which means "looked, and the wall agrees with
+     *   nothing". Callers feeding a `[0,1]` API should map the negative case to their own
+     *   conservative default rather than passing it through.
+     */
+    fun getCorroborationConfidence(): Float = nativeGetCorroborationConfidence()
+
+    /** True once a corroboration attempt has produced any measurement at all. */
+    fun hasCorroborationMeasurement(): Boolean = nativeGetCorroborationConfidence() >= 0f
+
+    /**
+     * Why the last relocalization attempt did not publish a pose, and how far it got. See
+     * [RelocDiagnostics]; the native side packs [RELOC_DIAGNOSTICS_ARRAY_SIZE] values into one int[]
+     * so the read is a consistent snapshot rather than that many racing getters. (Three separate
+     * comments used to say three, four and six; the array was six wide until 2.11 added the three
+     * backbone counts, nine until 4.6 added the three corroboration counts, and is now fourteen with
+     * the corrobGate/growOutcome reason codes below. [RELOC_DIAGNOSTICS_ARRAY_SIZE] is the number
+     * that must stay in sync with GraffitiJNI.cpp's `jint vals[...]` — see that constant's doc and
+     * `NativeMethodAritySignatureTest` for the guard.)
+     *
+     * A short array falls back to the default [RelocDiagnostics] — whose backbone and corroboration
+     * fields are the -1 "not measured" sentinel, not 0 — rather than to a partially-filled one, so
+     * an old .so paired with this build reads as unmeasured instead of as an empty backbone.
+     *
+     * The width check is `< 9`, not `< 11`, on purpose: everything through index 8 is what a 2.11-era
+     * .so provides, and refusing the whole record because it predates 4.6 would throw away nine good
+     * diagnostics to avoid two missing ones. The two are read only when they are actually there.
+     */
+    fun getRelocDiagnostics(): RelocDiagnostics {
+        val v = nativeGetRelocDiagnostics()
+        if (v == null || v.size < 9) return RelocDiagnostics()
+        return RelocDiagnostics(
+            reject = RelocReject.entries.getOrElse(v[0]) { RelocReject.UNKNOWN },
+            matches = v[1],
+            inliers = v[2],
+            detected = v[3],
+            obliquityDeg = v[4],
+            rectifiedCorrespondences = v[5],
+            backboneFeatures = v[6],
+            backboneMatches = v[7],
+            backboneInliers = v[8],
+            corrobPredicted = if (v.size > 9) v[9] else -1,
+            corrobMatched = if (v.size > 10) v[10] else -1,
+            corrobLoneSkips = if (v.size > 11) v[11] else -1,
+            // Enums, so an unknown ordinal from a newer .so absorbs into UNKNOWN rather than
+            // reading as whichever entry happens to be first. Absent (older .so) is NOT_RUN, which
+            // is truthful: that library does not run these stages in a way it can report.
+            corrobGate = if (v.size > 12) {
+                CorrobGate.entries.getOrElse(v[12]) { CorrobGate.UNKNOWN }
+            } else CorrobGate.NOT_RUN,
+            growOutcome = if (v.size > 13) {
+                GrowOutcome.entries.getOrElse(v[13]) { GrowOutcome.UNKNOWN }
+            } else GrowOutcome.NOT_RUN,
+        )
+    }
+
+    /**
+     * IMPLEMENTATION.md 4.6 — the corroboration path's two float readings: the search radius the
+     * last gated attempt used, and the mean reprojection error over the last lock's PnP inliers.
+     * Both in pixels, both `-1f` when not measured.
+     *
+     * A separate call from [getRelocDiagnostics] only because these are floats and that channel is
+     * an `int[]`; rounding a sub-pixel radius to an int to share the array would destroy the reading
+     * at exactly the tight radii the phase is trying to measure.
+     */
+    fun getCorroborationDiagnostics(): CorroborationDiagnostics {
+        val v = nativeGetCorroborationDiagnostics()
+        if (v == null || v.size < 2) return CorroborationDiagnostics()
+        return CorroborationDiagnostics(
+            searchRadiusPx = v[0],
+            relocReprojPx = v[1],
+            // Width guard stays at `< 2`, not `< 3`: a Phase-4-era .so provides the first two, and
+            // refusing the record whole for missing the third would discard two good diagnostics to
+            // avoid one absent one. Same reasoning as getRelocDiagnostics'.
+            inlierSpread = if (v.size > 2) v[2] else -1f,
+        )
+    }
+
+    /**
+     * IMPLEMENTATION.md 4.5 — tell the engine where the design sits, so the corroboration match can
+     * predict where each design feature should appear instead of searching the whole frame.
+     *
+     * @param fpFromDesign16 the design's model matrix in the WALL FINGERPRINT frame, column-major.
+     *   This is `FingerprintPartition.partition`'s `designInPointFrame`
+     *   (`captureAnchorCam * rigidModelAnchorLocal`) — pass that composition, do not rebuild it. It
+     *   is rigid: the overlay's scale belongs in the extents, not in this matrix.
+     * @param halfW,halfH the design's effective (scale-included) half-extents in metres.
+     *
+     * Pass `null` to clear, which returns corroboration to its pre-Phase-4 global search.
+     */
+    fun setDesignPlacement(fpFromDesign16: FloatArray?, halfW: Float, halfH: Float) {
+        nativeSetDesignPlacement(fpFromDesign16, halfW, halfH)
+    }
+
+    /**
+     * Null only under allocation pressure severe enough that the native side couldn't allocate the
+     * 16-float result array (`GraffitiJNI.cpp`'s `nativeGetAnchorTransform`) — vanishingly rare, but
+     * real; callers must handle it rather than assume this can't fail.
+     */
+    fun getAnchorTransform(): FloatArray? = nativeGetAnchorTransform()
+
+    fun setWallFingerprint(
+        bitmap: Bitmap,
+        mask: Bitmap?,
+        depthBuffer: ByteBuffer,
+        depthW: Int, depthH: Int, depthStride: Int,
+        intrinsics: FloatArray,
+        viewMatrix: FloatArray
+    ): Fingerprint? {
+        if (!depthBuffer.isDirect) return null
+        return nativeSetWallFingerprint(bitmap, mask, depthBuffer, depthW, depthH, depthStride, intrinsics, viewMatrix)
+    }
+
+    fun restoreWallFingerprint(descriptorsData: ByteArray, rows: Int, cols: Int, type: Int, points3d: FloatArray) {
+        nativeRestoreWallFingerprint(descriptorsData, rows, cols, type, points3d)
+    }
+
+    /**
+     * Ingest a fingerprint built from triangulated metric marks (no depth source). Also fixes the
+     * fingerprint anchor pose (column-major 4x4) and the camera intrinsics (fx,fy,cx,cy) the reloc
+     * PnP should use. points3d are in keyframe-0's CV camera frame (see [MetricMarks]).
+     *
+     * [viewMatrix] is the GL-convention world->camera view at capture. Supplying it enables the
+     * reloc thread's plane-guided rectification: the marks lie on a known plane, so the oblique-
+     * vs-frontal distortion is a homography that can be pre-cancelled before matching. Pass an empty
+     * array only when the capture view genuinely isn't known (e.g. a project saved before it was
+     * persisted) — then that pass is skipped rather than run against a stale frontal frame.
+     *
+     * [regions] is the Phase-2 partition: one byte per 3D point, holding a `Footprint.Region`
+     * ordinal. The reloc correspondence build excludes the points tagged `INSIDE` — they sit under
+     * the artwork and decay as it is painted. **An empty array means all-backbone**, which is
+     * exactly the behaviour before Phase 2, so a legacy fingerprint keeps relocalizing against its
+     * whole map rather than losing it. A non-empty array of the wrong length is rejected native-side
+     * rather than silently truncating, because the partition is indexed by point.
+     */
+    fun restoreWallFingerprintMetric(
+        descriptorsData: ByteArray, rows: Int, cols: Int, type: Int,
+        points3d: FloatArray, anchorMatrix: FloatArray, intrinsics: FloatArray,
+        viewMatrix: FloatArray = FloatArray(0),
+        regions: ByteArray = ByteArray(0),
+    ) {
+        nativeRestoreWallFingerprintMetric(
+            descriptorsData, rows, cols, type, points3d, anchorMatrix, intrinsics, viewMatrix,
+            regions,
+        )
+    }
+
+    /**
+     * Drop the in-native wall fingerprint. The restore calls above only ever REPLACE the stored
+     * fingerprint, so without this it is process-lifetime state: a project that has no fingerprint of
+     * its own would keep relocalizing against whatever wall was fingerprinted earlier in the session
+     * (notably the marks built during first-run onboarding). Call it when loading a project that has
+     * no saved fingerprint, alongside [clearWallFeatureMap].
+     */
+    fun clearWallFingerprint() = nativeClearWallFingerprint()
+
+    /** Restore the persistent wall feature map into native (Phase 2a: stored; matched in Phase 2b). */
+    fun restoreWallFeatureMap(map: WallFeatureMap) {
+        nativeRestoreWallFeatureMap(
+            map.descriptorsData, map.descriptorsRows, map.descriptorsCols, map.descriptorsType,
+            map.points3d, map.confidence, map.obsCount, map.anchor, map.intrinsics,
+        )
+    }
+    /**
+     * Teleological reference set: design features the wall has confirmed as painted, in the
+     * fingerprint frame. Matched by relocalization alongside the original marks, so tracking holds
+     * as they get painted over. Returned as a [WallFeatureMap] (points + descriptors only) for
+     * project persistence, or null when empty. Blob: [rows, cols, type][rows*3 floats][descriptors].
+     */
+    fun getPaintMarks(): WallFeatureMap? {
+        val blob = nativeExportPaintMarks() ?: return null
+        if (blob.size < 12) return null
+        val bb = ByteBuffer.wrap(blob).order(ByteOrder.nativeOrder())
+        val rows = bb.int; val cols = bb.int; val type = bb.int
+        // 64-bit size math: rows*12 in Int can overflow negative for a corrupt/huge count, bypassing
+        // the guard and letting FloatArray(rows*3) attempt a multi-GB allocation.
+        if (rows <= 0 || cols <= 0 || blob.size.toLong() < 12L + rows.toLong() * 12L) return null
+        return try {
+            val points = FloatArray(rows * 3) { bb.float }
+            val desc = ByteArray(blob.size - bb.position()).also { bb.get(it) }
+            WallFeatureMap(points3d = points, descriptorsData = desc, descriptorsRows = rows,
+                descriptorsCols = cols, descriptorsType = type)
+        } catch (_: OutOfMemoryError) {
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Restore a persisted [getPaintMarks] set. Must follow the fingerprint restore it belongs to. */
+    fun restorePaintMarks(map: WallFeatureMap) = nativeRestorePaintMarks(
+        map.descriptorsData, map.descriptorsRows, map.descriptorsCols, map.descriptorsType, map.points3d,
+    )
+
+    /** Drop the paint set — required whenever the fingerprint FRAME changes (a new capture). */
+    fun clearPaintMarks() = nativeClearPaintMarks()
+
+    fun getPaintMarkCount(): Int = nativeGetPaintMarkCount()
+
+    /**
+     * Area progress. The capture photo (display-oriented, with the intrinsics it was taken with)
+     * supplies each design cell's bare-wall colour; see MobileGS::PaintGrid.
+     */
+    fun setCaptureImage(bitmap: Bitmap, intrinsics: FloatArray) = nativeSetCaptureImage(bitmap, intrinsics)
+
+    /**
+     * Fit the registered design to paint already on the wall, from the capture photo. Returns
+     * [dx, dy (m), dTheta (rad, CCW), scale ratio, inliers] in the current design's local frame, or
+     * null when there is no confident fit. Blocking (feature detection); call off the main thread.
+     */
+    fun autoFitDesign(): FloatArray? = nativeAutoFitDesign()
+
+    /** Opaque per-project progress state (painted cells + learned paint colours), or null. */
+    fun exportPaintGrid(): ByteArray? = nativeExportPaintGrid()
+
+    /** Restore [exportPaintGrid] output; applied once the same design's grid exists. */
+    fun restorePaintGrid(state: ByteArray) = nativeRestorePaintGrid(state)
+
+    /** Fraction of design features confirmed on the wall (the detail channel), or -1. */
+    fun getFeatureProgress(): Float = nativeGetFeatureProgress()
+
+    /** Drop the in-native wall feature map. */
+    fun clearWallFeatureMap() = nativeClearWallFeatureMap()
+    /** Live wall-feature-map point count — diagnostic. */
+    fun getMapPointCount(): Int = nativeGetMapPointCount()
+    /** Monotonic content revision; changes for point, descriptor, confidence, or observation updates. */
+    fun getWallFeatureMapRevision(): Long = nativeGetWallFeatureMapRevision()
+    /** Phase 2b: enable live map-matching in reloc. Default OFF — experimental until device-validated. */
+    fun setMapRelocEnabled(enabled: Boolean) = nativeSetMapRelocEnabled(enabled)
+    /** Phase 3: passively grow the feature map from reloc-locked frames. Default OFF; independent of matching. */
+    fun setMapBuildEnabled(enabled: Boolean) = nativeSetMapBuildEnabled(enabled)
+
+    /**
+     * Sphere map Phase 2 (docs/SPHERESLAM_SPHERE_MAP.md): enable MiDaS-depth-calibrated radial
+     * placement of off-wall map points during build. Default OFF — with it off, the map builds from
+     * wall-plane back-projection exactly as before. Standalone opts in behind the feature-map flag.
+     */
+    fun setDepthPlacementEnabled(enabled: Boolean) = nativeSetDepthPlacementEnabled(enabled)
+
+    /**
+     * Sphere map Phase 4: the last reloc attempt's persistent-map contribution as
+     * `[frustumVisiblePoints, correspondencesAddedToPnP]`; each is -1 when the map path did not run
+     * (flag off, no map, or no prior pose). The on-device tuning instrument reads this to show the
+     * surrounding sphere carrying a lock — especially while the fingerprint marks are off-frame.
+     */
+    fun getMapRelocCounts(): IntArray {
+        val o = IntArray(2)
+        nativeGetMapRelocCounts(o)
+        return o
+    }
+
+    /**
+     * Stash the latest per-keyframe MiDaS depth (inverse depth, larger = nearer), of size [w]×[h],
+     * computed from a [frameW]×[frameH] camera frame. The next map-build uses it to place off-wall
+     * features radially. Pass `data = null` (or an inconsistent size) to clear and fall back to pure
+     * wall-plane placement. A copy is taken natively; the caller may reuse the array.
+     */
+    fun setLatestDepthMap(data: FloatArray?, w: Int, h: Int, frameW: Int, frameH: Int) =
+        nativeSetLatestDepthMap(data, w, h, frameW, frameH)
+
+    /**
+     * Phase 3b: read the in-native feature map back as a [WallFeatureMap] for .gxr persistence, or null
+     * when empty. Unpacks the native little-endian blob: [n, rows, cols, type][points][conf][obs][anchor16]
+     * [intrinsics4][descriptors]. Returns null (skip this save) if a concurrent grow left it inconsistent.
+     */
+    fun getWallFeatureMap(): WallFeatureMap? {
+        val blob = nativeExportWallFeatureMap() ?: return null
+        if (blob.size < 16) return null
+        val bb = ByteBuffer.wrap(blob).order(ByteOrder.LITTLE_ENDIAN)
+        val n = bb.int; val rows = bb.int; val cols = bb.int; val type = bb.int
+        if (n < 0 || rows < 0 || cols < 0) return null
+        // Bail before reading if the blob can't even hold the fixed-size fields (header + points/conf/obs
+        // + anchor + intrinsics = 96 + n*20 bytes), rather than catching a BufferUnderflowException.
+        // 64-bit math: n*20 in Int can overflow negative for a corrupt/huge count, bypassing the guard
+        // and letting FloatArray(n*3) attempt a multi-GB allocation.
+        if (blob.size.toLong() < 96L + n.toLong() * 20L) return null
+        return try {
+            val points = FloatArray(n * 3) { bb.float }
+            val conf = FloatArray(n) { bb.float }
+            val obs = IntArray(n) { bb.int }
+            val anchor = FloatArray(16) { bb.float }
+            val intrinsics = FloatArray(4) { bb.float }
+            val desc = ByteArray(blob.size - bb.position()).also { bb.get(it) }
+            WallFeatureMap(points, desc, rows, cols, type, conf, obs, anchor, intrinsics)
+        } catch (_: OutOfMemoryError) {
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun setArtworkFingerprint(
+        bitmap: Bitmap,
+        depthBuffer: ByteBuffer?,
+        depthW: Int, depthH: Int, depthStride: Int,
+        intrinsics: FloatArray,
+        viewMatrix: FloatArray
+    ) {
+        // Depth is optional: with the ML depth API off there is no capture depth buffer, so the artwork
+        // base registers descriptors-only (enough for painting-progress; 3D-dependent promotion waits).
+        if (depthBuffer == null || depthBuffer.isDirect) {
+            nativeSetArtworkFingerprint(bitmap, depthBuffer, depthW, depthH, depthStride, intrinsics, viewMatrix)
+        }
+    }
+
+    /** A no-op in the current native engine: no viewport-dependent state there reads the size this
+     *  sets. Native logs a warning on every call. */
+    fun setViewportSize(width: Int, height: Int) = nativeSetViewportSize(width, height)
+
+    fun setRelocEnabled(enabled: Boolean) = nativeSetRelocEnabled(enabled)
+    /** Teleological self-grow (default OFF): promote validated new marks into the live fingerprint. */
+    fun setSelfGrowEnabled(enabled: Boolean) = nativeSetSelfGrowEnabled(enabled)
+
+    /**
+     * `EVALUATION.md` §3.1 / `IMPLEMENTATION.md` 6a.4 — fix OpenCV's RNG so a replayed eval run is
+     * reproducible. **Evaluation only.**
+     *
+     * `solvePnPRansac` draws random samples, so two replays of the same recording can disagree, and
+     * an A/B of two parameter values then reports RANSAC variance as a parameter effect. §3.1 calls
+     * this out as "the single most common way a tuning exercise produces confident nonsense".
+     *
+     * A **negative** seed means "leave the RNG alone" and is the default, so this is inert unless an
+     * eval run turns it on. [setEvalRngSeedIfDebuggable] is the safer entry point; call this one
+     * only from code that has already established it is not a release build.
+     *
+     * Note the seed is applied immediately before every PnP solve rather than once at start-up: the
+     * reloc thread shares the global `cv::theRNG()` with other consumers, so a single seeding would
+     * drift as soon as anything else drew from it.
+     */
+    fun setEvalRngSeed(seed: Long) = nativeSetEvalRngSeed(seed)
+
+    /**
+     * [setEvalRngSeed], but a no-op unless [debuggable] is true — the guard that keeps 6a.4's
+     * "must be inert in release builds" true at the call site rather than by convention.
+     *
+     * Pass `BuildConfig.DEBUG` (or the app's own debuggable check). A fixed RANSAC seed shipped to
+     * users would make every device draw the identical sample sequence forever, which is a
+     * behaviour change and not an evaluation affordance.
+     */
+    fun setEvalRngSeedIfDebuggable(seed: Long, debuggable: Boolean) {
+        if (debuggable) nativeSetEvalRngSeed(seed)
+    }
+
+    /** Restore production behaviour: stop seeding, let RANSAC draw freely again. */
+    fun clearEvalRngSeed() = nativeSetEvalRngSeed(-1L)
+
+    /**
+     * `EVALUATION.md` §3.1 / `IMPLEMENTATION.md` 6a.4 — run relocalization **inline** on the caller's
+     * thread, one pass every [everyN] frames, instead of handing frames to the background worker.
+     * **Evaluation only**, and a no-op unless [debuggable].
+     *
+     * The second of §3.1's three named sources of replay non-determinism, and the one the fixed RNG
+     * seed does not touch. The worker sleeps `locked ? 200 : 60` ms, so *which* frames of a
+     * recording it receives is a scheduling outcome: replay the same file twice and the reloc thread
+     * samples it differently. An A/B of two parameter values then compares two different frame
+     * subsets, and reports the difference as a parameter effect.
+     *
+     * Gated at the call site rather than by convention, for the same reason the seed is: run inline
+     * and the reloc cost lands on the render thread at a cadence no real device would choose. That
+     * is a behaviour change, not an evaluation affordance. §3.1 is explicit that both are reported —
+     * the async numbers are what users get, the sync numbers are what is comparable.
+     *
+     * @param everyN frames per pass, floored at 1 natively. Zero or negative would either divide by
+     *   zero or produce a mode that is "on" and never relocalizes, which on a replay looks exactly
+     *   like relocalization being broken.
+     */
+    fun setEvalSyncRelocIfDebuggable(enabled: Boolean, everyN: Int, debuggable: Boolean) {
+        if (debuggable) nativeSetEvalSyncReloc(enabled, everyN)
+    }
+
+    /** Restore production behaviour: relocalization back on its own thread. */
+    fun clearEvalSyncReloc() = nativeSetEvalSyncReloc(false, 1)
+
+    /**
+     * The inline cadence **actually in force**, or 0 when relocalization is running asynchronously.
+     *
+     * Read back from the engine rather than remembered here, so the run-identity sidecar records
+     * what the engine is doing and not what someone asked it to do. In a release build the gate
+     * above declines and this reports 0, which is the truth — a sidecar claiming a sync run that
+     * never happened is worse evidence than no sidecar.
+     */
+    fun evalSyncRelocEveryN(): Int = nativeGetEvalSyncRelocEveryN()
+
+    /**
+     * SuperPoint detect+describe on [bitmap] (gray + CLAHE applied natively). Returns the packed array
+     * [n, dim, (u,v)*n, descriptors row-major (n*dim)], or null if the model isn't loaded / nothing
+     * found. Caller unpacks (kept here as a raw array to avoid an OpenCV dependency in this module).
+     */
+    fun detectSuperPoint(bitmap: Bitmap): FloatArray? = nativeDetectSuperPoint(bitmap)
+
+    /** Live wall-fingerprint point count — diagnostic for reloc health / watching self-grow. */
+    fun getWallKeypointCount(): Int = nativeGetWallKeypointCount()
+
+    /** Store the canonical fingerprint patch (the captured marks) for the distortion head. */
+    fun setWallPatch(bitmap: Bitmap) = nativeSetWallPatch(bitmap)
+    /** Store the canonical patch from a raw [size]x[size] gray byte buffer (persisted on Fingerprint). */
+    fun setWallPatchBytes(data: ByteArray, size: Int) = nativeSetWallPatchBytes(data, size)
+
+    /**
+     * A no-op in the current native engine: there is no gaussian-splat mapper for this to pause, so
+     * calling it does not pause anything. Kept as a callable, logged no-op (native logs a warning on
+     * every call) so call sites don't need to change ahead of a real mapper existing to gate.
+     */
+    fun setMappingPaused(paused: Boolean) = nativeSetMappingPaused(paused)
+
+    /** Display-oriented intrinsics of the frames fed via [feedYuvFrame]; the reloc PnP uses these. */
+    fun setLiveIntrinsics(fx: Float, fy: Float, cx: Float, cy: Float) = nativeSetLiveIntrinsics(fx, fy, cx, cy)
+
+    fun updateCamera(
+        viewMatrix: FloatArray,
+        projectionMatrix: FloatArray,
+        timestampNs: Long
+    ) {
+        nativeUpdateCamera(viewMatrix, projectionMatrix, timestampNs)
+    }
+
+    fun feedYuvFrame(
+        yBuffer: ByteBuffer,
+        uBuffer: ByteBuffer,
+        vBuffer: ByteBuffer,
+        width: Int,
+        height: Int,
+        yStride: Int,
+        uvStride: Int,
+        uvPixelStride: Int,
+        timestampNs: Long,
+        cvRotateCode: Int? = null
+    ) {
+        if (yBuffer.isDirect && uBuffer.isDirect && vBuffer.isDirect) {
+            nativeFeedYuvFrame(yBuffer, uBuffer, vBuffer, width, height, yStride, uvStride, uvPixelStride, timestampNs, cvRotateCode ?: -1)
+        }
+    }
+
+    /**
+     * Feed a tightly packed, display-oriented grayscale frame directly to MobileGS relocalization.
+     *
+     * This exists for the standalone CameraX path, whose pixels have already been cropped and
+     * rotated into the exact frame used by SphereSLAM/KPM and [setLiveIntrinsics]. Routing that
+     * image back through the raw YUV API would reintroduce the uncropped sensor frame and make PnP
+     * pair display-frame intrinsics with different pixels.
+     */
+    fun feedLumaFrame(
+        lumaBuffer: ByteBuffer,
+        width: Int,
+        height: Int,
+        timestampNs: Long,
+    ) {
+        if (lumaBuffer.isDirect && width > 0 && height > 0) {
+            nativeFeedLumaFrame(lumaBuffer, width, height, timestampNs)
+        }
+    }
+
+    fun feedColorFrame(colorBuffer: ByteBuffer, width: Int, height: Int, timestampNs: Long, cvRotateCode: Int? = null) {
+        if (colorBuffer.isDirect) {
+            nativeFeedColorFrame(colorBuffer, width, height, timestampNs, cvRotateCode ?: -1)
+        }
+    }
+
+    /**
+     * Whether the pose most recently supplied through [updateCamera] belongs to the current frame.
+     *
+     * Backend-neutral by design: ARCore sets this from its camera tracking state; standalone
+     * SphereSLAM sets it true only for a KPM pose accepted for the same CameraX frame.
+     */
+    fun setTrackingPoseValid(isValid: Boolean) {
+        nativeSetTrackingPoseValid(isValid)
+    }
+
+    fun loadSuperPoint(assetManager: AssetManager): Boolean = nativeLoadSuperPoint(assetManager)
+    /** Optional distortion head (docs/DISTORTION_HEAD.md). False (inert) if the asset isn't bundled. */
+    fun loadDistortionHead(assetManager: AssetManager): Boolean = nativeLoadDistortionHead(assetManager)
+    fun loadLowLightEnhancer(assetManager: AssetManager) = nativeLoadLowLightEnhancer(assetManager)
+
+
+    /** Eval (Sub-project A): average ms/stage since last call for the one stage that is actually
+     *  timed, then resets native accumulators. Indexes: 0=voxelUpdate,1=voxelKeyframe,2=surfaceMesh,
+     *  3=draw,4=pnpReloc. Only index 4 (pnpReloc) is ever sampled -- the other four name stages of a
+     *  splat-rendering pipeline the native engine does not implement, so they always read -1.0f
+     *  ("not measured"), never a real average. Index 4 itself reads -1.0f for any poll interval in
+     *  which no reloc pass ran (the worker only samples a frame with >=8 correspondences). */
+    fun getStageTimings(): FloatArray {
+        val out = FloatArray(5)
+        nativeGetStageTimings(out)
+        return out
+    }
+
+    /** Eval: toggle a native stage for A/B cost attribution. A no-op in the current native engine --
+     *  no stage's work is actually gated by this flag (not even stage 4/pnpReloc, which is not
+     *  optional: relocalization must run). Calling this logs a warning natively instead of silently
+     *  doing nothing. */
+    fun setStageEnabled(stage: Int, enabled: Boolean) = nativeSetStageEnabled(stage, enabled)
+
+    /** Pose fusion (B): [0..15]=pnpMat, [16]=inlierCount, [17]=matchCount, [18]=seq. */
+    /** [0..15] PnP camera_from_fp, 16 inliers, 17 matches, 18 seq, [19..34] view matrix of the solve frame. */
+    fun getRelocResult(): FloatArray { val o = FloatArray(35); nativeGetRelocResult(o); return o }
+
+    /** Pose fusion (B): the anchor model matrix captured in the fingerprint world frame. */
+    fun getFingerprintAnchor(): FloatArray { val o = FloatArray(16); nativeGetFingerprintAnchor(o); return o }
+
+    fun exportFingerprint(): ByteArray? = nativeExportFingerprint()
+    fun alignToFingerprint(data: ByteArray) = nativeAlignToFingerprint(data)
+
+    /** Co-op alias: align local SLAM state to the peer's fingerprint bytes. */
+    fun alignToPeer(fingerprint: ByteArray) = alignToFingerprint(fingerprint)
+
+    fun startSensorCollection() {
+        collectionJob?.cancel()
+        collectionJob = scope.launch {
+            launch {
+                sensorSource.cameraFrames.collect { frame -> forwardFrame(frame) }
+            }
+            launch {
+                sensorSource.imuSamples.collect { sample -> forwardImu(sample) }
+            }
+        }
+    }
+
+    fun stopSensorCollection() {
+        collectionJob?.cancel()
+        collectionJob = null
+    }
+
+    private fun forwardFrame(frame: CameraFrame) {
+        if (!frame.pixels.isDirect) {
+            Log.w(TAG, "skipping non-direct ByteBuffer frame")
+            return
+        }
+        when (frame.format) {
+            PixelFormat.RGBA_8888 -> {
+                feedColorFrame(frame.pixels, frame.width, frame.height, frame.timestampNs, null)
+            }
+            PixelFormat.YUV_420_888 -> forwardYuvFrame(frame)
+        }
+    }
+
+    private fun forwardYuvFrame(frame: CameraFrame) {
+        val layout = frame.yuvLayout
+        if (layout == null) {
+            Log.w(TAG, "YUV frame missing yuvLayout — dropping")
+            return
+        }
+        val full = frame.pixels
+        val y = sliceDirect(full, layout.yOffset, layout.ySize) ?: return
+        val u = sliceDirect(full, layout.uOffset, layout.uSize) ?: return
+        val v = sliceDirect(full, layout.vOffset, layout.vSize) ?: return
+        feedYuvFrame(
+            yBuffer = y,
+            uBuffer = u,
+            vBuffer = v,
+            width = frame.width,
+            height = frame.height,
+            yStride = layout.yStride,
+            uvStride = layout.uvStride,
+            uvPixelStride = layout.uvPixelStride,
+            timestampNs = frame.timestampNs,
+            cvRotateCode = null,
+        )
+    }
+
+    /** Returns a direct-byte-buffer view over [offset, offset+size) of [src]. */
+    private fun sliceDirect(src: ByteBuffer, offset: Int, size: Int): ByteBuffer? {
+        if (offset < 0 || size <= 0 || offset + size > src.capacity()) {
+            Log.w(TAG, "slice out of bounds: off=$offset size=$size cap=${src.capacity()}")
+            return null
+        }
+        val dup = src.duplicate()
+        dup.position(offset)
+        dup.limit(offset + size)
+        val slice = dup.slice()
+        return if (slice.isDirect) slice else null
+    }
+
+    private fun forwardImu(sample: ImuSample) {
+        val gyro = floatArrayOf(sample.gyro.x, sample.gyro.y, sample.gyro.z)
+        val accel = floatArrayOf(sample.accel.x, sample.accel.y, sample.accel.z)
+        updateDeviceMotion(gyro, accel)
+    }
+
+    fun destroy() {
+        stopSensorCollection()
+        synchronized(initLock) {
+            if (isInitialized) {
+                nativeDestroy()
+                isInitialized = false
+            }
+        }
+    }
+
+    fun annotateKeypoints(bitmap: Bitmap): Bitmap {
+        val mutable = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+        nativeAnnotateKeypoints(mutable)
+        return mutable
+    }
+
+    fun getKeypoints(bitmap: Bitmap): List<android.util.Pair<Float, Float>> {
+        val raw = nativeGetKeypoints(bitmap) ?: return emptyList()
+        val list = mutableListOf<android.util.Pair<Float, Float>>()
+        for (i in 0 until raw.size / 2) {
+            list.add(android.util.Pair(raw[i * 2], raw[i * 2 + 1]))
+        }
+        return list
+    }
+
+    /**
+     * The REAL fingerprint feature positions (image pixels) the same detector used by
+     * generateFingerprint would produce on [bitmap], restricted to [mask] when given — for a truthful
+     * curation overlay. Unlike getKeypoints (plain ORB-500), this matches what actually anchors.
+     */
+    fun getFingerprintKeypoints(bitmap: Bitmap, mask: Bitmap?): List<android.util.Pair<Float, Float>> {
+        val raw = nativeGetFingerprintKeypoints(bitmap, mask) ?: return emptyList()
+        val list = ArrayList<android.util.Pair<Float, Float>>(raw.size / 2)
+        for (i in 0 until raw.size / 2) list.add(android.util.Pair(raw[i * 2], raw[i * 2 + 1]))
+        return list
+    }
+
+    fun updateLightLevel(level: Float) {
+        nativeUpdateLightLevel(level)
+    }
+
+    // Native methods
+    private external fun nativeGetKeypoints(bitmap: Bitmap): FloatArray?
+    private external fun nativeGetFingerprintKeypoints(bitmap: Bitmap, mask: Bitmap?): FloatArray?
+    private external fun nativeInitialize()
+
+    private external fun nativeSetViewportSize(width: Int, height: Int)
+    private external fun nativeUpdateCamera(
+        viewMatrix: FloatArray,
+        projectionMatrix: FloatArray,
+        timestampNs: Long
+    )
+    private external fun nativeUpdateLightLevel(level: Float)
+    private external fun nativeSetTrackingPoseValid(isValid: Boolean)
+    private external fun nativeLoadSuperPoint(assetManager: AssetManager): Boolean
+    private external fun nativeLoadDistortionHead(assetManager: AssetManager): Boolean
+    private external fun nativeLoadLowLightEnhancer(assetManager: AssetManager)
+    private external fun nativeUpdateAnchorTransform(transform: FloatArray)
+    private external fun nativeUpdateDeviceMotion(angularVel: FloatArray, linearVel: FloatArray)
+    private external fun nativeGetAnchorTransform(): FloatArray?
+    private external fun nativeGetPaintingProgress(): Float
+    private external fun nativeGetCorroborationConfidence(): Float
+    private external fun nativeGetRelocDiagnostics(): IntArray?
+    private external fun nativeGetCorroborationDiagnostics(): FloatArray?
+    private external fun nativeSetDesignPlacement(fpFromDesign16: FloatArray?, halfW: Float, halfH: Float)
+    private external fun nativeGetStageTimings(out: FloatArray)
+    private external fun nativeSetStageEnabled(stage: Int, enabled: Boolean)
+    private external fun nativeGetRelocResult(out: FloatArray)
+    private external fun nativeGetFingerprintAnchor(out: FloatArray)
+    private external fun nativeExportFingerprint(): ByteArray?
+    private external fun nativeAlignToFingerprint(data: ByteArray)
+    private external fun nativeSetWallFingerprint(
+        bitmap: Bitmap, mask: Bitmap?,
+        depthBuffer: ByteBuffer,
+        depthW: Int, depthH: Int, depthStride: Int,
+        intrinsics: FloatArray, viewMatrix: FloatArray
+    ): Fingerprint?
+    private external fun nativeRestoreWallFingerprint(
+        descriptorsData: ByteArray, rows: Int, cols: Int, type: Int, points3d: FloatArray
+    )
+    private external fun nativeRestoreWallFingerprintMetric(
+        descriptorsData: ByteArray, rows: Int, cols: Int, type: Int,
+        points3d: FloatArray, anchorMatrix: FloatArray, intrinsics: FloatArray,
+        viewMatrix: FloatArray, regions: ByteArray
+    )
+    private external fun nativeExportPaintMarks(): ByteArray?
+    private external fun nativeRestorePaintMarks(
+        descriptorsData: ByteArray, rows: Int, cols: Int, type: Int, points3d: FloatArray
+    )
+    private external fun nativeClearPaintMarks()
+    private external fun nativeGetPaintMarkCount(): Int
+    private external fun nativeSetCaptureImage(bitmap: Bitmap, intrinsics: FloatArray)
+    private external fun nativeExportPaintGrid(): ByteArray?
+    private external fun nativeAutoFitDesign(): FloatArray?
+    private external fun nativeRestorePaintGrid(state: ByteArray)
+    private external fun nativeGetFeatureProgress(): Float
+    private external fun nativeRestoreWallFeatureMap(
+        descriptorsData: ByteArray, rows: Int, cols: Int, type: Int,
+        points3d: FloatArray, confidence: FloatArray, obsCount: IntArray,
+        anchor: FloatArray, intrinsics: FloatArray
+    )
+    private external fun nativeClearWallFeatureMap()
+    private external fun nativeClearWallFingerprint()
+    private external fun nativeGetMapPointCount(): Int
+    private external fun nativeGetWallFeatureMapRevision(): Long
+    private external fun nativeSetMapRelocEnabled(enabled: Boolean)
+    private external fun nativeSetMapBuildEnabled(enabled: Boolean)
+    private external fun nativeSetDepthPlacementEnabled(enabled: Boolean)
+    private external fun nativeSetLatestDepthMap(data: FloatArray?, w: Int, h: Int, frameW: Int, frameH: Int)
+    private external fun nativeGetMapRelocCounts(out: IntArray)
+    private external fun nativeExportWallFeatureMap(): ByteArray?
+    private external fun nativeSetArtworkFingerprint(
+        bitmap: Bitmap, depthBuffer: ByteBuffer?,
+        depthW: Int, depthH: Int, depthStride: Int,
+        intrinsics: FloatArray, viewMatrix: FloatArray
+    )
+    private external fun nativeSetRelocEnabled(enabled: Boolean)
+    private external fun nativeSetSelfGrowEnabled(enabled: Boolean)
+    private external fun nativeSetEvalRngSeed(seed: Long)
+    private external fun nativeSetEvalSyncReloc(enabled: Boolean, everyN: Int)
+    private external fun nativeGetEvalSyncRelocEveryN(): Int
+    private external fun nativeDetectSuperPoint(bitmap: Bitmap): FloatArray?
+    private external fun nativeGetWallKeypointCount(): Int
+    private external fun nativeSetWallPatch(bitmap: Bitmap)
+    private external fun nativeSetWallPatchBytes(data: ByteArray, size: Int)
+    private external fun nativeSetMappingPaused(paused: Boolean)
+    private external fun nativeSetLiveIntrinsics(fx: Float, fy: Float, cx: Float, cy: Float)
+    private external fun nativeFeedYuvFrame(
+        yBuffer: ByteBuffer,
+        uBuffer: ByteBuffer,
+        vBuffer: ByteBuffer,
+        width: Int,
+        height: Int,
+        yStride: Int,
+        uvStride: Int,
+        uvPixelStride: Int,
+        timestampNs: Long,
+        cvRotateCode: Int
+    )
+
+    private external fun nativeFeedLumaFrame(
+        lumaBuffer: ByteBuffer,
+        width: Int,
+        height: Int,
+        timestampNs: Long,
+    )
+    private external fun nativeFeedColorFrame(colorBuffer: ByteBuffer, width: Int, height: Int, timestampNs: Long, cvRotateCode: Int)
+    private external fun nativeDestroy()
+    private external fun nativeAnnotateKeypoints(bitmap: Bitmap)
+
+    private companion object {
+        private const val TAG = "SlamManager"
+
+        /**
+         * How long a capture waits for the anchor to be established before giving up.
+         *
+         * The anchor is established on the GL frame after the artist confirms, so the realistic wait
+         * is one frame — under 35 ms at 30 fps. Two seconds is a generous ceiling for a stalled or
+         * dropped frame, not an expected duration, and timing out is a refusal rather than a
+         * fallback. Recorded in `PARAMETERS.md` §6.
+         */
+        const val ANCHOR_WAIT_MS = 2_000L
+    }
+}

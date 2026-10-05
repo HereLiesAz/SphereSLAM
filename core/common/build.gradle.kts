@@ -3,31 +3,30 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     alias(libs.plugins.android.library)
+    alias(libs.plugins.kotlinx.serialization) // Required for @Serializable (WallFeatureMap, Fingerprint)
 }
 
 android {
-    namespace = "com.hereliesaz.sphereslam"
+    namespace = "com.hereliesaz.graffitixr.common"
     compileSdk = 37
-
     defaultConfig {
         minSdk = 26
-        consumerProguardFiles("consumer-rules.pro")
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
 }
 
 dependencies {
-    // The native engine (artoolkitX KPM + MobileGS + OpenCV), bundled in this repo.
-    implementation(project(":core:nativebridge"))
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.serialization.json)
+    // NativeLibLoader calls OpenCVLoader; the carried models carry no other heavy deps.
+    implementation(libs.opencv)
     testImplementation(libs.junit)
 }
 
