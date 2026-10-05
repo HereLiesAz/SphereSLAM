@@ -6,28 +6,26 @@ plugins {
 }
 
 android {
-    namespace = "com.hereliesaz.sphereslam"
+    namespace = "com.hereliesaz.sphereslam.reloc"
     compileSdk = 37
-
     defaultConfig {
         minSdk = 26
-        consumerProguardFiles("consumer-rules.pro")
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
 }
 
 dependencies {
-    // The classic KPM native engine (artoolkitX KPM + OpenCV), bundled in this repo.
-    implementation(project(":core:nativebridge"))
+    // OpenCV Java API: ORB, BFMatcher, Calib3d.solvePnPRansac — the whole reloc in Kotlin, no JNI.
+    implementation(libs.opencv)
+    implementation(libs.androidx.core.ktx)
+    // Optional: MiDaS depth for off-plane (sphere) placement. Depend on the perception module.
+    implementation(project(":models"))
     testImplementation(libs.junit)
 }
 

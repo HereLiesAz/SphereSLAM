@@ -139,8 +139,8 @@ class SphereSlamStandaloneSession(
             timestampNs = timestampNs,
             pageNo = match.pageNo,
             // Every KPM page owns a local centred coordinate system. Rebase that local view into
-            // the one canonical wall frame before it escapes the session so renderer, MobileGS,
-            // paint progress and persistence never observe a page-dependent coordinate jump.
+            // the one canonical wall frame before it escapes the session so the renderer,
+            // and persistence never observe a page-dependent coordinate jump.
             viewMatrix = SphereSlamPoseMath.pageViewToCanonicalView(
                 cameraFromPage,
                 reference.canonicalFromPage,
