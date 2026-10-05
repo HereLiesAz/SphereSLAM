@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.hereliesaz.graffitixr.nativebridge"
+    namespace = "com.hereliesaz.sphereslam.nativebridge"
     compileSdk = 37
     defaultConfig {
         minSdk = 26

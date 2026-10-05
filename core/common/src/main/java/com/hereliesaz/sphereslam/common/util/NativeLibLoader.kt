@@ -1,4 +1,4 @@
-package com.hereliesaz.graffitixr.common.util
+package com.hereliesaz.sphereslam.common.util
 
 import android.util.Log
 import org.opencv.android.OpenCVLoader
@@ -6,7 +6,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 object NativeLibLoader {
     private val isLoaded = AtomicBoolean(false)
-    // OpenCV loads before libgraffitixr. Tracked separately so that if the graffitixr load fails and a
+    // OpenCV loads before libsphereslam. Tracked separately so that if the sphereslam load fails and a
     // caller retries, we skip re-running the OpenCV load sequence (it already succeeded) and only retry
     // the step that failed, rather than re-invoking System.loadLibrary for an already-loaded OpenCV.
     private val opencvLoaded = AtomicBoolean(false)
@@ -45,8 +45,8 @@ object NativeLibLoader {
             }
 
             // Step 2: Load our primary C++ engine (depends on symbols from Step 1)
-            System.loadLibrary("graffitixr")
-            Log.i("NativeLibLoader", "libgraffitixr.so loaded successfully.")
+            System.loadLibrary("sphereslam")
+            Log.i("NativeLibLoader", "libsphereslam.so loaded successfully.")
 
             // Only set to true if BOTH loaded successfully
             isLoaded.set(true)

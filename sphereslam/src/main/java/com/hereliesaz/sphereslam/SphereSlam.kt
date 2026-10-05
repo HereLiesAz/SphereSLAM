@@ -1,6 +1,6 @@
 package com.hereliesaz.sphereslam
 
-import com.hereliesaz.graffitixr.nativebridge.KpmBridge
+import com.hereliesaz.sphereslam.nativebridge.KpmBridge
 
 /**
  * Public entry point for GraffitiXR's native SphereSLAM/KPM path.

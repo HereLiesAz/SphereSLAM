@@ -1,6 +1,6 @@
-package com.hereliesaz.graffitixr.nativebridge
+package com.hereliesaz.sphereslam.nativebridge
 
-import com.hereliesaz.graffitixr.common.util.NativeLibLoader
+import com.hereliesaz.sphereslam.common.util.NativeLibLoader
 import java.nio.ByteBuffer
 
 /**

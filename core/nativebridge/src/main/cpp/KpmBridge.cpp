@@ -109,7 +109,7 @@ ARParamLT *makeCameraParams(
 extern "C" {
 
 JNIEXPORT jboolean JNICALL
-Java_com_hereliesaz_graffitixr_nativebridge_KpmBridge_nativeKpmAvailable(JNIEnv *, jobject) {
+Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeKpmAvailable(JNIEnv *, jobject) {
 #ifdef HAVE_ARX_KPM
     return JNI_TRUE;
 #else
@@ -118,7 +118,7 @@ Java_com_hereliesaz_graffitixr_nativebridge_KpmBridge_nativeKpmAvailable(JNIEnv 
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_hereliesaz_graffitixr_nativebridge_KpmBridge_nativeKpmSmokeTest(
+Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeKpmSmokeTest(
         JNIEnv *, jobject, jint width, jint height) {
 #ifdef HAVE_ARX_KPM
     if (width <= 0 || height <= 0) return JNI_FALSE;
@@ -139,7 +139,7 @@ Java_com_hereliesaz_graffitixr_nativebridge_KpmBridge_nativeKpmSmokeTest(
 }
 
 JNIEXPORT jlong JNICALL
-Java_com_hereliesaz_graffitixr_nativebridge_KpmBridge_nativeCreateCalibratedSession(
+Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeCreateCalibratedSession(
         JNIEnv *,
         jobject,
         jint width,
@@ -193,7 +193,7 @@ Java_com_hereliesaz_graffitixr_nativebridge_KpmBridge_nativeCreateCalibratedSess
 }
 
 JNIEXPORT jint JNICALL
-Java_com_hereliesaz_graffitixr_nativebridge_KpmBridge_nativeAddPlanarPage(
+Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeAddPlanarPage(
         JNIEnv *env,
         jobject,
         jlong sessionValue,
@@ -272,7 +272,7 @@ Java_com_hereliesaz_graffitixr_nativebridge_KpmBridge_nativeAddPlanarPage(
 }
 
 JNIEXPORT jint JNICALL
-Java_com_hereliesaz_graffitixr_nativebridge_KpmBridge_nativeMatchPlanar(
+Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeMatchPlanar(
         JNIEnv *env,
         jobject,
         jlong sessionValue,
@@ -333,7 +333,7 @@ Java_com_hereliesaz_graffitixr_nativebridge_KpmBridge_nativeMatchPlanar(
 }
 
 JNIEXPORT void JNICALL
-Java_com_hereliesaz_graffitixr_nativebridge_KpmBridge_nativeDestroySession(
+Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeDestroySession(
         JNIEnv *, jobject, jlong sessionValue) {
 #ifdef HAVE_ARX_KPM
     KpmSession *session = asSession(sessionValue);

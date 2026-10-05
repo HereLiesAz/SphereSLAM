@@ -1,7 +1,7 @@
 # FILE: core/nativebridge/src/main/cpp/CMakeLists.txt
 cmake_minimum_required(VERSION 3.22.1)
 
-project("graffitixr_native")
+project("sphereslam_native")
 
 # OpenCV is imported from Maven Central (org.opencv:opencv). Since 4.9.0 that artifact ships a
 # Prefab part, so with buildFeatures { prefab = true } in build.gradle.kts, AGP generates a CMake
@@ -9,15 +9,15 @@ project("graffitixr_native")
 find_package(OpenCV REQUIRED CONFIG)
 
 # SphereSLAM: the self-contained artoolkitX KPM bridge.
-add_library(graffitixr SHARED
+add_library(sphereslam SHARED
     KpmBridge.cpp
 )
 
 # 16 KB page-size support. Android's newer devices (and Play's requirement) use a 16 KB memory page
 # size; a shared library laid out for 4 KB pages fails to load there. Force 16 KB ELF segment
-# alignment explicitly so libgraffitixr.so is correct regardless of the NDK's default (older NDKs
+# alignment explicitly so libsphereslam.so is correct regardless of the NDK's default (older NDKs
 # default to 4 KB). Prebuilt deps (ONNX Runtime, OpenCV) ship their own 16 KB-aligned .so.
-target_link_options(graffitixr PRIVATE
+target_link_options(sphereslam PRIVATE
     "-Wl,-z,max-page-size=16384"
     "-Wl,-z,common-page-size=16384"
 )
@@ -32,7 +32,7 @@ set(ARX_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/artoolkitx/S
 set(ARX_SOURCE_ROOT ${ARX_ROOT}/..)
 
 if(EXISTS ${ARX_ROOT}/KPM/include/ARX/KPM/kpm.h)
-    message(STATUS "graffitixr: building SphereSLAM KPM from ${ARX_ROOT}")
+    message(STATUS "sphereslam: building SphereSLAM KPM from ${ARX_ROOT}")
 
     find_library(log-lib log)
     find_library(m-lib m)
@@ -70,7 +70,7 @@ if(EXISTS ${ARX_ROOT}/KPM/include/ARX/KPM/kpm.h)
     set(ARX_JPEG_INCLUDE ${ARX_SOURCE_ROOT}/depends/android/include)
     set(ARX_JPEG_LIB ${ARX_SOURCE_ROOT}/depends/android/lib/${ANDROID_ABI}/libjpeg.a)
     if(NOT EXISTS ${ARX_JPEG_LIB})
-        message(FATAL_ERROR "graffitixr: artoolkitX JPEG library missing for ABI ${ANDROID_ABI}: ${ARX_JPEG_LIB}")
+        message(FATAL_ERROR "sphereslam: artoolkitX JPEG library missing for ABI ${ANDROID_ABI}: ${ARX_JPEG_LIB}")
     endif()
 
     # Match artoolkitX's own KPM CMake source list exactly. Do not recursively glob FreakMatcher:
@@ -225,21 +225,21 @@ if(EXISTS ${ARX_ROOT}/KPM/include/ARX/KPM/kpm.h)
         ${z-lib}
     )
 
-    target_link_libraries(graffitixr arx_kpm)
-    target_compile_definitions(graffitixr PRIVATE HAVE_ARX_KPM)
-    target_include_directories(graffitixr PRIVATE
+    target_link_libraries(sphereslam arx_kpm)
+    target_compile_definitions(sphereslam PRIVATE HAVE_ARX_KPM)
+    target_include_directories(sphereslam PRIVATE
         ${ARX_GENERATED_INCLUDE}
         ${ARX_ROOT}/KPM/include
         ${ARX_ROOT}/AR/include
         ${ARX_ROOT}/ARUtil/include
     )
 else()
-    message(STATUS "graffitixr: artoolkitX submodule not present; SphereSLAM KPM disabled")
+    message(STATUS "sphereslam: artoolkitX submodule not present; SphereSLAM KPM disabled")
 endif()
 
 find_library(log-lib log)
 
-target_link_libraries(graffitixr
+target_link_libraries(sphereslam
     ${log-lib}
     OpenCV::opencv_java5
     GLESv3
