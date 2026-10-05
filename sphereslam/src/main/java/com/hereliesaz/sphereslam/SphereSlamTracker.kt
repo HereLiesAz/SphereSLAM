@@ -1,6 +1,6 @@
 package com.hereliesaz.sphereslam
 
-import com.hereliesaz.graffitixr.nativebridge.KpmBridge
+import com.hereliesaz.sphereslam.nativebridge.KpmBridge
 import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors

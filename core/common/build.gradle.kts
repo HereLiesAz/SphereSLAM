@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.hereliesaz.graffitixr.common"
+    namespace = "com.hereliesaz.sphereslam.common"
     compileSdk = 37
     defaultConfig {
         minSdk = 26
