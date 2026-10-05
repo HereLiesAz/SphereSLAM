@@ -1,4 +1,5 @@
 ## SphereSLAM
+[![](https://jitpack.io/v/HereLiesAz/SphereSLAM.svg)](https://jitpack.io/#HereLiesAz/SphereSLAM)
 
 A low-tech, lightweight AR platform — markerless 6-DoF tracking and relocalization on everyday
 Android devices, **without ARCore**. Built for the case where ARCore isn't available (or isn't
