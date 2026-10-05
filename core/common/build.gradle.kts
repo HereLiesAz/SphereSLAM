@@ -6,28 +6,24 @@ plugins {
 }
 
 android {
-    namespace = "com.hereliesaz.sphereslam"
+    namespace = "com.hereliesaz.graffitixr.common"
     compileSdk = 37
-
     defaultConfig {
         minSdk = 26
-        consumerProguardFiles("consumer-rules.pro")
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
 }
 
 dependencies {
-    // The classic KPM native engine (artoolkitX KPM + OpenCV), bundled in this repo.
-    implementation(project(":core:nativebridge"))
+    implementation(libs.androidx.core.ktx)
+    // NativeLibLoader calls OpenCVLoader.
+    implementation(libs.opencv)
     testImplementation(libs.junit)
 }
 
