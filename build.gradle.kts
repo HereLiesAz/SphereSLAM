@@ -3,3 +3,31 @@
 plugins {
     alias(libs.plugins.android.library) apply false
 }
+
+// JitPack coordinates: com.github.HereLiesAz.SphereSLAM:<module>:<tag>. JitPack overrides version
+// with the git tag at build time; this is the fallback for local publishToMavenLocal.
+allprojects {
+    group = "com.github.HereLiesAz.SphereSLAM"
+    version = "0.1.0"
+}
+
+// Publishing convention: every Android library module gets a maven-publish `release` publication,
+// so JitPack (and `publishToMavenLocal`) emit a consumable AAR per module.
+subprojects {
+    plugins.withId("com.android.library") {
+        extensions.configure<com.android.build.api.dsl.LibraryExtension>("android") {
+            publishing { singleVariant("release") { withSourcesJar() } }
+        }
+        apply(plugin = "maven-publish")
+        afterEvaluate {
+            extensions.configure<PublishingExtension>("publishing") {
+                publications {
+                    create<MavenPublication>("release") {
+                        from(components["release"])
+                        artifactId = project.name
+                    }
+                }
+            }
+        }
+    }
+}

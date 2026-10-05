@@ -1,0 +1,8 @@
+# JitPack build config for SphereSLAM.
+# The artoolkitX KPM submodule must be present before the native :core:nativebridge build.
+jdk:
+  - openjdk17
+before_install:
+  - git submodule update --init --recursive
+install:
+  - ./gradlew publishToMavenLocal -x test -x lint --no-daemon --stacktrace
