@@ -1,0 +1,51 @@
+# CENTRAL WORKFLOW MENU / REQUEST
+#
+# Do not implement a new workflow under .github/workflows here.
+# New implementations are submitted to HereLiesAz/workflows.
+#
+# A submitted implementation MUST:
+#   1. be repository-agnostic;
+#   2. parameterize repository-specific names, paths, branches, packages and releases;
+#   3. reuse existing secrets when possible;
+#   4. declare every new required secret by exact name and plain-language purpose.
+#
+# AVAILABLE GENERAL WORKFLOWS
+#   ci-validation              build/test/validation
+#   codeql-scan               CodeQL security scan
+#   issue-summary             issue summarization
+#   jules-dispatch            Jules request dispatch
+#   jules-glee                Jules PR Glee audit
+#   jules-auto-assign         Jules issue assignment
+#   context-backup            repository context backup
+#   clear-cache               cache cleanup
+#
+# AVAILABLE ANDROID WORKFLOWS
+#   android-dependency-update managed Android native dependency refresh
+#   android-github-release    build/sign APK and publish GitHub release
+#   android-play-release      build/sign AAB and publish to Google Play
+#
+# AVAILABLE RELEASE / PACKAGE WORKFLOWS
+#   artifact-github-release   publish existing artifacts to GitHub Releases
+#   multi-platform-app-release build/release a multi-platform application
+#   desktop-package           native desktop packaging
+#   maven-package-publish     Maven/GitHub Packages/JitPack-oriented publishing
+#   node-package-publish      Node package publishing
+#   azp-model-release         managed model asset release
+#   azp-sign-release          release signing
+#
+# AVAILABLE DEPLOYMENT WORKFLOWS
+#   website-sftp-deploy       build/deploy website over SFTP
+#
+# List catalog workflows this repository should use.
+requested: []
+
+# If the needed capability is absent from the menu, describe the GENERAL workflow
+# to add to HereLiesAz/workflows. This is a request, not executable automation.
+new_workflow_request:
+  name: ""
+  purpose: ""
+  required_inputs: []
+  required_secrets:
+    # - name: EXAMPLE_SECRET
+    #   purpose: Authenticates to Example Service so the workflow can publish artifacts.
+    []
