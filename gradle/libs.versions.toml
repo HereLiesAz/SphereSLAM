@@ -6,6 +6,7 @@ kotlin = "2.4.20"
 coreKtx = "1.19.1"
 coroutines = "1.11.0"
 kotlinxSerialization = "1.11.0"
+onnxruntime = "1.30.0"
 opencv = "5.0.0.1"
 junit = "4.13.2"
 mockk = "1.14.11"
@@ -18,6 +19,7 @@ kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 # OpenCV from Maven Central. Its Prefab part exposes the native world to CMake
 # (find_package(OpenCV) -> OpenCV::opencv_java5) and auto-packages libopencv_java5.so.
 opencv = { group = "org.opencv", name = "opencv", version.ref = "opencv" }
+onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
 

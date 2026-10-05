@@ -17,3 +17,4 @@ rootProject.name = "SphereSLAM"
 include(":sphereslam")
 include(":core:nativebridge")
 include(":core:common")
+include(":models")
