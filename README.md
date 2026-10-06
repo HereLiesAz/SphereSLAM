@@ -34,7 +34,7 @@ superseding the other.
 |------|-------|
 | Classic planar KPM | **built & published** — native artoolkitX KPM engine bundled in `:core:nativebridge`, published on JitPack |
 | World-size retention | **built** — place content at a real-world size and hold it across tracking loss (`AnchoredStandaloneSession` + `OverlayPlacement`) |
-| Spherical coverage | **built** — 2-D angular coverage + directional glow projection (`SphereCoverage`, `CameraAttitudeProvider`, `CoverageGlowProjection`); native surrounding feature-map growth is the remaining step |
+| Spherical coverage | **built** — 2-D angular coverage + directional glow (`SphereCoverage`, `CameraAttitudeProvider`, `CoverageGlowProjection`, and a drop-in GL glow in the optional `:overlay` module); native surrounding feature-map growth is the remaining step |
 
 ### Usage
 
@@ -91,6 +91,25 @@ val marks = CoverageGlowProjection.project(
 ~~~
 
 Coverage is purely angular, so it behaves identically on a 3 m wall and a 30 cm canvas.
+
+**3. Or drop in the ready-made glow (optional `:overlay` module).**
+
+`CoverageGlowProjection` is the math; the `:overlay` module adds a transparent `GLSurfaceView` that
+draws the glow for you — a soft additive bloom over each unscanned direction, fainter at the edges
+as a nudge. It is a separate artifact, so headless consumers that only want tracking depend on
+`:sphereslam` and never pull GL.
+
+~~~kotlin
+dependencies {
+    implementation("com.github.HereLiesAz.SphereSLAM:sphereslam:<tag>")
+    implementation("com.github.HereLiesAz.SphereSLAM:overlay:<tag>") // GL glow, optional
+}
+~~~
+~~~kotlin
+val glow = CoverageGlowView(context)      // add over your camera PreviewView
+// per keyframe:
+glow.update(coverage.thinDirections(), headingDeg, elevationDeg, hFovDeg, vFovDeg)
+~~~
 
 ### Roadmap
 
