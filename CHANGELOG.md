@@ -54,3 +54,5 @@ canonical poses, anchors, tracker observations, photosphere DTOs/snapshots, and 
   the exact pinned commit.
 - JitPack bootstraps the checksum-verified Gradle 9.8.0 distribution directly, avoiding failures from
   a corrupted/inaccessible cached wrapper JAR.
+- JitPack also bootstraps checksum-verified CMake 4.4.4 and sets `cmake.dir` explicitly, because
+  CMake 4.4.4 is newer than the CMake packages available in the stock JitPack Android SDK image.
