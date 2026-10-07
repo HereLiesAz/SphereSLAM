@@ -29,6 +29,7 @@ import org.opencv.core.MatOfPoint3f
  * @throws IllegalArgumentException if [anchorFromTile] is not length 16, descriptor rows are not
  *   parallel to [points3d], or [confidence] is non-null and not parallel to [points3d].
  */
+@ExperimentalSphereSlamRelocApi
 class TileFingerprint(
     override val descriptors: Mat,
     override val points3d: MatOfPoint3f,
