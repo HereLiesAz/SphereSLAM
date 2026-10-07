@@ -30,14 +30,20 @@ data class TileId(val sector: Int, val band: Int)
  * @property representativeOrientation the attitude the tile was last captured at, or null.
  * @property rangeMeters estimated distance to the surface at the tile center, or null if unknown.
  */
-data class PanoramaTile(
+class PanoramaTile(
     val id: TileId,
     val center: SphereCoverage.Direction,
     val needsUpdate: Boolean,
     val lastUpdatedMs: Long,
-    val representativeOrientation: FloatArray?,
+    representativeOrientation: FloatArray?,
     val rangeMeters: Float?,
 ) {
+    private val representativeOrientationValue = representativeOrientation?.copyOf()
+
+    /** Captured attitude quaternion [x, y, z, w], returned as a defensive copy. */
+    val representativeOrientation: FloatArray?
+        get() = representativeOrientationValue?.copyOf()
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is PanoramaTile) return false
@@ -46,8 +52,8 @@ data class PanoramaTile(
             needsUpdate == other.needsUpdate &&
             lastUpdatedMs == other.lastUpdatedMs &&
             rangeMeters == other.rangeMeters &&
-            (representativeOrientation?.contentEquals(other.representativeOrientation)
-                ?: (other.representativeOrientation == null))
+            (representativeOrientationValue?.contentEquals(other.representativeOrientationValue)
+                ?: (other.representativeOrientationValue == null))
     }
 
     override fun hashCode(): Int {
@@ -55,7 +61,7 @@ data class PanoramaTile(
         r = 31 * r + center.hashCode()
         r = 31 * r + needsUpdate.hashCode()
         r = 31 * r + lastUpdatedMs.hashCode()
-        r = 31 * r + (representativeOrientation?.contentHashCode() ?: 0)
+        r = 31 * r + (representativeOrientationValue?.contentHashCode() ?: 0)
         r = 31 * r + (rangeMeters?.hashCode() ?: 0)
         return r
     }
@@ -76,23 +82,64 @@ data class PanoramaTile(
  * [rangeMeters] entries are meaningful, so snapshots produced by [PhotosphereMap.snapshot] contain
  * only finite float values and remain valid standard JSON without special NaN handling.
  */
-data class PhotosphereMapSnapshot(
+class PhotosphereMapSnapshot(
     val sectorCount: Int,
     val viewableHalfAngleDeg: Float,
     val elevationBandCount: Int,
     val viewableElevationHalfAngleDeg: Float,
     val wallHeadingDeg: Float?,
-    val needsUpdate: BooleanArray,
-    val lastUpdatedMs: LongArray,
-    val orientations: Array<FloatArray?>,
-    val rangeMeters: FloatArray,
-    val scanned: BooleanArray = BooleanArray(lastUpdatedMs.size) { i ->
+    needsUpdate: BooleanArray,
+    lastUpdatedMs: LongArray,
+    orientations: Array<FloatArray?>,
+    rangeMeters: FloatArray,
+    scanned: BooleanArray = BooleanArray(lastUpdatedMs.size) { i ->
         lastUpdatedMs[i] > 0L || !needsUpdate[i]
     },
-    val rangePresent: BooleanArray = BooleanArray(rangeMeters.size) { i ->
+    rangePresent: BooleanArray = BooleanArray(rangeMeters.size) { i ->
         !rangeMeters[i].isNaN()
     },
 ) {
+    private val needsUpdateValue = needsUpdate.copyOf()
+    private val lastUpdatedMsValue = lastUpdatedMs.copyOf()
+    private val orientationsValue = Array(orientations.size) { orientations[it]?.copyOf() }
+    private val rangeMetersValue = rangeMeters.copyOf()
+    private val scannedValue = scanned.copyOf()
+    private val rangePresentValue = rangePresent.copyOf()
+
+    val needsUpdate: BooleanArray get() = needsUpdateValue.copyOf()
+    val lastUpdatedMs: LongArray get() = lastUpdatedMsValue.copyOf()
+    val orientations: Array<FloatArray?> get() = Array(orientationsValue.size) { orientationsValue[it]?.copyOf() }
+    val rangeMeters: FloatArray get() = rangeMetersValue.copyOf()
+    val scanned: BooleanArray get() = scannedValue.copyOf()
+    val rangePresent: BooleanArray get() = rangePresentValue.copyOf()
+
+    /** Data-class-style copy retained for persistence/test callers while preserving ownership. */
+    fun copy(
+        sectorCount: Int = this.sectorCount,
+        viewableHalfAngleDeg: Float = this.viewableHalfAngleDeg,
+        elevationBandCount: Int = this.elevationBandCount,
+        viewableElevationHalfAngleDeg: Float = this.viewableElevationHalfAngleDeg,
+        wallHeadingDeg: Float? = this.wallHeadingDeg,
+        needsUpdate: BooleanArray = this.needsUpdate,
+        lastUpdatedMs: LongArray = this.lastUpdatedMs,
+        orientations: Array<FloatArray?> = this.orientations,
+        rangeMeters: FloatArray = this.rangeMeters,
+        scanned: BooleanArray = this.scanned,
+        rangePresent: BooleanArray = this.rangePresent,
+    ): PhotosphereMapSnapshot = PhotosphereMapSnapshot(
+        sectorCount,
+        viewableHalfAngleDeg,
+        elevationBandCount,
+        viewableElevationHalfAngleDeg,
+        wallHeadingDeg,
+        needsUpdate,
+        lastUpdatedMs,
+        orientations,
+        rangeMeters,
+        scanned,
+        rangePresent,
+    )
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is PhotosphereMapSnapshot) return false
@@ -101,12 +148,12 @@ data class PhotosphereMapSnapshot(
             elevationBandCount == other.elevationBandCount &&
             viewableElevationHalfAngleDeg == other.viewableElevationHalfAngleDeg &&
             wallHeadingDeg == other.wallHeadingDeg &&
-            needsUpdate.contentEquals(other.needsUpdate) &&
-            lastUpdatedMs.contentEquals(other.lastUpdatedMs) &&
-            scanned.contentEquals(other.scanned) &&
-            orientations.contentDeepEquals(other.orientations) &&
-            rangePresent.contentEquals(other.rangePresent) &&
-            rangeMeters.contentEquals(other.rangeMeters)
+            needsUpdateValue.contentEquals(other.needsUpdateValue) &&
+            lastUpdatedMsValue.contentEquals(other.lastUpdatedMsValue) &&
+            scannedValue.contentEquals(other.scannedValue) &&
+            orientationsValue.contentDeepEquals(other.orientationsValue) &&
+            rangePresentValue.contentEquals(other.rangePresentValue) &&
+            rangeMetersValue.contentEquals(other.rangeMetersValue)
     }
 
     override fun hashCode(): Int {
@@ -115,12 +162,12 @@ data class PhotosphereMapSnapshot(
         r = 31 * r + elevationBandCount
         r = 31 * r + viewableElevationHalfAngleDeg.hashCode()
         r = 31 * r + (wallHeadingDeg?.hashCode() ?: 0)
-        r = 31 * r + needsUpdate.contentHashCode()
-        r = 31 * r + lastUpdatedMs.contentHashCode()
-        r = 31 * r + scanned.contentHashCode()
-        r = 31 * r + orientations.contentDeepHashCode()
-        r = 31 * r + rangePresent.contentHashCode()
-        r = 31 * r + rangeMeters.contentHashCode()
+        r = 31 * r + needsUpdateValue.contentHashCode()
+        r = 31 * r + lastUpdatedMsValue.contentHashCode()
+        r = 31 * r + scannedValue.contentHashCode()
+        r = 31 * r + orientationsValue.contentDeepHashCode()
+        r = 31 * r + rangePresentValue.contentHashCode()
+        r = 31 * r + rangeMetersValue.contentHashCode()
         return r
     }
 }
