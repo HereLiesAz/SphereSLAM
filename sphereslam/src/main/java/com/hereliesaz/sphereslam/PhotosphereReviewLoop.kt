@@ -38,7 +38,9 @@ class PhotosphereReviewLoop(
         val ttlMs: Long = 0L,
     ) {
         init {
-            require(hFovDeg > 0f && vFovDeg > 0f) { "fields of view must be positive" }
+            require(hFovDeg.isFinite() && vFovDeg.isFinite() && hFovDeg > 0f && vFovDeg > 0f) {
+                "fields of view must be finite and positive"
+            }
             require(ttlMs >= 0L) { "ttlMs must be >= 0" }
         }
     }
@@ -79,13 +81,18 @@ class PhotosphereReviewLoop(
         checkedButUnmatched: Collection<TileId> = emptyList(),
     ): Outcome {
         if (config.ttlMs > 0L) map.expireOlderThan(nowMs - config.ttlMs)
-        for (id in confirmed) map.markUpdated(id, nowMs)
-        for (id in checkedButUnmatched) {
-            val tile = map.tile(id) ?: continue
-            // Only a tile that actually held a capture can have "changed"; a never-scanned miss is
-            // expected and must not spread suspicion to its neighbors.
-            if (tile.lastUpdatedMs > 0L && !tile.needsUpdate) map.recordStale(id)
-        }
+
+        // Decide change eligibility before any recordStale call mutates neighboring freshness.
+        // Confirmed wins if a caller accidentally supplies the same tile in both collections.
+        val confirmedSet = confirmed.toHashSet()
+        val staleEligible = checkedButUnmatched.asSequence()
+            .distinct()
+            .filter { it !in confirmedSet }
+            .filter { map.hasBeenScanned(it) && !map.needsUpdate(it) }
+            .toList()
+
+        for (id in confirmedSet) map.markUpdated(id, nowMs)
+        for (id in staleEligible) map.recordStale(id)
         return Outcome(
             candidates = candidates(headingDeg, elevationDeg),
             directionsNeedingUpdate = map.directionsNeedingUpdate(),
