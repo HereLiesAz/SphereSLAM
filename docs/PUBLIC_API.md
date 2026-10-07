@@ -2,7 +2,7 @@
 
 This document defines what downstream applications should treat as SphereSLAM's supported API.
 
-The current development version is **0.23.2** and remains pre-1.0. The supported surface is being
+The current development version is **0.23.3** and remains pre-1.0. The supported surface is being
 hardened now so that a future 1.0 can actually carry a meaningful compatibility guarantee.
 
 ## 1. Module boundaries
@@ -218,9 +218,9 @@ Before 1.0:
 At 1.0, the supported public surface should be treated as semantically versioned and compatibility
 changes should require the appropriate major-version policy.
 
-## 8. 0.23.2 API-hardening notes
+## 8. 0.23.3 API-hardening notes
 
-The 0.23.2 API-hardening pass made these intentional changes:
+The 0.23.3 API-hardening pass made these intentional changes:
 
 - JDK 21 is the build toolchain while Android bytecode remains Java 17 compatible.
 - `SphereSlamStandaloneSession.EngineFactory` is internal.
