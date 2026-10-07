@@ -364,7 +364,7 @@ class PhotosphereMap(
         val scanned = ArrayList<TileId>()
         for (s in 0 until grid.sectorCount) {
             for (b in 0 until grid.elevationBandCount) {
-                if (lastUpdatedMs[grid.index(s, b)] > 0L) scanned.add(TileId(s, b))
+                if (scannedFlags[grid.index(s, b)]) scanned.add(TileId(s, b))
             }
         }
         if (scanned.isEmpty()) return emptyList()
@@ -380,7 +380,7 @@ class PhotosphereMap(
             if (seen.add(seed)) out.add(seed)
             if (out.size >= limit) break
             for ((ns, nb) in grid.neighbors(seed.sector, seed.band)) {
-                if (lastUpdatedMs[grid.index(ns, nb)] <= 0L) continue
+                if (!scannedFlags[grid.index(ns, nb)]) continue
                 val n = TileId(ns, nb)
                 if (seen.add(n)) {
                     out.add(n)
