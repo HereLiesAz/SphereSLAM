@@ -12,6 +12,7 @@ junit = "4.13.2"
 mockk = "1.14.11"
 ndk = "30.0.16248370"
 cmake = "4.4.4"
+jdk = "21"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
