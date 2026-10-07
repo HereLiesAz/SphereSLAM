@@ -340,6 +340,57 @@ class PhotosphereMap(
         return out
     }
 
+    /**
+     * Reacquisition candidates, ordered: the tiles to re-match when tracking is lost and the live
+     * heading can no longer be trusted to gate [tilesInView]. In place of a view cone this leans on
+     * *where you last were* — recently recognized tiles and their scanned neighbors — because losing a
+     * lock rarely means teleporting. The host joins these ids to the fingerprints it holds and feeds a
+     * matcher, capped by [limit] so a relock stays cheap no matter how large the map grows.
+     *
+     * This only seeds KPM/relocalization; it adds nothing to the map. Only scanned tiles
+     * ([PanoramaTile.lastUpdatedMs] `> 0`) appear — an unscanned tile has nothing to match against.
+     * The walk visits the most recently updated tile, then its scanned neighbors, then the next most
+     * recent not yet visited, and so on, so the immediate neighborhood of the last known tile is tried
+     * before older recognitions. Purely a read of recency and adjacency; nothing is written back, so
+     * it carries no drift of its own and needs no corroboration.
+     *
+     * @param limit maximum ids to return (`<= 0` yields an empty list); the cheap cap on a relock.
+     * @return scanned tile ids in reacquisition-priority order, at most [limit]; empty when nothing
+     *   has been scanned yet. Anchor-independent (ids, not directions).
+     */
+    fun relockSeeds(limit: Int): List<TileId> {
+        if (limit <= 0) return emptyList()
+        // Scanned tiles, most recent first; index breaks ties so the order is deterministic.
+        val scanned = ArrayList<TileId>()
+        for (s in 0 until grid.sectorCount) {
+            for (b in 0 until grid.elevationBandCount) {
+                if (lastUpdatedMs[grid.index(s, b)] > 0L) scanned.add(TileId(s, b))
+            }
+        }
+        if (scanned.isEmpty()) return emptyList()
+        scanned.sortWith(
+            compareByDescending<TileId> { lastUpdatedMs[grid.index(it.sector, it.band)] }
+                .thenBy { grid.index(it.sector, it.band) },
+        )
+
+        val out = ArrayList<TileId>(minOf(limit, scanned.size))
+        val seen = HashSet<TileId>()
+        for (seed in scanned) {
+            if (out.size >= limit) break
+            if (seen.add(seed)) out.add(seed)
+            if (out.size >= limit) break
+            for ((ns, nb) in grid.neighbors(seed.sector, seed.band)) {
+                if (lastUpdatedMs[grid.index(ns, nb)] <= 0L) continue
+                val n = TileId(ns, nb)
+                if (seen.add(n)) {
+                    out.add(n)
+                    if (out.size >= limit) break
+                }
+            }
+        }
+        return out
+    }
+
     /** A snapshot of one tile, or null for an out-of-range id. Center is null-direction until anchored. */
     fun tile(id: TileId): PanoramaTile? {
         if (!inRange(id)) return null

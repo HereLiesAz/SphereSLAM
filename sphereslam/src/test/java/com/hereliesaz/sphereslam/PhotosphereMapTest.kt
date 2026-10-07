@@ -166,6 +166,45 @@ class PhotosphereMapTest {
     }
 
     @Test
+    fun `relockSeeds is empty before anything is scanned`() {
+        val m = fullRing()
+        assertTrue(m.relockSeeds(10).isEmpty())
+    }
+
+    @Test
+    fun `relockSeeds returns only scanned tiles, most recent first`() {
+        val m = fullRing()
+        m.markUpdated(TileId(0, 1), nowMs = 100L)
+        m.markUpdated(TileId(2, 2), nowMs = 300L)
+        m.markUpdated(TileId(3, 0), nowMs = 200L)
+        val seeds = m.relockSeeds(10)
+        assertTrue(seeds.all { m.tile(it)!!.lastUpdatedMs > 0L })
+        assertEquals(TileId(2, 2), seeds.first())
+    }
+
+    @Test
+    fun `relockSeeds visits a recent tile's scanned neighbors before older recognitions`() {
+        val m = fullRing() // 4 sectors (full ring, wraps), 3 bands
+        m.markUpdated(TileId(1, 2), nowMs = 100L) // oldest, spatially far
+        m.markUpdated(TileId(0, 0), nowMs = 400L) // most recent
+        m.markUpdated(TileId(0, 1), nowMs = 300L) // scanned neighbor of (0,0)
+        val seeds = m.relockSeeds(10)
+        assertEquals(TileId(0, 0), seeds[0])
+        assertTrue(seeds.indexOf(TileId(0, 1)) < seeds.indexOf(TileId(1, 2)))
+    }
+
+    @Test
+    fun `relockSeeds honors the limit and a non-positive limit yields empty`() {
+        val m = fullRing()
+        m.markUpdated(TileId(0, 0), nowMs = 100L)
+        m.markUpdated(TileId(1, 0), nowMs = 200L)
+        m.markUpdated(TileId(2, 0), nowMs = 300L)
+        assertEquals(2, m.relockSeeds(2).size)
+        assertTrue(m.relockSeeds(0).isEmpty())
+        assertTrue(m.relockSeeds(-1).isEmpty())
+    }
+
+    @Test
     fun `an out-of-range id is ignored, not crashing`() {
         val m = fullRing()
         m.markUpdated(TileId(99, 99), nowMs = 1L)
