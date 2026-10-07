@@ -9,6 +9,7 @@ package com.hereliesaz.sphereslam.reloc
  * All matrices are **row-major** 4×4 (length 16), matching [RelocResult] and
  * [TileFingerprint.anchorFromTile]. Pure — unit-tested without OpenCV.
  */
+@ExperimentalSphereSlamRelocApi
 object TilePose {
 
     /**
