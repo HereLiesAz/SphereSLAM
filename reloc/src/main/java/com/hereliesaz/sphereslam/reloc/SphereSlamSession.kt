@@ -39,6 +39,7 @@ import org.opencv.core.Mat
  *   surfaces inliers, not residual); 0 means "do not reject on residual". Tune per front-end.
  * @param predictor optional low-latency early-anchor / off-page bridge (see [EarlyPosePredictor]).
  */
+@ExperimentalSphereSlamRelocApi
 class SphereSlamSession(
     private val relocalizer: Relocalizer,
     private val photosphere: PhotosphereMap,
@@ -187,6 +188,7 @@ class SphereSlamSession(
  * the shape of [AttitudePosePredictor] (`:reloc`), kept as an interface so the session depends on the
  * capability, not the concrete class. Poses are column-major 16 (the loop's convention).
  */
+@ExperimentalSphereSlamRelocApi
 interface EarlyPosePredictor {
     /** Whether a reference has been installed and [predict] can return a pose. */
     val hasReference: Boolean
