@@ -61,6 +61,42 @@ class PhotosphereReviewLoopTest {
     }
 
     @Test
+    fun `adjacent unmatched fresh tiles both propagate from the pre-mutation snapshot`() {
+        val m = anchoredMap()
+        val l = loop(m)
+        val a = TileId(1, 1)
+        val b = TileId(2, 1)
+        val aUniqueNeighbor = TileId(0, 1)
+        val bUniqueNeighbor = TileId(3, 1)
+        listOf(a, b, aUniqueNeighbor, bUniqueNeighbor).forEach { m.markUpdated(it, nowMs = 5L) }
+
+        l.onFrame(0f, 0f, nowMs = 10L, checkedButUnmatched = listOf(a, b))
+
+        assertTrue(m.needsUpdate(aUniqueNeighbor))
+        assertTrue(m.needsUpdate(bUniqueNeighbor))
+    }
+
+    @Test
+    fun `zero timestamp capture is still eligible to propagate a later miss`() {
+        val m = anchoredMap()
+        val l = loop(m)
+        val id = TileId(1, 1)
+        val neighbor = TileId(0, 1)
+        m.markUpdated(id)
+        m.markUpdated(neighbor, nowMs = 5L)
+
+        l.onFrame(0f, 0f, nowMs = 10L, checkedButUnmatched = listOf(id))
+
+        assertTrue(m.needsUpdate(id))
+        assertTrue(m.needsUpdate(neighbor))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `infinite field of view is rejected`() {
+        PhotosphereReviewLoop.ReviewConfig(hFovDeg = Float.POSITIVE_INFINITY)
+    }
+
+    @Test
     fun `TTL ages a capture back to needing an update`() {
         val m = anchoredMap()
         val l = loop(m, ttlMs = 100L)
