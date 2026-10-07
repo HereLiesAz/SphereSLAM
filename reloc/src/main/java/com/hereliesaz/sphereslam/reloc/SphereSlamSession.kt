@@ -100,8 +100,11 @@ class SphereSlamSession(
         val candidates = LinkedHashMap<TileId, Fingerprint>(candidateIds.size)
         for (id in candidateIds) fingerprints[id]?.let { candidates[id] = it }
 
-        // 2. Recognize, and lift the winning pose into the map frame, column-major for the loop.
-        val match = if (candidates.isEmpty()) null else matcher.match(gray, candidates)
+        // 2. Recognize every attempted candidate, while still using only the strongest pose for
+        // tracking. The full verdict is retained so freshness never mistakes a lower-scoring
+        // recognized tile for an unmatched/changed tile.
+        val evaluation = if (candidates.isEmpty()) null else matcher.evaluate(gray, candidates)
+        val match = evaluation?.best
         val columnMajorPose = match?.let { toColumnMajorMapPose(it) }
 
         // 3. Robustness loop gates/stabilizes; a bridge may be offered by the predictor.
@@ -128,9 +131,10 @@ class SphereSlamSession(
             else -> predictor?.predict(attitudeQuat)
         }
 
-        // 5. Fold the recognition verdict into the photosphere; refresh glow + coverage.
-        val confirmed = match?.let { listOf(it.key) } ?: emptyList()
-        val checked = candidateIds.filterNot { confirmed.contains(it) }
+        // 5. Fold truthful per-candidate recognition verdicts into the photosphere; refresh glow +
+        // coverage. If live-feature detection failed, evaluate() reports neither matches nor misses.
+        val confirmed = evaluation?.recognized ?: emptySet()
+        val checked = evaluation?.checkedButUnmatched ?: emptySet()
         val review = reviewLoop.onFrame(headingDeg, elevationDeg, nowMs, confirmed, checked)
         glowDirections = review.directionsNeedingUpdate
         coverageFraction = review.coverageFraction
