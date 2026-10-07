@@ -15,7 +15,29 @@ class TileCandidate(
     val fingerprint: TileFingerprint,
     val perPointParallaxDeg: FloatArray,
     val perPointReprojectionRmsPx: FloatArray,
-)
+) {
+    init {
+        validate(fingerprint.size, perPointParallaxDeg, perPointReprojectionRmsPx)
+    }
+
+    companion object {
+        /** Pure structural check kept separate so it can be unit-tested without native OpenCV. */
+        fun validate(
+            pointCount: Int,
+            perPointParallaxDeg: FloatArray,
+            perPointReprojectionRmsPx: FloatArray,
+        ) {
+            require(perPointParallaxDeg.size == pointCount) {
+                "perPointParallaxDeg must be parallel to fingerprint points (" + pointCount +
+                    "), was " + perPointParallaxDeg.size
+            }
+            require(perPointReprojectionRmsPx.size == pointCount) {
+                "perPointReprojectionRmsPx must be parallel to fingerprint points (" + pointCount +
+                    "), was " + perPointReprojectionRmsPx.size
+            }
+        }
+    }
+}
 
 /**
  * The seam between the library's **geometric** admission and the host's **teleological** promotion.
