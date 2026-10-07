@@ -205,7 +205,7 @@ class SphereCoverage(
         const val DEFAULT_VIEWABLE_ELEVATION_HALF_ANGLE_DEG = 60f
 
         /** Normalize a heading to [0, 360). */
-        fun norm360(deg: Float): Float = ((deg % 360f) + 360f) % 360f
+        internal fun norm360(deg: Float): Float = ((deg % 360f) + 360f) % 360f
 
         /**
          * Build coverage from a recorded log of camera directions — useful for replaying a persisted
