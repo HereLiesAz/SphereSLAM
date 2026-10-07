@@ -1,5 +1,6 @@
 package com.hereliesaz.sphereslam.nativebridge
 
+import com.hereliesaz.sphereslam.common.InternalSphereSlamApi
 import com.hereliesaz.sphereslam.common.util.NativeLibLoader
 import java.nio.ByteBuffer
 
@@ -13,6 +14,7 @@ import java.nio.ByteBuffer
  * homography-handle constructor, so runtime sessions are deliberately calibrated from fx/fy/cx/cy.
  * When the artoolkitX submodule is absent, every KPM entry point safely reports unavailable.
  */
+@InternalSphereSlamApi
 object KpmBridge {
     init {
         NativeLibLoader.loadAll()
