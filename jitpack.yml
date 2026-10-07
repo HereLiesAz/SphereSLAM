@@ -1,8 +1,26 @@
-# JitPack build config for SphereSLAM.
-# The artoolkitX KPM submodule must be present before the native :core:nativebridge build.
+# JitPack build config for SphereSLAM 0.23.3+.
+#
+# JitPack caches submodule gitdirs between builds. That cache can leave the artoolkitX working tree
+# pointing at a dead /home/jitpack/.../.git/modules path, so do not use `git submodule update` here.
+# Materialize the exact gitlink commit into a clean standalone checkout instead.
+#
+# JitPack has also produced builds where the checked-out wrapper JAR could not be opened. The build
+# therefore bootstraps the exact Gradle distribution declared by the project and verifies its
+# official SHA-256 before use. Normal consumers can still use ./gradlew.
 jdk:
   - openjdk21
+
 before_install:
-  - git submodule update --init --recursive
+  - rm -rf third_party/artoolkitx
+  - git init third_party/artoolkitx
+  - git -C third_party/artoolkitx remote add origin https://github.com/artoolkitx/artoolkitx.git
+  - git -C third_party/artoolkitx fetch --depth 1 origin 9d487c9fa02d2ae9cef986d2698e829c2dcfbd25
+  - git -C third_party/artoolkitx checkout --detach FETCH_HEAD
+  - test "$(git -C third_party/artoolkitx rev-parse HEAD)" = "9d487c9fa02d2ae9cef986d2698e829c2dcfbd25"
+  - curl --fail --location --retry 3 --output /tmp/gradle-9.8.0-bin.zip https://services.gradle.org/distributions/gradle-9.8.0-bin.zip
+  - echo "bafd5ce9cfaea0fbccfdc8439a1ac42fbd4cd9c89dc9a988228d8a2639a58e6c  /tmp/gradle-9.8.0-bin.zip" | sha256sum --check -
+  - rm -rf /tmp/gradle-9.8.0
+  - unzip -q /tmp/gradle-9.8.0-bin.zip -d /tmp
+
 install:
-  - ./gradlew publishToMavenLocal -x test -x lint --no-daemon --stacktrace
+  - /tmp/gradle-9.8.0/bin/gradle publishToMavenLocal -x test -x lint --no-daemon --stacktrace
