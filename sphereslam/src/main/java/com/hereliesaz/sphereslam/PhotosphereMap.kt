@@ -16,16 +16,18 @@ data class TileId(val sector: Int, val band: Int)
  * collapse to a single flag and a single glow. [lastUpdatedMs] (0 = never) is kept only so a
  * time-to-live re-check policy can decide *when* to flip a tile back to needing an update.
  *
- * Content (a tile's fingerprint / descriptors, depth sample) is intentionally not held here: this
- * module stays dependency-free, and a matcher layer attaches that externally, keyed by [id]. The
- * optional [representativeOrientation] (a unit quaternion `[x, y, z, w]`) is the one spatial hint
- * carried, so a consumer can relate the tile to a device attitude without a side table.
+ * A tile's heavy content (fingerprint / descriptors) is intentionally not held here: this module
+ * stays dependency-free, and a matcher layer attaches that externally, keyed by [id]. The light
+ * sensor tags the vision calls for are carried, though: [representativeOrientation] (a unit
+ * quaternion `[x, y, z, w]` — the gyro/compass attitude the tile was captured at) and the optional
+ * [rangeMeters] (an estimated distance to the surface at the tile center, e.g. from monocular depth).
  *
  * @property id the tile's grid address.
  * @property center the tile center's absolute direction (needs the map anchored).
  * @property needsUpdate whether the tile should be (re)scanned.
  * @property lastUpdatedMs monotonic time of the last update, or 0 if never scanned.
  * @property representativeOrientation the attitude the tile was last captured at, or null.
+ * @property rangeMeters estimated distance to the surface at the tile center, or null if unknown.
  */
 data class PanoramaTile(
     val id: TileId,
@@ -33,6 +35,7 @@ data class PanoramaTile(
     val needsUpdate: Boolean,
     val lastUpdatedMs: Long,
     val representativeOrientation: FloatArray?,
+    val rangeMeters: Float?,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -41,6 +44,7 @@ data class PanoramaTile(
             center == other.center &&
             needsUpdate == other.needsUpdate &&
             lastUpdatedMs == other.lastUpdatedMs &&
+            rangeMeters == other.rangeMeters &&
             (representativeOrientation?.contentEquals(other.representativeOrientation)
                 ?: (other.representativeOrientation == null))
     }
@@ -51,6 +55,59 @@ data class PanoramaTile(
         r = 31 * r + needsUpdate.hashCode()
         r = 31 * r + lastUpdatedMs.hashCode()
         r = 31 * r + (representativeOrientation?.contentHashCode() ?: 0)
+        r = 31 * r + (rangeMeters?.hashCode() ?: 0)
+        return r
+    }
+}
+
+/**
+ * A plain, serialization-ready snapshot of a [PhotosphereMap]'s full state, for persisting the
+ * photosphere across process death (as GraffitiXR persists the fingerprint / atlas). The library
+ * does not pick a wire format — the host serializes this DTO however it likes and rebuilds the map
+ * with [PhotosphereMap.fromSnapshot].
+ *
+ * [lastUpdatedMs] values are whatever monotonic clock the host fed [PhotosphereMap.markUpdated];
+ * such clocks reset on reboot, so a host that relies on TTL ages should decide on restore whether to
+ * trust persisted timestamps or treat restored tiles as due for re-verification.
+ *
+ * Arrays are parallel, row-major (`sector * elevationBandCount + band`), length `tileCount`.
+ * [orientations] entries and [rangeMeters] entries (NaN = none) are per tile.
+ */
+data class PhotosphereMapSnapshot(
+    val sectorCount: Int,
+    val viewableHalfAngleDeg: Float,
+    val elevationBandCount: Int,
+    val viewableElevationHalfAngleDeg: Float,
+    val wallHeadingDeg: Float?,
+    val needsUpdate: BooleanArray,
+    val lastUpdatedMs: LongArray,
+    val orientations: Array<FloatArray?>,
+    val rangeMeters: FloatArray,
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is PhotosphereMapSnapshot) return false
+        return sectorCount == other.sectorCount &&
+            viewableHalfAngleDeg == other.viewableHalfAngleDeg &&
+            elevationBandCount == other.elevationBandCount &&
+            viewableElevationHalfAngleDeg == other.viewableElevationHalfAngleDeg &&
+            wallHeadingDeg == other.wallHeadingDeg &&
+            needsUpdate.contentEquals(other.needsUpdate) &&
+            lastUpdatedMs.contentEquals(other.lastUpdatedMs) &&
+            orientations.contentDeepEquals(other.orientations) &&
+            rangeMeters.contentEquals(other.rangeMeters)
+    }
+
+    override fun hashCode(): Int {
+        var r = sectorCount
+        r = 31 * r + viewableHalfAngleDeg.hashCode()
+        r = 31 * r + elevationBandCount
+        r = 31 * r + viewableElevationHalfAngleDeg.hashCode()
+        r = 31 * r + (wallHeadingDeg?.hashCode() ?: 0)
+        r = 31 * r + needsUpdate.contentHashCode()
+        r = 31 * r + lastUpdatedMs.contentHashCode()
+        r = 31 * r + orientations.contentDeepHashCode()
+        r = 31 * r + rangeMeters.contentHashCode()
         return r
     }
 }
@@ -95,6 +152,9 @@ class PhotosphereMap(
     private val lastUpdatedMs = LongArray(grid.tileCount)
     private val orientation = arrayOfNulls<FloatArray>(grid.tileCount)
 
+    /** Per-tile estimated range to the surface, metres; NaN = unknown. */
+    private val rangeMeters = FloatArray(grid.tileCount) { Float.NaN }
+
     private var wallHeadingDeg: Float? = null
 
     /** Number of tiles in the lattice. */
@@ -129,6 +189,7 @@ class PhotosphereMap(
      * angle is non-finite or the direction is outside the viewable region.
      *
      * @param representativeOrientation optional unit quaternion `[x, y, z, w]` stored on the tile.
+     * @param rangeMeters optional estimated distance to the surface at this direction, metres.
      * @return the updated tile's id, or null if the direction mapped to no tile.
      */
     fun markUpdated(
@@ -136,27 +197,39 @@ class PhotosphereMap(
         elevationDeg: Float = 0f,
         nowMs: Long = 0L,
         representativeOrientation: FloatArray? = null,
+        rangeMeters: Float? = null,
     ): TileId? {
         if (!headingDeg.isFinite() || !elevationDeg.isFinite()) return null
         val anchor = wallHeadingDeg ?: SphereGrid.norm360(headingDeg).also { wallHeadingDeg = it }
         val s = grid.sectorOf(headingDeg, anchor) ?: return null
         val b = grid.bandOf(elevationDeg) ?: return null
         val id = TileId(s, b)
-        applyUpdated(id, nowMs, representativeOrientation)
+        applyUpdated(id, nowMs, representativeOrientation, rangeMeters)
         return id
     }
 
     /** Mark a specific tile freshly captured. Ignores an out-of-range id. */
-    fun markUpdated(id: TileId, nowMs: Long = 0L, representativeOrientation: FloatArray? = null) {
+    fun markUpdated(
+        id: TileId,
+        nowMs: Long = 0L,
+        representativeOrientation: FloatArray? = null,
+        rangeMeters: Float? = null,
+    ) {
         if (!inRange(id)) return
-        applyUpdated(id, nowMs, representativeOrientation)
+        applyUpdated(id, nowMs, representativeOrientation, rangeMeters)
     }
 
-    private fun applyUpdated(id: TileId, nowMs: Long, orientationValue: FloatArray?) {
+    private fun applyUpdated(
+        id: TileId,
+        nowMs: Long,
+        orientationValue: FloatArray?,
+        rangeValue: Float?,
+    ) {
         val i = grid.index(id.sector, id.band)
         needsUpdateFlags[i] = false
         lastUpdatedMs[i] = nowMs
         if (orientationValue != null) orientation[i] = orientationValue.copyOf()
+        if (rangeValue != null) rangeMeters[i] = rangeValue
     }
 
     /** Flag a single tile as needing an update. Ignores an out-of-range id. */
@@ -280,7 +353,14 @@ class PhotosphereMap(
                 grid.bandCenterElevation(id.band),
             )
         }
-        return PanoramaTile(id, center, needsUpdateFlags[i], lastUpdatedMs[i], orientation[i]?.copyOf())
+        return PanoramaTile(
+            id,
+            center,
+            needsUpdateFlags[i],
+            lastUpdatedMs[i],
+            orientation[i]?.copyOf(),
+            rangeMeters[i].takeUnless { it.isNaN() },
+        )
     }
 
     /** Reset every tile to needing an update and drop the anchor (new canonical frame / reference). */
@@ -288,9 +368,53 @@ class PhotosphereMap(
         needsUpdateFlags.fill(true)
         lastUpdatedMs.fill(0L)
         orientation.fill(null)
+        rangeMeters.fill(Float.NaN)
         wallHeadingDeg = null
     }
 
+    /** A serialization-ready copy of the full map state (see [PhotosphereMapSnapshot]). */
+    fun snapshot(): PhotosphereMapSnapshot = PhotosphereMapSnapshot(
+        sectorCount = grid.sectorCount,
+        viewableHalfAngleDeg = grid.viewableHalfAngleDeg,
+        elevationBandCount = grid.elevationBandCount,
+        viewableElevationHalfAngleDeg = grid.viewableElevationHalfAngleDeg,
+        wallHeadingDeg = wallHeadingDeg,
+        needsUpdate = needsUpdateFlags.copyOf(),
+        lastUpdatedMs = lastUpdatedMs.copyOf(),
+        orientations = Array(orientation.size) { orientation[it]?.copyOf() },
+        rangeMeters = rangeMeters.copyOf(),
+    )
+
     private fun inRange(id: TileId): Boolean =
         id.sector in 0 until grid.sectorCount && id.band in 0 until grid.elevationBandCount
+
+    companion object {
+        /**
+         * Rebuild a map from a [PhotosphereMapSnapshot]. The grid dimensions come from the snapshot;
+         * the per-tile arrays must all be length `sectorCount * elevationBandCount`.
+         *
+         * @throws IllegalArgumentException if the snapshot's grid is invalid or an array length is wrong.
+         */
+        fun fromSnapshot(snapshot: PhotosphereMapSnapshot): PhotosphereMap {
+            val map = PhotosphereMap(
+                snapshot.sectorCount,
+                snapshot.viewableHalfAngleDeg,
+                snapshot.elevationBandCount,
+                snapshot.viewableElevationHalfAngleDeg,
+            )
+            val n = map.grid.tileCount
+            require(
+                snapshot.needsUpdate.size == n &&
+                    snapshot.lastUpdatedMs.size == n &&
+                    snapshot.orientations.size == n &&
+                    snapshot.rangeMeters.size == n,
+            ) { "snapshot arrays must all be length $n" }
+            snapshot.needsUpdate.copyInto(map.needsUpdateFlags)
+            snapshot.lastUpdatedMs.copyInto(map.lastUpdatedMs)
+            snapshot.rangeMeters.copyInto(map.rangeMeters)
+            for (i in 0 until n) map.orientation[i] = snapshot.orientations[i]?.copyOf()
+            map.wallHeadingDeg = snapshot.wallHeadingDeg
+            return map
+        }
+    }
 }
