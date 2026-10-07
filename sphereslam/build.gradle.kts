@@ -34,5 +34,6 @@ dependencies {
 tasks.withType<KotlinCompile>().configureEach {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
+        freeCompilerArgs.add("-opt-in=com.hereliesaz.sphereslam.common.InternalSphereSlamApi")
     }
 }
