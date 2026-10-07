@@ -46,7 +46,7 @@ class Relocalizer(
     private val minInliers: Int = 12,
     private val maxFeatures: Int = 1000,
 ) {
-    var fingerprint: PlanarFingerprint? = null
+    var fingerprint: Fingerprint? = null
 
     private val orb = ORB.create(maxFeatures)
     private val cameraMatrix: Mat = Mat(3, 3, CvType.CV_64F).apply {
@@ -82,7 +82,7 @@ class Relocalizer(
     fun relocalizeWith(
         frameKeypoints: MatOfKeyPoint,
         frameDescriptors: Mat,
-        fingerprintOverride: PlanarFingerprint? = null,
+        fingerprintOverride: Fingerprint? = null,
     ): RelocResult? {
         val fp = fingerprintOverride ?: fingerprint ?: return null
         if (fp.descriptors.empty() || frameDescriptors.empty()) return null
