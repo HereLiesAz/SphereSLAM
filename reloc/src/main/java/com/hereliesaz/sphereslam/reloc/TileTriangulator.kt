@@ -18,6 +18,7 @@ import kotlin.math.sqrt
  * (`[R|t]` in the upper three rows, world → camera), matching [RelocResult]'s row-major layout.
  * Intrinsics are a pinhole `fx, fy, cx, cy`; pixels are `(u, v)` with `u` rightward, `v` downward.
  */
+@ExperimentalSphereSlamRelocApi
 object TileTriangulator {
 
     /**
