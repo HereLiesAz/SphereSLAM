@@ -8,6 +8,8 @@ plugins {
 android {
     namespace = "com.hereliesaz.sphereslam.nativebridge"
     compileSdk = 37
+    ndkVersion = libs.versions.ndk.get()
+
     defaultConfig {
         minSdk = 26
         consumerProguardFiles("consumer-rules.pro")
@@ -26,7 +28,7 @@ android {
     externalNativeBuild {
         cmake {
             path("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
+            version = libs.versions.cmake.get()
         }
     }
 
