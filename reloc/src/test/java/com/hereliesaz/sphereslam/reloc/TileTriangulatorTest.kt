@@ -21,6 +21,14 @@ class TileTriangulatorTest {
         0f, 0f, 0f, 1f,
     )
 
+    /** Camera at (0,0,z), rotated 180 degrees around Y so it looks down world -Z. */
+    private fun camAtLookingMinusZ(z: Float) = floatArrayOf(
+        -1f, 0f, 0f, 0f,
+        0f, 1f, 0f, 0f,
+        0f, 0f, -1f, z,
+        0f, 0f, 0f, 1f,
+    )
+
     /** Project a world point through an identity-rotation camera at C to a pixel. */
     private fun project(cx0: Float, cy0: Float, cz0: Float, px: Float, py: Float, pz: Float): Pair<Float, Float> {
         val xc = px - cx0; val yc = py - cy0; val zc = pz - cz0
@@ -79,6 +87,30 @@ class TileTriangulatorTest {
         val v = view(0f, 0f, 0f, 0f, 0f, 5f)
         assertNull(TileTriangulator.triangulate(listOf(v), fx, fy, cx, cy))
         assertNull(TileTriangulator.triangulate(emptyList(), fx, fy, cx, cy))
+    }
+
+    @Test
+    fun `a redundant near-duplicate view does not erase a strong baseline`() {
+        val target = floatArrayOf(0f, 0f, 5f)
+        val views = listOf(
+            view(-1f, 0f, 0f, target[0], target[1], target[2]),
+            view(-0.99f, 0f, 0f, target[0], target[1], target[2]),
+            view(1f, 0f, 0f, target[0], target[1], target[2]),
+        )
+
+        val t = TileTriangulator.triangulate(views, fx, fy, cx, cy)!!
+
+        assertTrue("parallax ${t.minParallaxDeg}", t.minParallaxDeg > 10f)
+    }
+
+    @Test
+    fun `antiparallel collinear rays are degenerate, not excellent parallax`() {
+        val views = listOf(
+            TileTriangulator.View(camAt(0f, 0f, 0f), cx.toFloat(), cy.toFloat()),
+            TileTriangulator.View(camAtLookingMinusZ(10f), cx.toFloat(), cy.toFloat()),
+        )
+
+        assertNull(TileTriangulator.triangulate(views, fx, fy, cx, cy))
     }
 
     @Test
