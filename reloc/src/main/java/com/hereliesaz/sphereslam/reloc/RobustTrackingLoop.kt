@@ -46,6 +46,7 @@ package com.hereliesaz.sphereslam.reloc
  *   the pose to render for it (length 16) — a post-acceptance correction smoothed and drawn in place of
  *   the raw pose. Gating is unaffected; defaults to the identity (render the raw accepted pose).
  */
+@ExperimentalSphereSlamRelocApi
 class RobustTrackingLoop(
     private val referenceWidthUnits: Float = 1f,
     private val acceptancePolicy: PoseAcceptancePolicy = PoseAcceptancePolicy(),
