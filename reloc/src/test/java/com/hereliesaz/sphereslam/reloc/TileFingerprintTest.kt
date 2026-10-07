@@ -31,6 +31,16 @@ class TileFingerprintTest {
     }
 
     @Test(expected = IllegalArgumentException::class)
+    fun `rejects descriptor rows not parallel to the points`() {
+        TileFingerprint.validate(
+            pointCount = 3,
+            confidence = null,
+            anchorFromTile = identity16(),
+            descriptorCount = 2,
+        )
+    }
+
+    @Test(expected = IllegalArgumentException::class)
     fun `rejects a confidence not parallel to the points`() {
         TileFingerprint.validate(
             pointCount = 3,
