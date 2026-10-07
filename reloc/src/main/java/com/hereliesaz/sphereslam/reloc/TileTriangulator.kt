@@ -36,8 +36,10 @@ object TileTriangulator {
      *
      * @property point world-frame position `[x, y, z]`.
      * @property reprojectionRmsPx RMS reprojection error over the views, pixels (lower is better).
-     * @property minParallaxDeg smallest parallax angle between any pair of view rays to the point,
-     *   degrees — near zero means depth is poorly constrained however small the reprojection error.
+     * @property minParallaxDeg effective triangulation parallax in degrees (historical field name):
+     *   the strongest independent ray pair, with angles folded around 90 degrees so parallel and
+     *   antiparallel/collinear rays both score zero. Near zero means depth is poorly constrained
+     *   however small the reprojection error.
      * @property views how many views were triangulated.
      */
     data class Triangulation(
@@ -113,16 +115,20 @@ object TileTriangulator {
         }
         val rms = sqrt(sumSq / views.size)
 
-        // Min pairwise parallax: angle between the rays from each camera centre to the point.
+        // Effective triangulation parallax: use the strongest independent baseline, not the
+        // weakest/most-redundant pair. Fold angles around 90 degrees so antiparallel collinear rays
+        // score the same as parallel rays (zero depth constraint), rather than a misleading 180.
         val centers = views.map { cameraCenter(it.cameraFromWorld) }
-        var maxCos = -1.0 // the largest cosine == the smallest angle between any ray pair
+        var minParallaxDeg = 0.0 // historical public field name; value is strongest effective pair
         for (i in views.indices) for (j in i + 1 until views.size) {
             val di = unit(doubleArrayOf(px - centers[i][0], py - centers[i][1], pz - centers[i][2]))
             val dj = unit(doubleArrayOf(px - centers[j][0], py - centers[j][1], pz - centers[j][2]))
             val c = (di[0] * dj[0] + di[1] * dj[1] + di[2] * dj[2]).coerceIn(-1.0, 1.0)
-            if (c > maxCos) maxCos = c
+            val rawDeg = Math.toDegrees(acos(c))
+            val effectiveDeg = if (rawDeg <= 90.0) rawDeg else 180.0 - rawDeg
+            if (effectiveDeg > minParallaxDeg) minParallaxDeg = effectiveDeg
         }
-        val minParallaxDeg = Math.toDegrees(acos(maxCos.coerceIn(-1.0, 1.0)))
+        if (minParallaxDeg < 1e-6) return null
 
         return Triangulation(
             point = floatArrayOf(px.toFloat(), py.toFloat(), pz.toFloat()),
