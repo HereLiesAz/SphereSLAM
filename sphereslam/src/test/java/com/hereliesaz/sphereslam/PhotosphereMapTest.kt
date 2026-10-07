@@ -93,6 +93,27 @@ class PhotosphereMapTest {
     }
 
     @Test
+    fun `tilesInView returns the candidates within the view cone`() {
+        val m = fullRing()
+        assertTrue("unanchored yields no candidates", m.tilesInView(0f, 0f, 90f, 90f).isEmpty())
+        m.setWallHeading(0f)
+        val inView = m.tilesInView(headingDeg = 0f, elevationDeg = 0f, hFovDeg = 90f, vFovDeg = 90f)
+        // Sectors 1 and 2 fall within ±45°; all three bands within ±45° of the horizon.
+        assertEquals(6, inView.size)
+        assertTrue(inView.contains(TileId(2, 1)))
+        assertTrue(inView.contains(TileId(1, 0)))
+        assertFalse(inView.contains(TileId(0, 1)))
+    }
+
+    @Test
+    fun `tilesInView rejects a non-positive field of view`() {
+        val m = fullRing()
+        m.setWallHeading(0f)
+        assertTrue(m.tilesInView(0f, 0f, 0f, 90f).isEmpty())
+        assertTrue(m.tilesInView(0f, 0f, 90f, -1f).isEmpty())
+    }
+
+    @Test
     fun `an out-of-range id is ignored, not crashing`() {
         val m = fullRing()
         m.markUpdated(TileId(99, 99), nowMs = 1L)

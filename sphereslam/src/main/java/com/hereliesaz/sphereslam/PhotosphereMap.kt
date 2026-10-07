@@ -1,5 +1,7 @@
 package com.hereliesaz.sphereslam
 
+import kotlin.math.abs
+
 /**
  * A tile address in the photosphere lattice: [sector] (azimuth) × [band] (elevation), in the same
  * grid [SphereCoverage] and the coverage glow use.
@@ -211,6 +213,36 @@ class PhotosphereMap(
                 if (needsUpdateFlags[grid.index(s, b)]) {
                     out.add(SphereCoverage.Direction(az, grid.bandCenterElevation(b)))
                 }
+            }
+        }
+        return out
+    }
+
+    /**
+     * The tiles whose centers currently fall within the camera's view cone — the candidate set a tile
+     * matcher should try to recognize this frame, so matching stays cheap no matter how large the map
+     * grows. Pure angular test against the live attitude; needs the map anchored.
+     *
+     * @param headingDeg camera-axis compass bearing now, degrees (0 = north, clockwise).
+     * @param elevationDeg camera-axis angle above (+) / below (−) the horizon now, degrees.
+     * @param hFovDeg horizontal field of view, degrees (`> 0`).
+     * @param vFovDeg vertical field of view, degrees (`> 0`).
+     * @return the in-view tiles' ids; empty when unanchored, an input is non-finite, or an fov `<= 0`.
+     */
+    fun tilesInView(headingDeg: Float, elevationDeg: Float, hFovDeg: Float, vFovDeg: Float): List<TileId> {
+        val anchor = wallHeadingDeg ?: return emptyList()
+        if (!headingDeg.isFinite() || !elevationDeg.isFinite() || hFovDeg <= 0f || vFovDeg <= 0f) {
+            return emptyList()
+        }
+        val halfH = hFovDeg / 2f
+        val halfV = vFovDeg / 2f
+        val camHeading = SphereGrid.norm360(headingDeg)
+        val out = ArrayList<TileId>()
+        for (s in 0 until grid.sectorCount) {
+            val az = SphereGrid.norm360(anchor + grid.sectorCenterDelta(s))
+            if (abs(SphereGrid.signedDelta(az, camHeading)) > halfH) continue
+            for (b in 0 until grid.elevationBandCount) {
+                if (abs(grid.bandCenterElevation(b) - elevationDeg) <= halfV) out.add(TileId(s, b))
             }
         }
         return out
