@@ -15,7 +15,7 @@ data class SphereSlamCalibration(
     val cy: Float,
 ) {
     init {
-        require(fx > 0f && fy > 0f)
+        require(fx.isFinite() && fy.isFinite() && fx > 0f && fy > 0f)
         require(cx.isFinite() && cy.isFinite())
     }
 }
@@ -23,8 +23,8 @@ data class SphereSlamCalibration(
 /**
  * One planar KPM reference image.
  *
- * KPM uses referenceDpi to map pixels onto its planar coordinate system in millimetres. That means
- * the returned translation scale is only physically metric when referenceDpi is physically correct.
+ * KPM uses [referenceDpi] to map pixels onto its planar coordinate system in millimetres. The
+ * returned translation scale is physically metric only when [referenceDpi] is physically correct.
  */
 data class PlanarPage(
     val pageNo: Int,
@@ -35,7 +35,7 @@ data class PlanarPage(
     init {
         require(pageNo >= 0)
         require(imageNo >= 0)
-        require(referenceDpi > 0f)
+        require(referenceDpi.isFinite() && referenceDpi > 0f)
         require(maxFeatures > 0)
     }
 }
@@ -43,29 +43,51 @@ data class PlanarPage(
 /**
  * Result of calibrated planar KPM tracking.
  *
- * cameraFromPage3x4 is artoolkitX's row-major camera-from-reference-plane pose. Translation is in
- * KPM's reference-plane millimetres; do not treat it as an ARCore/OpenGL view matrix until the
- * coordinate-convention adapter is applied.
+ * [cameraFromPage3x4] is artoolkitX's **row-major camera-from-page** 3x4 transform. Translation is in
+ * KPM page millimetres. It is copied on input/output so consumers cannot mutate an engine result
+ * after publication.
  */
-data class PlanarMatch(
+class PlanarMatch(
     val pageNo: Int,
-    val cameraFromPage3x4: FloatArray,
+    cameraFromPage3x4: FloatArray,
     val reprojectionError: Float,
     val inlierCount: Int,
 ) {
+    private val cameraFromPage3x4Value = cameraFromPage3x4.copyOf()
+
     init {
         require(pageNo >= 0)
-        require(cameraFromPage3x4.size == 12)
+        require(cameraFromPage3x4Value.size == 12)
+        require(cameraFromPage3x4Value.all { it.isFinite() })
+        require(reprojectionError.isFinite())
         require(inlierCount >= 0)
+    }
+
+    /** Row-major camera-from-page 3x4 transform. A fresh copy is returned on every read. */
+    val cameraFromPage3x4: FloatArray
+        get() = cameraFromPage3x4Value.copyOf()
+
+    override fun equals(other: Any?): Boolean =
+        other is PlanarMatch &&
+            pageNo == other.pageNo &&
+            cameraFromPage3x4Value.contentEquals(other.cameraFromPage3x4Value) &&
+            reprojectionError == other.reprojectionError &&
+            inlierCount == other.inlierCount
+
+    override fun hashCode(): Int {
+        var result = pageNo
+        result = 31 * result + cameraFromPage3x4Value.contentHashCode()
+        result = 31 * result + reprojectionError.hashCode()
+        result = 31 * result + inlierCount
+        return result
     }
 }
 
 /**
  * Native calibrated planar-tracker API shared by both runtime modes.
  *
- * In hybrid mode it produces relocalization observations beside ARCore. In standalone mode its
- * camera-from-wall result is converted into the primary wall-relative view matrix. ARCore itself is
- * never routed through this interface.
+ * This is the lowest supported planar API. Most applications should prefer
+ * [SphereSlamStandaloneSession] or [SphereSlamTracker].
  */
 interface SphereSlamEngine : AutoCloseable {
     val frameWidth: Int
