@@ -1,6 +1,7 @@
 package com.hereliesaz.sphereslam.reloc
 
 /** Tracking lifecycle state. */
+@ExperimentalSphereSlamRelocApi
 enum class TrackingState {
     /** Acquiring the first lock; not yet confirmed. */
     INITIALIZING,
@@ -26,6 +27,7 @@ enum class TrackingState {
  * @property lostAfterMs how long to stay [TrackingState.REACQUIRING] before declaring
  *   [TrackingState.LOST] (`>= 0`).
  */
+@ExperimentalSphereSlamRelocApi
 data class TrackingStateConfig(
     val confirmationFrames: Int = 2,
     val lostAfterMs: Long = 2_000L,
@@ -44,6 +46,7 @@ data class TrackingStateConfig(
  * bridge is available, rather than immediately lost; otherwise it enters [TrackingState.REACQUIRING]
  * and is only called [TrackingState.LOST] after [TrackingStateConfig.lostAfterMs]. Not thread-safe.
  */
+@ExperimentalSphereSlamRelocApi
 class TrackingStateMachine(
     private val config: TrackingStateConfig = TrackingStateConfig(),
 ) {
