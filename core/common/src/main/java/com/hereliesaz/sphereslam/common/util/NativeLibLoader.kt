@@ -1,9 +1,11 @@
 package com.hereliesaz.sphereslam.common.util
 
 import android.util.Log
+import com.hereliesaz.sphereslam.common.InternalSphereSlamApi
 import org.opencv.android.OpenCVLoader
 import java.util.concurrent.atomic.AtomicBoolean
 
+@InternalSphereSlamApi
 object NativeLibLoader {
     private val isLoaded = AtomicBoolean(false)
     // OpenCV loads before libsphereslam. Tracked separately so that if the sphereslam load fails and a
