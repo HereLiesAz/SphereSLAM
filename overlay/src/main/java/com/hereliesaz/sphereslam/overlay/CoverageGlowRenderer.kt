@@ -10,29 +10,39 @@ import java.util.concurrent.atomic.AtomicReference
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
-/**
- * Draws the "map more here" coverage glow: a soft, translucent, monochrome bloom over each still-
- * unscanned direction, on a transparent surface meant to sit above the camera preview.
- *
- * It renders [CoverageGlowProjection.GlowMark]s as additive point sprites with a radial falloff, so
- * overlapping gaps pool into a brighter haze and a fully-mapped scene draws nothing. Marks the
- * projection flagged off-screen are clamped to the frustum edge and drawn fainter, reading as a
- * directional nudge toward unmapped space rather than an in-view blob.
- *
- * Feed it with [setMarks] from any thread; it publishes one immutable snapshot per update and the GL
- * thread consumes the latest. Pair it with [CoverageGlowView] for a configured translucent surface,
- * or host it on your own [GLSurfaceView] (request an alpha channel and `setZOrderMediaOverlay(true)`).
- *
- * @property glowColor RGB of the glow, premultiplied at draw time by per-mark intensity and the
- *   radial falloff. Defaults to white; set a monochrome tint to taste.
- * @property pointSizePx on-screen diameter of each glow sprite, in pixels.
- * @property baseAlpha peak alpha at a sprite's center before intensity/falloff, in `[0, 1]`.
- */
+/** Draws the transparent "map more here" coverage glow. */
 class CoverageGlowRenderer(
-    var glowColor: FloatArray = floatArrayOf(1f, 1f, 1f),
-    var pointSizePx: Float = 220f,
-    var baseAlpha: Float = 0.35f,
+    glowColor: FloatArray = floatArrayOf(1f, 1f, 1f),
+    pointSizePx: Float = 220f,
+    baseAlpha: Float = 0.35f,
 ) : GLSurfaceView.Renderer {
+
+    var glowColor: FloatArray = glowColor.copyOf()
+        get() = field.copyOf()
+        set(value) {
+            require(value.size == 3 && value.all { it.isFinite() }) {
+                "glowColor must contain three finite RGB values"
+            }
+            field = value.copyOf()
+        }
+
+    var pointSizePx: Float = pointSizePx
+        set(value) {
+            require(value.isFinite() && value > 0f) { "pointSizePx must be finite and positive" }
+            field = value
+        }
+
+    var baseAlpha: Float = baseAlpha
+        set(value) {
+            require(value.isFinite() && value in 0f..1f) { "baseAlpha must be in [0, 1]" }
+            field = value
+        }
+
+    init {
+        require(this.glowColor.size == 3 && this.glowColor.all { it.isFinite() })
+        require(this.pointSizePx.isFinite() && this.pointSizePx > 0f)
+        require(this.baseAlpha.isFinite() && this.baseAlpha in 0f..1f)
+    }
 
     private val latest = AtomicReference(FloatArray(0))
     private var program = 0
@@ -43,18 +53,12 @@ class CoverageGlowRenderer(
     private var uBaseAlpha = 0
     private var vertexBuffer: FloatBuffer = allocate(0)
 
-    /**
-     * Publish the current unscanned-direction marks to draw. Safe from any thread.
-     *
-     * @param marks projected marks from [CoverageGlowProjection.project]; pass an empty list (the
-     *   default when coverage is complete) to clear the glow.
-     */
     fun setMarks(marks: List<CoverageGlowProjection.GlowMark>) {
         latest.set(CoverageGlowGeometry.buildVertexData(marks))
     }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-        GLES20.glClearColor(0f, 0f, 0f, 0f) // transparent — the camera preview shows through.
+        GLES20.glClearColor(0f, 0f, 0f, 0f)
         program = buildProgram(VERTEX_SHADER, FRAGMENT_SHADER)
         aPosition = GLES20.glGetAttribLocation(program, "aPosition")
         aIntensity = GLES20.glGetAttribLocation(program, "aIntensity")
@@ -72,13 +76,12 @@ class CoverageGlowRenderer(
         val data = latest.get()
         if (data.isEmpty() || program == 0) return
 
-        // Additive, over a transparent surface: gaps accumulate into a brighter haze.
         GLES20.glEnable(GLES20.GL_BLEND)
         GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE)
-
         GLES20.glUseProgram(program)
         GLES20.glUniform1f(uPointSize, pointSizePx)
-        GLES20.glUniform3f(uColor, glowColor[0], glowColor[1], glowColor[2])
+        val color = glowColor
+        GLES20.glUniform3f(uColor, color[0], color[1], color[2])
         GLES20.glUniform1f(uBaseAlpha, baseAlpha)
 
         val buffer = ensureCapacity(data.size).apply {
@@ -93,9 +96,7 @@ class CoverageGlowRenderer(
         buffer.position(2)
         GLES20.glEnableVertexAttribArray(aIntensity)
         GLES20.glVertexAttribPointer(aIntensity, 1, GLES20.GL_FLOAT, false, stride, buffer)
-
         GLES20.glDrawArrays(GLES20.GL_POINTS, 0, data.size / CoverageGlowGeometry.FLOATS_PER_VERTEX)
-
         GLES20.glDisableVertexAttribArray(aPosition)
         GLES20.glDisableVertexAttribArray(aIntensity)
         GLES20.glDisable(GLES20.GL_BLEND)
@@ -131,9 +132,6 @@ class CoverageGlowRenderer(
 
     private companion object {
         const val BYTES_PER_FLOAT = 4
-
-        // Point-sprite glow. The fragment shader uses gl_PointCoord for a smooth radial falloff so
-        // each gap reads as a soft bloom rather than a hard dot.
         const val VERTEX_SHADER = """
             attribute vec2 aPosition;
             attribute float aIntensity;
@@ -145,14 +143,12 @@ class CoverageGlowRenderer(
                 gl_PointSize = uPointSize;
             }
         """
-
         const val FRAGMENT_SHADER = """
             precision mediump float;
             uniform vec3 uColor;
             uniform float uBaseAlpha;
             varying float vIntensity;
             void main() {
-                // Distance from the sprite center in [0, ~0.707]; fade to 0 at the edge.
                 float d = distance(gl_PointCoord, vec2(0.5));
                 float falloff = clamp(1.0 - d * 2.0, 0.0, 1.0);
                 float a = uBaseAlpha * vIntensity * falloff * falloff;
