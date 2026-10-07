@@ -26,7 +26,7 @@ android {
 dependencies {
     // The coverage signal + projection the glow draws. Opt-in: a headless consumer depends on
     // :sphereslam directly and never pulls this GL module.
-    implementation(project(":sphereslam"))
+    api(project(":sphereslam"))
     testImplementation(libs.junit)
 }
 
