@@ -11,6 +11,7 @@ package com.hereliesaz.sphereslam.reloc
  * @property perPointReprojectionRmsPx reprojection RMS (px) of each admitted point, parallel to the
  *   fingerprint's points (lower = better agreement).
  */
+@ExperimentalSphereSlamRelocApi
 class TileCandidate(
     val fingerprint: TileFingerprint,
     val perPointParallaxDeg: FloatArray,
@@ -54,6 +55,7 @@ class TileCandidate(
  * usable standalone; a host replaces it with MobileGS's judgment. The library ships no non-trivial
  * implementation.
  */
+@ExperimentalSphereSlamRelocApi
 fun interface TileCorroborator {
     fun corroborate(candidate: TileCandidate): TileFingerprint?
 
