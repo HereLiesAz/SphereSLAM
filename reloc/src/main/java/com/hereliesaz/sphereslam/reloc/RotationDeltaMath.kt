@@ -12,6 +12,7 @@ import kotlin.math.sqrt
  * (`m[row*3 + col]`) — these are pure 3×3 rotations; a consumer folds a result back into its own
  * column-major 4×4 pose when bridging.
  */
+@ExperimentalSphereSlamRelocApi
 object RotationDeltaMath {
 
     /** Identity quaternion (no rotation). */
