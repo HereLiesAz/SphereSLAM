@@ -22,10 +22,12 @@ import org.opencv.core.Mat
  * convention: the returned [onFrame] pose is **column-major 16, camera-from-map**, ready to hand a GL
  * renderer.
  *
- * This is the **photosphere / depth** entry layer — anchoring across a space. For anchoring to a
- * single flat reference surface (a mural wall, a page), use the planar-wall KPM layer instead
- * ([com.hereliesaz.sphereslam.SphereSlam] and its session family). Both are stable, frozen public
- * API as of 1.0; they are two layers by design, not duplicates.
+ * This is the **experimental photosphere / depth** entry layer — anchoring across a space. Its
+ * OpenCV-backed fingerprint and frame types are intentionally visible and therefore `:reloc`
+ * exports OpenCV transitively. Opting in acknowledges that this surface may change before 1.0.
+ *
+ * For a supported planar-wall API, use [com.hereliesaz.sphereslam.SphereSlam] and its session
+ * family. The two layers are complementary, not duplicate entry points.
  *
  * Not thread-safe; drive it from one worker. The OpenCV-touching path ([onFrame]) needs native; the
  * decisions it is built from ([chooseCandidates], [rowMajorToColumnMajor]) are pure and unit-tested.
