@@ -1,121 +1,213 @@
-## SphereSLAM
+# SphereSLAM
+
 [![](https://jitpack.io/v/HereLiesAz/SphereSLAM.svg)](https://jitpack.io/#HereLiesAz/SphereSLAM)
 
-A low-tech, lightweight AR platform — markerless 6-DoF tracking and relocalization on everyday
-Android devices, **without ARCore**. Built for the case where ARCore isn't available (or isn't
-wanted) and a full SLAM stack is overkill: a flat reference in the scene is enough to anchor and
-hold an overlay.
+Lightweight markerless 6-DoF tracking and relocalization for Android, including devices where ARCore
+is unavailable or undesirable.
 
-### Two approaches — both fully available
+SphereSLAM has two layers:
 
-SphereSLAM ships **two tracking/relocalization strategies**, and the goal is for a consumer to
-pick whichever fits the app, with both fully supported in this repository:
+1. **Planar KPM** — natural-feature tracking of one or more rectified planar references in one
+   canonical wall frame. This is the supported consumer API in `:sphereslam`.
+2. **Photosphere / depth relocalization** — orientation-indexed tiles, PnP relocalization,
+   robustness gates, depth-backed triangulation, and relock seeding. This lives in `:reloc` and is
+   intentionally experimental while its OpenCV-facing fingerprint surface evolves.
 
-1. **Classic — planar KPM.** Natural-feature (KPM) tracking of one or more flat rectified
-   reference pages on a single `z=0` canonical frame. 6-DoF while a page is visible, with a short
-   rotation-only gyro bridge across brief dropouts. No guided scan, no depth. Lightweight,
-   deterministic, and ideal when the thing being tracked is itself planar (a wall, a page, a
-   poster).
-2. **Spherical coverage.** The same planar tracker, plus a guided sweep that fills a surrounding
-   feature map — using recorded gyro bearing and monocular (MiDaS) depth to place features in
-   every direction around the viewpoint. This makes relocalization **fast and anticipatory**: the
-   tracker can re-lock from the surroundings, not only when the original reference is back in
-   frame. Best when the overlay is larger than the reference, or the user looks away and back a
-   lot.
+## API status
 
-The two are not mutually exclusive — spherical coverage is a layer *on top of* the classic planar
-tracker, so an app can run classic-only (lightest) or classic + spherical coverage (most robust
-relocalization). The repository intends to carry **both, fully built and selectable**, not one
-superseding the other.
+SphereSLAM is **pre-1.0**. There is no fictitious “frozen since 1.0” contract.
 
-### Status
+| Module | Status | Intended use |
+| --- | --- | --- |
+| `:sphereslam` | **Supported pre-1.0 API** | Planar tracking, standalone tracking, ARCore sidecar tracking, coverage, placement |
+| `:overlay` | **Supported pre-1.0 API** | Optional coverage-glow UI |
+| `:reloc` | **Experimental** | OpenCV-backed photosphere/relocalization primitives |
+| `:models` | **Experimental** | Optional ONNX model helpers |
+| `:core:common` | **Internal** | Native loading/implementation support |
+| `:core:nativebridge` | **Internal** | JNI/KPM bridge |
 
-| Piece | State |
-|------|-------|
-| Classic planar KPM | **built & published** — native artoolkitX KPM engine bundled in `:core:nativebridge`, published on JitPack |
-| World-size retention | **built** — place content at a real-world size and hold it across tracking loss (`AnchoredStandaloneSession` + `OverlayPlacement`) |
-| Spherical coverage | **built** — 2-D angular coverage + directional glow (`SphereCoverage`, `CameraAttitudeProvider`, `CoverageGlowProjection`, and a drop-in GL glow in the optional `:overlay` module); native surrounding feature-map growth is the remaining step |
+The internal modules are compiler-gated with an error-level opt-in marker. Application code should
+not depend on them directly.
 
-### Usage
+The complete contract, pose conventions, ownership rules, and migration notes are in
+[docs/PUBLIC_API.md](docs/PUBLIC_API.md).
 
-Add the dependency (JitPack):
+## Build baseline
+
+- JDK 21 toolchain
+- Java/Kotlin Android bytecode target 17
+- Gradle 9.8
+- Android Gradle Plugin 9.4.1
+- compileSdk 37
+- minSdk 26
+
+## Install
 
 ~~~kotlin
+repositories {
+    maven("https://jitpack.io")
+}
+
 dependencies {
     implementation("com.github.HereLiesAz.SphereSLAM:sphereslam:<tag>")
 }
 ~~~
 
-**1. Track a planar surface at real-world size, and hold placed content there.**
+Add the optional glow renderer only when needed:
 
 ~~~kotlin
-val session = SphereSlamStandaloneSession(frameW, frameH, SphereSlamCalibration(fx, fy, cx, cy))
-val anchored = AnchoredStandaloneSession(session)
-
-// Register the reference with its measured physical width (metres). Pass physicallyMetric = true
-// for a real measurement, or a normalized width (e.g. 1f) + false for visual-only registration.
-anchored.base.addReference(luma, w, h, referenceWidthMeters = 0.30f, physicallyMetric = true)
-
-// Place the artwork once, at the size the user chose (half-extents in metres):
-anchored.place(OverlayPlacement.anchor(panXMeters, panYMeters, rotationZDeg, halfWMeters, halfHMeters))
-
-// Per camera frame: a null result means "not visible this frame" — the placement is retained, so
-// the content snaps back to the same spot and size when the surface is seen again.
-anchored.match(luma, timestampNs)?.let { ap ->
-    val mvp = multiply(projectionMatrix, ap.viewFromContent)      // column-major
-    drawQuad(mvp, halfWidth = ap.halfWidthMeters, halfHeight = ap.halfHeightMeters)
+dependencies {
+    implementation("com.github.HereLiesAz.SphereSLAM:overlay:<tag>")
 }
 ~~~
 
-**2. Track how much of the surroundings have been mapped, and glow the gaps.**
+## Standalone planar tracking
+
+~~~kotlin
+val session = SphereSlamStandaloneSession(
+    frameWidth = frameW,
+    frameHeight = frameH,
+    calibration = SphereSlamCalibration(fx, fy, cx, cy),
+)
+
+val anchored = AnchoredStandaloneSession(session)
+
+anchored.base.addReference(
+    luma = referenceLuma,
+    width = referenceWidth,
+    height = referenceHeight,
+    referenceWidthMeters = 0.30f,
+    physicallyMetric = true,
+)
+
+anchored.place(
+    OverlayPlacement.anchor(
+        panXMeters = panX,
+        panYMeters = panY,
+        rotationZDeg = rotationDeg,
+        halfWidthMeters = artworkWidthMeters / 2f,
+        halfHeightMeters = artworkHeightMeters / 2f,
+    )
+)
+
+anchored.match(frameLuma, timestampNs)?.let { matched ->
+    // Column-major content -> camera/view transform.
+    val cameraFromContent = matched.cameraFromContent
+    val mvp = multiply(projectionMatrix, cameraFromContent)
+    drawQuad(mvp, matched.halfWidthMeters, matched.halfHeightMeters)
+}
+~~~
+
+A null match means no registered page was recognized in that frame. The placement remains retained
+and is reapplied after reacquisition.
+
+## ARCore sidecar tracking
+
+`SphereSlamTracker` runs KPM asynchronously beside ARCore. It does **not** replace ARCore's primary
+view matrix.
+
+~~~kotlin
+val tracker = SphereSlamTracker()
+tracker.configure(
+    SphereSlamTracker.CameraModel(
+        width = frameW,
+        height = frameH,
+        fx = fx,
+        fy = fy,
+        cx = cx,
+        cy = cy,
+    )
+)
+
+tracker.setReference(referenceLuma, refW, refH, refRowStride)
+
+tracker.submitFrame(luma, frameW, frameH, rowStride, timestampNs)
+
+val observation = tracker.latestObservation()
+val rawCameraFromPage = observation?.cameraFromPage3x4
+~~~
+
+`cameraFromPage3x4` is raw row-major KPM output. It is **not** an OpenGL or ARCore view matrix.
+
+## Coverage and glow
 
 ~~~kotlin
 val attitude = CameraAttitudeProvider(context).apply { start() }
 val coverage = SphereCoverage(elevationBandCount = 3)
-coverage.setWallHeading(headingWhenSurfaceCapturedHeadOn)
 
-// Per keyframe, fold in where the camera looks:
-val h = attitude.latestHeadingDegrees() ?: return
-coverage.observe(h, attitude.latestElevationDegrees() ?: 0f)
-val progress = coverage.coverageFraction()                       // 0..1 for a read-out
+coverage.setWallHeading(headingWhenCapturedHeadOn)
 
-// To draw a "map more here" glow, project the unscanned directions to the screen:
+val heading = attitude.latestHeadingDegrees() ?: return
+val elevation = attitude.latestElevationDegrees() ?: 0f
+coverage.observe(heading, elevation)
+
 val marks = CoverageGlowProjection.project(
     directions = coverage.thinDirections(),
-    cameraHeadingDeg = attitude.latestHeadingDegrees() ?: 0f,
-    cameraElevationDeg = attitude.latestElevationDegrees() ?: 0f,
+    cameraHeadingDeg = heading,
+    cameraElevationDeg = elevation,
     horizontalFovDeg = previewHFovDeg,
     verticalFovDeg = previewVFovDeg,
 )
-// marks[i].onScreen → draw a soft glow at (ndcX, ndcY); else an edge arrow toward (ndcX, ndcY).
 ~~~
 
-Coverage is purely angular, so it behaves identically on a 3 m wall and a 30 cm canvas.
+Or use the optional `:overlay` artifact:
 
-**3. Or drop in the ready-made glow (optional `:overlay` module).**
+~~~kotlin
+val glow = CoverageGlowView(context)
+glow.update(
+    coverage.thinDirections(),
+    headingDeg,
+    elevationDeg,
+    horizontalFovDeg,
+    verticalFovDeg,
+)
+~~~
 
-`CoverageGlowProjection` is the math; the `:overlay` module adds a transparent `GLSurfaceView` that
-draws the glow for you — a soft additive bloom over each unscanned direction, fainter at the edges
-as a nudge. It is a separate artifact, so headless consumers that only want tracking depend on
-`:sphereslam` and never pull GL.
+## Experimental relocalization API
+
+The `:reloc` module intentionally exposes OpenCV-backed types. Its dependency metadata exports
+OpenCV so those signatures are valid for consumers.
 
 ~~~kotlin
 dependencies {
-    implementation("com.github.HereLiesAz.SphereSLAM:sphereslam:<tag>")
-    implementation("com.github.HereLiesAz.SphereSLAM:overlay:<tag>") // GL glow, optional
+    implementation("com.github.HereLiesAz.SphereSLAM:reloc:<tag>")
 }
 ~~~
+
+Using the module produces an opt-in warning. A consumer that knowingly accepts the pre-1.0
+experimental contract can opt in:
+
 ~~~kotlin
-val glow = CoverageGlowView(context)      // add over your camera PreviewView
-// per keyframe:
-glow.update(coverage.thinDirections(), headingDeg, elevationDeg, hFovDeg, vFovDeg)
+@OptIn(ExperimentalSphereSlamRelocApi::class)
+fun useReloc() {
+    // ...
+}
 ~~~
 
-### Roadmap
+The optional `:models` module follows the same policy with
+`ExperimentalSphereSlamModelsApi`.
 
-- **Native surrounding feature-map growth** — populate the map omnidirectionally from bearing +
-  monocular depth so relocalization can re-lock from the surroundings, not only the reference.
-- **On-device tuning** — coverage arc extents, elevation bands, and glow feel.
+## Pose naming
 
-Provenance: the classic module was imported from `HereLiesAz/GraffitiXR`; the native engine, the
-world-size-retention and the coverage/glow API are built here.
+SphereSLAM uses transform-direction names instead of ambiguous “pose matrix” names:
+
+- `cameraFromPage3x4`: page -> camera, row-major 3x4 KPM output.
+- `cameraFromCanonical`: canonical wall -> camera/view, column-major 4x4.
+- `canonicalFromContent`: content -> canonical wall, column-major 4x4.
+- `cameraFromContent`: content -> camera/view, column-major 4x4.
+
+Legacy `viewMatrix`, `viewFromContent`, and `pageToCamera3x4` accessors remain temporarily as
+deprecated aliases.
+
+## Project status
+
+- Planar KPM tracking: built
+- Multi-page canonical wall frame: built
+- Physical-size placement/retention: built
+- Angular coverage and glow: built
+- Photosphere freshness/relock loop: built, experimental API
+- Depth-backed tile triangulation/corroboration: built, experimental API
+- Full omnidirectional production map-growth pipeline: still evolving
+
+Provenance: the planar engine originated in HereLiesAz/GraffitiXR and is maintained here as a
+standalone reusable library.
