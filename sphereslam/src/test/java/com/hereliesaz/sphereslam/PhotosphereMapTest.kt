@@ -172,6 +172,19 @@ class PhotosphereMapTest {
     }
 
     @Test
+    fun `relockSeeds includes default-timestamp captures even after they become stale`() {
+        val m = fullRing()
+        val id = TileId(0, 0)
+        m.markUpdated(id) // public default nowMs = 0L
+        m.markNeedsUpdate(id)
+
+        assertEquals(listOf(id), m.relockSeeds(10))
+
+        val restored = PhotosphereMap.fromSnapshot(m.snapshot())
+        assertEquals(listOf(id), restored.relockSeeds(10))
+    }
+
+    @Test
     fun `relockSeeds returns only scanned tiles, most recent first`() {
         val m = fullRing()
         m.markUpdated(TileId(0, 1), nowMs = 100L)
