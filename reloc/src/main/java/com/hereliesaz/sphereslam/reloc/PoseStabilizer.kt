@@ -40,6 +40,12 @@ class PoseStabilizer(
         return out
     }
 
+    /** Set the smoothing baseline to a pose that was actually rendered outside [stabilize]. */
+    fun synchronize(renderedPose: FloatArray) {
+        require(renderedPose.size == 16) { "pose must be a length-16 column-major matrix" }
+        last = renderedPose.copyOf()
+    }
+
     /** Forget the last pose so the next [stabilize] snaps instead of blending across a discontinuity. */
     fun reset() {
         last = null

@@ -154,6 +154,23 @@ class PhotosphereMapTest {
     }
 
     @Test
+    fun `snapshot encodes absent ranges without NaN and restores absence`() {
+        val m = fullRing()
+        m.markUpdated(TileId(0, 0), rangeMeters = 2.5f)
+        m.markUpdated(TileId(1, 0))
+
+        val snapshot = m.snapshot()
+
+        assertTrue(snapshot.rangeMeters.all { it.isFinite() })
+        assertTrue(snapshot.rangePresent.any { it })
+        assertTrue(snapshot.rangePresent.any { !it })
+
+        val restored = PhotosphereMap.fromSnapshot(snapshot)
+        assertEquals(2.5f, restored.tile(TileId(0, 0))!!.rangeMeters!!, 0f)
+        assertNull(restored.tile(TileId(1, 0))!!.rangeMeters)
+    }
+
+    @Test
     fun `fromSnapshot rejects a wrong-length array`() {
         val m = fullRing()
         val bad = m.snapshot().copy(lastUpdatedMs = LongArray(3))
@@ -163,6 +180,58 @@ class PhotosphereMapTest {
         } catch (e: IllegalArgumentException) {
             // expected
         }
+    }
+
+    @Test
+    fun `relockSeeds is empty before anything is scanned`() {
+        val m = fullRing()
+        assertTrue(m.relockSeeds(10).isEmpty())
+    }
+
+    @Test
+    fun `relockSeeds includes default-timestamp captures even after they become stale`() {
+        val m = fullRing()
+        val id = TileId(0, 0)
+        m.markUpdated(id) // public default nowMs = 0L
+        m.markNeedsUpdate(id)
+
+        assertEquals(listOf(id), m.relockSeeds(10))
+
+        val restored = PhotosphereMap.fromSnapshot(m.snapshot())
+        assertEquals(listOf(id), restored.relockSeeds(10))
+    }
+
+    @Test
+    fun `relockSeeds returns only scanned tiles, most recent first`() {
+        val m = fullRing()
+        m.markUpdated(TileId(0, 1), nowMs = 100L)
+        m.markUpdated(TileId(2, 2), nowMs = 300L)
+        m.markUpdated(TileId(3, 0), nowMs = 200L)
+        val seeds = m.relockSeeds(10)
+        assertTrue(seeds.all { m.tile(it)!!.lastUpdatedMs > 0L })
+        assertEquals(TileId(2, 2), seeds.first())
+    }
+
+    @Test
+    fun `relockSeeds visits a recent tile's scanned neighbors before older recognitions`() {
+        val m = fullRing() // 4 sectors (full ring, wraps), 3 bands
+        m.markUpdated(TileId(1, 2), nowMs = 100L) // oldest, spatially far
+        m.markUpdated(TileId(0, 0), nowMs = 400L) // most recent
+        m.markUpdated(TileId(0, 1), nowMs = 300L) // scanned neighbor of (0,0)
+        val seeds = m.relockSeeds(10)
+        assertEquals(TileId(0, 0), seeds[0])
+        assertTrue(seeds.indexOf(TileId(0, 1)) < seeds.indexOf(TileId(1, 2)))
+    }
+
+    @Test
+    fun `relockSeeds honors the limit and a non-positive limit yields empty`() {
+        val m = fullRing()
+        m.markUpdated(TileId(0, 0), nowMs = 100L)
+        m.markUpdated(TileId(1, 0), nowMs = 200L)
+        m.markUpdated(TileId(2, 0), nowMs = 300L)
+        assertEquals(2, m.relockSeeds(2).size)
+        assertTrue(m.relockSeeds(0).isEmpty())
+        assertTrue(m.relockSeeds(-1).isEmpty())
     }
 
     @Test

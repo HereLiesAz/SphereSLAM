@@ -104,11 +104,12 @@ class RobustTrackingLoop(
         val age = agePolicy.evaluate(frameTimestampNs, nowElapsedRealtimeNs, timestampSource)
         if (age.stale) return miss(bridgeAvailable, nowMs).copy(stale = true)
 
-        // Gates loosen only for an explicit post-loss reacquisition (REACQUIRING/LOST), not for
-        // fresh INITIALIZING acquisition or a brief IMU_BRIDGE return — in both of those the pose
-        // should not have jumped far, so the tight continuity envelope still applies.
+        // A visual return from IMU_BRIDGE is also a reacquisition: the bridge may have legitimately
+        // carried the camera beyond the tight per-frame continuity envelope.
         val reacquiring =
-            stateMachine.state == TrackingState.REACQUIRING || stateMachine.state == TrackingState.LOST
+            stateMachine.state == TrackingState.IMU_BRIDGE ||
+                stateMachine.state == TrackingState.REACQUIRING ||
+                stateMachine.state == TrackingState.LOST
         val acceptance = acceptancePolicy.evaluate(
             viewMatrix = viewMatrix,
             inlierCount = inlierCount,
@@ -125,10 +126,11 @@ class RobustTrackingLoop(
         // post-acceptance correction of it (e.g. a corroborating drift-trim toward an independent
         // relocalizer), then temporally smoothed. Gating on the raw pose keeps the correction out of
         // the acceptance decision — it only ever changes what is displayed.
-        val corrected = correctAcceptedPose?.invoke(viewMatrix) ?: viewMatrix
+        val rawAccepted = viewMatrix.copyOf()
+        val corrected = correctAcceptedPose?.invoke(rawAccepted.copyOf()) ?: rawAccepted
         val rendered = stabilizer.stabilize(corrected)
-        lastAccepted = viewMatrix.copyOf()
-        lastRendered = rendered
+        lastAccepted = rawAccepted
+        lastRendered = rendered.copyOf()
         val state = stateMachine.onAcceptedVisual(nowMs)
         return Outcome(renderPose = rendered, state = state, accepted = true)
     }
@@ -139,9 +141,15 @@ class RobustTrackingLoop(
         // snaps; a real loss (REACQUIRING/LOST) resets it, since re-lock is a genuine discontinuity.
         if (state != TrackingState.IMU_BRIDGE) stabilizer.reset()
         val bridged = if (state == TrackingState.IMU_BRIDGE) {
-            lastRendered?.let { prev -> bridgeRotatedPose?.invoke(prev) }
+            lastRendered?.let { prev -> bridgeRotatedPose?.invoke(prev.copyOf()) }
         } else {
             null
+        }
+        if (bridged != null) {
+            // The next visual pose must blend from what the user actually saw during the bridge,
+            // not from the pre-bridge visual baseline.
+            stabilizer.synchronize(bridged)
+            lastRendered = bridged.copyOf()
         }
         return Outcome(renderPose = bridged, state = state, accepted = false)
     }

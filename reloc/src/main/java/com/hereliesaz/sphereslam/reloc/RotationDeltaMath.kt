@@ -87,31 +87,4 @@ object RotationDeltaMath {
         val rt = toRotationMatrix3x3(normalize(to))
         return multiplyMat3(transposeMat3(rt), r0)
     }
-
-    /**
-     * Rotate a column-major 4×4 camera-from-world view matrix by a camera-space rotation delta
-     * ([deltaCameraRowMajor], row-major 3×3 from [cameraRotationDelta]), keeping the camera centre
-     * fixed: `R' = ΔR·R`, `t' = ΔR·t`. Use it to carry a known pose through a pure rotation (an IMU or
-     * attitude bridge). It recovers rotation only — no new translation.
-     *
-     * @param viewMatrix column-major length 16.
-     * @param deltaCameraRowMajor row-major length 9.
-     * @return the rotated view, column-major length 16.
-     */
-    fun rotateViewKeepingCameraCenter(viewMatrix: FloatArray, deltaCameraRowMajor: FloatArray): FloatArray {
-        require(viewMatrix.size == 16) { "view matrix must be length 16" }
-        require(deltaCameraRowMajor.size == 9) { "delta must be a row-major 3x3 (length 9)" }
-        val rotation = FloatArray(9)
-        for (row in 0..2) for (col in 0..2) rotation[row * 3 + col] = viewMatrix[col * 4 + row]
-        val translation = floatArrayOf(viewMatrix[12], viewMatrix[13], viewMatrix[14])
-        val rotatedR = multiplyMat3(deltaCameraRowMajor, rotation)
-        val rotatedT = multiplyMat3Vec3(deltaCameraRowMajor, translation)
-        val out = FloatArray(16)
-        for (row in 0..2) for (col in 0..2) out[col * 4 + row] = rotatedR[row * 3 + col]
-        out[12] = rotatedT[0]
-        out[13] = rotatedT[1]
-        out[14] = rotatedT[2]
-        out[15] = 1f
-        return out
-    }
 }

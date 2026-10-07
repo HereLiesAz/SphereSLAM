@@ -16,12 +16,12 @@ import org.opencv.features.ORB
  * construct this directly; the relocalizer only needs matching descriptor types.
  */
 class PlanarFingerprint(
-    val descriptors: Mat,
-    val points3d: MatOfPoint3f,
+    override val descriptors: Mat,
+    override val points3d: MatOfPoint3f,
     val keypoints: MatOfKeyPoint,
     /** Descriptor matcher norm: ORB is binary (Hamming); a float descriptor set would use L2. */
-    val binaryDescriptors: Boolean = true,
-) {
+    override val binaryDescriptors: Boolean = true,
+) : Fingerprint {
     val size: Int get() = keypoints.toArray().size
 
     companion object {
