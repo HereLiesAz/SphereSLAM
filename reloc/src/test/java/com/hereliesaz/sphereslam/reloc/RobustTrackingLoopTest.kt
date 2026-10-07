@@ -133,20 +133,50 @@ class RobustTrackingLoopTest {
     }
 
     @Test
-    fun `a brief bridge keeps the smoothing baseline`() {
-        // Lock, then blend two close poses so the stabilizer holds a baseline distinct from raw.
-        val l = loop()
+    fun `a bridge synchronizes smoothing to the pose actually rendered`() {
+        val bridgePose = movedMatrix(0.10f)
+        val l = loop(bridge = { bridgePose })
         l.good(0L); l.good(16L)
-        val a = l.good(32L, movedMatrix(0.01f)).renderPose!!
-        // A bridged miss must not reset the stabilizer: the next close pose still blends (≠ snap).
-        l.onFrame(
+        val bridged = l.onFrame(
             viewMatrix = null, inlierCount = 0, reprojectionError = 0f,
             frameTimestampNs = 0L, nowElapsedRealtimeNs = 0L,
             timestampSource = realtime, nowMs = 40L, bridgeAvailable = true,
         )
-        val b = l.good(48L, movedMatrix(0.02f)).renderPose!!
-        // Blended, not snapped: b sits between the retained baseline (~0.005) and the raw 0.02.
-        assertTrue("expected a blend toward 0.02, got ${b[12]}", b[12] > a[12] && b[12] < 0.02f)
+        assertEquals(0.10f, bridged.renderPose!![12], 0f)
+
+        val returned = l.good(48L, movedMatrix(0.10f)).renderPose!!
+        assertEquals(0.10f, returned[12], 1e-6f)
+    }
+
+    @Test
+    fun `visual return from bridge uses reacquisition continuity limits`() {
+        val l = loop(bridge = { it })
+        l.good(0L); l.good(16L)
+        l.onFrame(
+            viewMatrix = null, inlierCount = 0, reprojectionError = 0f,
+            frameTimestampNs = 0L, nowElapsedRealtimeNs = 0L,
+            timestampSource = realtime, nowMs = 32L, bridgeAvailable = true,
+        )
+
+        val out = l.good(48L, movedMatrix(3f))
+
+        assertTrue(out.accepted)
+        assertEquals(TrackingState.LOCKED, out.state)
+    }
+
+    @Test
+    fun `in-place correction cannot mutate the raw continuity baseline`() {
+        val l = RobustTrackingLoop(
+            referenceWidthUnits = 1f,
+            stateMachine = TrackingStateMachine(TrackingStateConfig(confirmationFrames = 2, lostAfterMs = 1000L)),
+            correctAcceptedPose = { raw ->
+                raw[12] = 100f
+                raw
+            },
+        )
+
+        assertTrue(l.good(0L).accepted)
+        assertTrue(l.good(16L).accepted)
     }
 
     @Test
