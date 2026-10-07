@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.23.2 — Public API hardening
+## 0.23.3 — Public API hardening
 
 ### API boundaries
 
