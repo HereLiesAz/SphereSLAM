@@ -54,14 +54,25 @@ class Relocalizer(
     }
     private val distCoeffs = MatOfDouble()
 
-    /** Detect ORB on [gray] and relocalize against the current [fingerprint]; null if none / too weak. */
-    fun relocalize(gray: Mat): RelocResult? {
-        val fp = fingerprint ?: return null
+    /**
+     * ORB keypoints + descriptors for one frame, detected once so they can be matched against many
+     * fingerprints (e.g. a photosphere's in-view candidate tiles) without re-detecting per candidate.
+     */
+    data class FrameFeatures(val keypoints: MatOfKeyPoint, val descriptors: Mat)
+
+    /** Detect ORB features on [gray], or null when the frame yields none. */
+    fun detect(gray: Mat): FrameFeatures? {
         val kps = MatOfKeyPoint()
         val descriptors = Mat()
         orb.detectAndCompute(gray, Mat(), kps, descriptors)
-        if (descriptors.empty()) return null
-        return relocalizeWith(kps, descriptors, fp)
+        return if (descriptors.empty()) null else FrameFeatures(kps, descriptors)
+    }
+
+    /** Detect ORB on [gray] and relocalize against the current [fingerprint]; null if none / too weak. */
+    fun relocalize(gray: Mat): RelocResult? {
+        val fp = fingerprint ?: return null
+        val f = detect(gray) ?: return null
+        return relocalizeWith(f.keypoints, f.descriptors, fp)
     }
 
     /**
