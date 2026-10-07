@@ -18,6 +18,7 @@ package com.hereliesaz.sphereslam.reloc
  * @property alpha weight toward the newest pose each frame, `(0, 1]`; 0.5 halves per-frame jitter
  *   while keeping the emitted pose within half a frame's motion of the truth.
  */
+@ExperimentalSphereSlamRelocApi
 class PoseStabilizer(
     private val alpha: Float = DEFAULT_ALPHA,
 ) {
