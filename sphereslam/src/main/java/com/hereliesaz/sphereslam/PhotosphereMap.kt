@@ -182,6 +182,25 @@ class PhotosphereMap(
     fun needsUpdate(id: TileId): Boolean =
         if (inRange(id)) needsUpdateFlags[grid.index(id.sector, id.band)] else false
 
+    /**
+     * Flip every currently-fresh tile last updated before [cutoffMs] back to needing an update — the
+     * time-to-live re-check: a capture goes stale with age so the sweep is kept current. Never-scanned
+     * tiles are already needing an update and are untouched; this does not propagate to neighbors (age
+     * is per-tile, not a detected change). Pass `nowMs - ttlMs` as the cutoff.
+     *
+     * @return how many tiles this flipped.
+     */
+    fun expireOlderThan(cutoffMs: Long): Int {
+        var flipped = 0
+        for (i in needsUpdateFlags.indices) {
+            if (!needsUpdateFlags[i] && lastUpdatedMs[i] < cutoffMs) {
+                needsUpdateFlags[i] = true
+                flipped++
+            }
+        }
+        return flipped
+    }
+
     /** Fraction of tiles that are up to date, in `[0, 1]`. */
     fun coverageFraction(): Float {
         var fresh = 0
