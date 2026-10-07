@@ -51,7 +51,7 @@ class TileFingerprint(
             require(anchorFromTile.size == 16) {
                 "anchorFromTile must be a row-major 4x4 (length 16), was ${anchorFromTile.size}"
             }
-            require(confidence == null || confidence.size == pointCount) {
+            require(descriptorCount == pointCount) {\n                "descriptors must be parallel to points3d ($pointCount), had $descriptorCount rows"\n            }\n            require(confidence == null || confidence.size == pointCount) {
                 "confidence must be parallel to points3d ($pointCount), was ${confidence?.size}"
             }
         }
