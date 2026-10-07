@@ -16,6 +16,7 @@ package com.hereliesaz.sphereslam.reloc
  * @property minViews a point must have been seen in at least this many views.
  * @property minPoints a tile must retain at least this many admitted points to be admitted itself.
  */
+@ExperimentalSphereSlamRelocApi
 class TileGate(
     val minParallaxDeg: Float = 2f,
     val maxReprojectionRmsPx: Float = 2f,
