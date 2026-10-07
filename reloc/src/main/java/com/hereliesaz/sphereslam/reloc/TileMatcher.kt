@@ -51,26 +51,54 @@ class TileMatcher<K>(
     }
 
     /**
-     * Detect features once on [gray], relocalize against each candidate, and return the best match, or
-     * null when nothing clears the relocalizer's inlier floor.
+     * Per-candidate recognition verdict from one shared feature detection pass.
      *
-     * @param gray the live frame, single-channel.
-     * @param candidates the in-view tiles' fingerprints keyed by tile identifier.
+     * [recognized] contains every candidate that cleared relocalization, not only [best].
+     * [checkedButUnmatched] contains candidates actually evaluated after successful live-feature
+     * detection that failed relocalization. If feature detection itself fails, both sets are empty:
+     * the frame did not provide enough evidence to declare any known tile changed.
      */
-    fun match(gray: Mat, candidates: Map<K, Fingerprint>): Match<K>? {
-        if (candidates.isEmpty()) return null
-        val features = relocalizer.detect(gray) ?: return null
+    data class Evaluation<K>(
+        val best: Match<K>?,
+        val recognized: Set<K>,
+        val checkedButUnmatched: Set<K>,
+    )
+
+    /**
+     * Detect features once and retain the verdict for every attempted candidate.
+     */
+    fun evaluate(gray: Mat, candidates: Map<K, Fingerprint>): Evaluation<K> {
+        if (candidates.isEmpty()) return Evaluation(null, emptySet(), emptySet())
+        val features = relocalizer.detect(gray) ?: return Evaluation(null, emptySet(), emptySet())
         val scored = ArrayList<Match<K>>(candidates.size)
+        val recognized = LinkedHashSet<K>()
+        val unmatched = LinkedHashSet<K>()
         for ((key, fingerprint) in candidates) {
             val result = relocalizer.relocalizeWith(
                 features.keypoints,
                 features.descriptors,
                 fingerprint,
-            ) ?: continue
-            scored.add(Match(key, result.cameraFromObject, result.inliers))
+            )
+            if (result == null) {
+                unmatched.add(key)
+            } else {
+                recognized.add(key)
+                scored.add(Match(key, result.cameraFromObject, result.inliers))
+            }
         }
-        return bestOf(scored)
+        return Evaluation(
+            best = bestOf(scored),
+            recognized = recognized,
+            checkedButUnmatched = unmatched,
+        )
     }
+
+    /**
+     * Backward-compatible best-match API. Use [evaluate] when freshness/change detection also needs
+     * truthful per-candidate outcomes.
+     */
+    fun match(gray: Mat, candidates: Map<K, Fingerprint>): Match<K>? =
+        evaluate(gray, candidates).best
 
     companion object {
         /** The highest-inlier match, or null for an empty list. Pure — the selection rule, unit-testable. */
