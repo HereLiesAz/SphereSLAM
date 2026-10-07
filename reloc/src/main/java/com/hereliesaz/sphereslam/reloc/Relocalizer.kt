@@ -18,6 +18,7 @@ import org.opencv.geometry.Geometry
  * Result of a relocalization attempt: the camera pose relative to the fingerprint's object frame,
  * and how many PnP inliers supported it (confidence).
  */
+@ExperimentalSphereSlamRelocApi
 data class RelocResult(
     /**
      * `camera_from_object` as a row-major 4×4 (rotation in the upper-left 3×3, translation in the
@@ -37,6 +38,7 @@ data class RelocResult(
  * learned front-end by building the fingerprint and frame features yourself and calling
  * [relocalizeWith].
  */
+@ExperimentalSphereSlamRelocApi
 class Relocalizer(
     private val fx: Double,
     private val fy: Double,
