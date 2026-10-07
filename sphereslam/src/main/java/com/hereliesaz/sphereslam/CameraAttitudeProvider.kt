@@ -114,7 +114,7 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
          * @return `(headingDeg in [0,360), elevationDeg in [-90,90])`, or null when [r] is too short or
          *   the camera axis is within ~0.006° of vertical (heading undefined there).
          */
-        fun cameraAxisHeadingElevation(r: FloatArray): Pair<Float, Float>? {
+        internal fun cameraAxisHeadingElevation(r: FloatArray): Pair<Float, Float>? {
             if (r.size < 9) return null
             val east = -r[2]
             val north = -r[5]
