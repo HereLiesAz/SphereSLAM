@@ -5,6 +5,7 @@ package com.hereliesaz.sphereslam.reloc
  * frames on the same clock the host compares against ([REALTIME]); otherwise the age is unknown and
  * must not be guessed.
  */
+@ExperimentalSphereSlamRelocApi
 enum class CameraTimestampSource {
     REALTIME,
     UNKNOWN,
@@ -13,6 +14,7 @@ enum class CameraTimestampSource {
 /**
  * @property maxRealtimeAgeMs frames older than this (ms) are stale and should be dropped (`> 0`).
  */
+@ExperimentalSphereSlamRelocApi
 data class ObservationAgeConfig(
     val maxRealtimeAgeMs: Float = 250f,
 ) {
@@ -25,6 +27,7 @@ data class ObservationAgeConfig(
  * Result of [ObservationAgePolicy.evaluate]: [ageMs] is null when the age can't be trusted (non-realtime
  * timestamp source or an out-of-range timestamp), in which case [stale] is false (never guessed).
  */
+@ExperimentalSphereSlamRelocApi
 data class ObservationAge(
     val ageMs: Float?,
     val stale: Boolean,
@@ -38,6 +41,7 @@ data class ObservationAge(
  * the host's reference clock; [CameraTimestampSource.UNKNOWN] is intentionally not offset-calibrated
  * from callback arrival time.
  */
+@ExperimentalSphereSlamRelocApi
 class ObservationAgePolicy(
     private val config: ObservationAgeConfig = ObservationAgeConfig(),
 ) {
