@@ -51,7 +51,7 @@ class OverlayPlacementTest {
     @Test
     fun `identity view returns the anchor transform unchanged`() {
         val a = OverlayPlacement.anchor(0.1f, 0.2f, 30f, 0.4f, 0.3f)
-        val vfc = OverlayPlacement.viewFromContent(pose(SphereSlamPoseMath.identity4()), a)
+        val vfc = OverlayPlacement.cameraFromContent(pose(SphereSlamPoseMath.identity4()), a)
         assertArrayEquals(a.canonicalFromContent, vfc, 1e-6f)
     }
 
@@ -60,9 +60,22 @@ class OverlayPlacementTest {
         val a = OverlayPlacement.anchor(0.3f, 0f, 0f, 0.5f, 0.5f)
         // View that translates the canonical frame -1 m along z (camera 1 m in front).
         val view = SphereSlamPoseMath.identity4().also { it[14] = -1f }
-        val vfc = OverlayPlacement.viewFromContent(pose(view), a)
+        val vfc = OverlayPlacement.cameraFromContent(pose(view), a)
         assertEquals(0.3f, vfc[12], 1e-6f) // x translation carried through
         assertEquals(-1f, vfc[14], 1e-6f) // z from the view
+    }
+
+
+    @Test
+    fun `metric anchors defensively own their transform`() {
+        val source = SphereSlamPoseMath.identity4()
+        val anchor = OverlayPlacement.fromCanonicalTransform(source, 0.5f, 0.25f)
+        source[12] = 99f
+        val leaked = anchor.canonicalFromContent
+        leaked[13] = 88f
+
+        assertEquals(0f, anchor.canonicalFromContent[12], 0f)
+        assertEquals(0f, anchor.canonicalFromContent[13], 0f)
     }
 
     @Test
