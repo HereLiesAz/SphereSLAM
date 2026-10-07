@@ -17,6 +17,7 @@ import kotlin.math.sqrt
  * @property reacquireMaxTranslationPageWidths looser translation limit while reacquiring.
  * @property reacquireMaxAngularJumpDegrees looser angular limit while reacquiring (`0..180`).
  */
+@ExperimentalSphereSlamRelocApi
 data class PoseAcceptanceConfig(
     val minInliers: Int = 4,
     val maxReprojectionError: Float = 10f,
@@ -36,6 +37,7 @@ data class PoseAcceptanceConfig(
 }
 
 /** Why a pose was rejected by [PoseAcceptancePolicy]. */
+@ExperimentalSphereSlamRelocApi
 enum class PoseRejection {
     NON_FINITE,
     TOO_FEW_INLIERS,
@@ -45,6 +47,7 @@ enum class PoseRejection {
 }
 
 /** Outcome of [PoseAcceptancePolicy.evaluate]: [accepted], with [rejection] set when false. */
+@ExperimentalSphereSlamRelocApi
 data class PoseAcceptance(
     val accepted: Boolean,
     val rejection: PoseRejection? = null,
@@ -54,6 +57,7 @@ data class PoseAcceptance(
  * Evaluates whether a candidate pose should be accepted. Stateless — the caller supplies the
  * previous accepted pose for the continuity check.
  */
+@ExperimentalSphereSlamRelocApi
 class PoseAcceptancePolicy(
     private val config: PoseAcceptanceConfig = PoseAcceptanceConfig(),
 ) {
