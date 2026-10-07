@@ -13,6 +13,7 @@ package com.hereliesaz.sphereslam.reloc
  * Pure math, no framework — unit-testable directly. A small depth→geometry helper; it carries no
  * relocalization logic of its own.
  */
+@ExperimentalSphereSlamRelocApi
 object DepthScaleFit {
 
     /** The recovered affine fit, or null when the samples are too few or degenerate. */
