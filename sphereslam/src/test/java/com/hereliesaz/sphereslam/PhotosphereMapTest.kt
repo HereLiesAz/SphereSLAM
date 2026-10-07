@@ -114,6 +114,17 @@ class PhotosphereMapTest {
     }
 
     @Test
+    fun `expireOlderThan flips only fresh tiles updated before the cutoff`() {
+        val m = fullRing()
+        val id = m.markUpdated(0f, 0f, nowMs = 100L)!!
+        assertFalse(m.needsUpdate(id))
+        assertEquals(0, m.expireOlderThan(50L)) // 100 is not older than 50
+        assertFalse(m.needsUpdate(id))
+        assertEquals(1, m.expireOlderThan(150L)) // 100 is older than 150
+        assertTrue(m.needsUpdate(id))
+    }
+
+    @Test
     fun `an out-of-range id is ignored, not crashing`() {
         val m = fullRing()
         m.markUpdated(TileId(99, 99), nowMs = 1L)
