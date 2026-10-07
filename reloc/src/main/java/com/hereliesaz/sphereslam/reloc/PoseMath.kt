@@ -8,6 +8,7 @@ import kotlin.math.sqrt
  * These back the relocalization robustness layer ([PoseBlend], [PoseStabilizer], [PoseAcceptancePolicy])
  * and are exposed for consumers that need the same quaternion/translation math on poses.
  */
+@ExperimentalSphereSlamRelocApi
 object PoseMath {
 
     /**
