@@ -18,6 +18,7 @@ import java.nio.FloatBuffer
  * Swap the model by passing a different [assetName] (expects NCHW `[1,3,H,W]` in 0..1, same-shape
  * output). Fails soft: unavailable model ⇒ [isLoaded] false and [enhance] returns the input bitmap.
  */
+@ExperimentalSphereSlamModelsApi
 class LowLightEnhancer(
     private val appContext: Context,
     private val assetName: String = MODEL_ASSET,
