@@ -15,6 +15,7 @@ import org.opencv.features.ORB
  * consumer can build the descriptor/point set from the `:models` SuperPoint wrapper instead and
  * construct this directly; the relocalizer only needs matching descriptor types.
  */
+@ExperimentalSphereSlamRelocApi
 class PlanarFingerprint(
     override val descriptors: Mat,
     override val points3d: MatOfPoint3f,
