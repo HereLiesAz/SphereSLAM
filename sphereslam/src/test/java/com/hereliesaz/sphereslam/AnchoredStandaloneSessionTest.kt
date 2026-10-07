@@ -60,8 +60,8 @@ class AnchoredStandaloneSessionTest {
         assertEquals(0.5f, ap!!.halfWidthMeters, 0f)
         assertEquals(0.25f, ap.halfHeightMeters, 0f)
         // With an in-plane anchor, viewFromContent equals the session's view composed with it.
-        val expected = OverlayPlacement.viewFromContent(ap.pose, anchored.placement!!)
-        assertArrayEquals(expected, ap.viewFromContent, 1e-6f)
+        val expected = OverlayPlacement.cameraFromContent(ap.pose, anchored.placement!!)
+        assertArrayEquals(expected, ap.cameraFromContent, 1e-6f)
     }
 
     @Test
@@ -83,7 +83,7 @@ class AnchoredStandaloneSessionTest {
         engine.nextMatch = identityMatch
         val after = anchored.match(ByteBuffer.allocateDirect(8), 3L)
         assertNotNull(after)
-        assertArrayEquals(before!!.viewFromContent, after!!.viewFromContent, 1e-6f)
+        assertArrayEquals(before!!.cameraFromContent, after!!.cameraFromContent, 1e-6f)
         assertEquals(before.halfWidthMeters, after.halfWidthMeters, 0f)
     }
 
