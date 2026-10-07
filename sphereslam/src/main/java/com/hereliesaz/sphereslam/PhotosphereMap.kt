@@ -13,8 +13,9 @@ data class TileId(val sector: Int, val band: Int)
  *
  * Deliberately one state, not two: a tile either [needsUpdate] or it doesn't. "Never scanned" and
  * "scanned but now stale" are the same instruction to the user — point the camera there — so they
- * collapse to a single flag and a single glow. [lastUpdatedMs] (0 = never) is kept only so a
- * time-to-live re-check policy can decide *when* to flip a tile back to needing an update.
+ * collapse to a single flag and a single glow. [lastUpdatedMs] is kept only so a time-to-live
+ * re-check policy can decide *when* to flip a tile back to needing an update. `0L` is a valid
+ * default update timestamp and is therefore not used as a capture-existence sentinel.
  *
  * A tile's heavy content (fingerprint / descriptors) is intentionally not held here: this module
  * stays dependency-free, and a matcher layer attaches that externally, keyed by [id]. The light
@@ -25,7 +26,7 @@ data class TileId(val sector: Int, val band: Int)
  * @property id the tile's grid address.
  * @property center the tile center's absolute direction (needs the map anchored).
  * @property needsUpdate whether the tile should be (re)scanned.
- * @property lastUpdatedMs monotonic time of the last update, or 0 if never scanned.
+ * @property lastUpdatedMs monotonic time of the last update; `0L` is permitted.
  * @property representativeOrientation the attitude the tile was last captured at, or null.
  * @property rangeMeters estimated distance to the surface at the tile center, or null if unknown.
  */
@@ -71,7 +72,9 @@ data class PanoramaTile(
  * trust persisted timestamps or treat restored tiles as due for re-verification.
  *
  * Arrays are parallel, row-major (`sector * elevationBandCount + band`), length `tileCount`.
- * [orientations] entries and [rangeMeters] entries (NaN = none) are per tile.
+ * [scanned] records capture history independently of timestamp/freshness. [rangePresent] marks which
+ * [rangeMeters] entries are meaningful, so snapshots produced by [PhotosphereMap.snapshot] contain
+ * only finite float values and remain valid standard JSON without special NaN handling.
  */
 data class PhotosphereMapSnapshot(
     val sectorCount: Int,
@@ -83,6 +86,12 @@ data class PhotosphereMapSnapshot(
     val lastUpdatedMs: LongArray,
     val orientations: Array<FloatArray?>,
     val rangeMeters: FloatArray,
+    val scanned: BooleanArray = BooleanArray(lastUpdatedMs.size) { i ->
+        lastUpdatedMs[i] > 0L || !needsUpdate[i]
+    },
+    val rangePresent: BooleanArray = BooleanArray(rangeMeters.size) { i ->
+        !rangeMeters[i].isNaN()
+    },
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -94,7 +103,9 @@ data class PhotosphereMapSnapshot(
             wallHeadingDeg == other.wallHeadingDeg &&
             needsUpdate.contentEquals(other.needsUpdate) &&
             lastUpdatedMs.contentEquals(other.lastUpdatedMs) &&
+            scanned.contentEquals(other.scanned) &&
             orientations.contentDeepEquals(other.orientations) &&
+            rangePresent.contentEquals(other.rangePresent) &&
             rangeMeters.contentEquals(other.rangeMeters)
     }
 
@@ -106,7 +117,9 @@ data class PhotosphereMapSnapshot(
         r = 31 * r + (wallHeadingDeg?.hashCode() ?: 0)
         r = 31 * r + needsUpdate.contentHashCode()
         r = 31 * r + lastUpdatedMs.contentHashCode()
+        r = 31 * r + scanned.contentHashCode()
         r = 31 * r + orientations.contentDeepHashCode()
+        r = 31 * r + rangePresent.contentHashCode()
         r = 31 * r + rangeMeters.contentHashCode()
         return r
     }
@@ -150,6 +163,7 @@ class PhotosphereMap(
     /** True = the tile needs (re)scanning. Every tile starts unscanned. */
     private val needsUpdateFlags = BooleanArray(grid.tileCount) { true }
     private val lastUpdatedMs = LongArray(grid.tileCount)
+    private val scannedFlags = BooleanArray(grid.tileCount)
     private val orientation = arrayOfNulls<FloatArray>(grid.tileCount)
 
     /** Per-tile estimated range to the surface, metres; NaN = unknown. */
@@ -227,6 +241,7 @@ class PhotosphereMap(
     ) {
         val i = grid.index(id.sector, id.band)
         needsUpdateFlags[i] = false
+        scannedFlags[i] = true
         lastUpdatedMs[i] = nowMs
         if (orientationValue != null) orientation[i] = orientationValue.copyOf()
         if (rangeValue != null) rangeMeters[i] = rangeValue
@@ -254,6 +269,10 @@ class PhotosphereMap(
     /** Whether [id] needs (re)scanning. An out-of-range id reads as not needing one. */
     fun needsUpdate(id: TileId): Boolean =
         if (inRange(id)) needsUpdateFlags[grid.index(id.sector, id.band)] else false
+
+    /** Whether [id] has ever held a capture, independently of timestamp or current freshness. */
+    fun hasBeenScanned(id: TileId): Boolean =
+        if (inRange(id)) scannedFlags[grid.index(id.sector, id.band)] else false
 
     /**
      * Flip every currently-fresh tile last updated before [cutoffMs] back to needing an update — the
@@ -347,8 +366,9 @@ class PhotosphereMap(
      * lock rarely means teleporting. The host joins these ids to the fingerprints it holds and feeds a
      * matcher, capped by [limit] so a relock stays cheap no matter how large the map grows.
      *
-     * This only seeds KPM/relocalization; it adds nothing to the map. Only scanned tiles
-     * ([PanoramaTile.lastUpdatedMs] `> 0`) appear — an unscanned tile has nothing to match against.
+     * This only seeds KPM/relocalization; it adds nothing to the map. Only tiles that have actually
+     * been captured appear; scan history is independent of [PanoramaTile.lastUpdatedMs] because `0L`
+     * is a valid public update timestamp.
      * The walk visits the most recently updated tile, then its scanned neighbors, then the next most
      * recent not yet visited, and so on, so the immediate neighborhood of the last known tile is tried
      * before older recognitions. Purely a read of recency and adjacency; nothing is written back, so
@@ -418,6 +438,7 @@ class PhotosphereMap(
     fun reset() {
         needsUpdateFlags.fill(true)
         lastUpdatedMs.fill(0L)
+        scannedFlags.fill(false)
         orientation.fill(null)
         rangeMeters.fill(Float.NaN)
         wallHeadingDeg = null
@@ -433,7 +454,11 @@ class PhotosphereMap(
         needsUpdate = needsUpdateFlags.copyOf(),
         lastUpdatedMs = lastUpdatedMs.copyOf(),
         orientations = Array(orientation.size) { orientation[it]?.copyOf() },
-        rangeMeters = rangeMeters.copyOf(),
+        rangeMeters = FloatArray(rangeMeters.size) { i ->
+            if (rangeMeters[i].isNaN()) 0f else rangeMeters[i]
+        },
+        scanned = scannedFlags.copyOf(),
+        rangePresent = BooleanArray(rangeMeters.size) { i -> !rangeMeters[i].isNaN() },
     )
 
     private fun inRange(id: TileId): Boolean =
@@ -457,13 +482,24 @@ class PhotosphereMap(
             require(
                 snapshot.needsUpdate.size == n &&
                     snapshot.lastUpdatedMs.size == n &&
+                    snapshot.scanned.size == n &&
                     snapshot.orientations.size == n &&
-                    snapshot.rangeMeters.size == n,
+                    snapshot.rangeMeters.size == n &&
+                    snapshot.rangePresent.size == n,
             ) { "snapshot arrays must all be length $n" }
             snapshot.needsUpdate.copyInto(map.needsUpdateFlags)
             snapshot.lastUpdatedMs.copyInto(map.lastUpdatedMs)
-            snapshot.rangeMeters.copyInto(map.rangeMeters)
-            for (i in 0 until n) map.orientation[i] = snapshot.orientations[i]?.copyOf()
+            snapshot.scanned.copyInto(map.scannedFlags)
+            for (i in 0 until n) {
+                val persistedRange = snapshot.rangeMeters[i]
+                if (snapshot.rangePresent[i]) {
+                    require(persistedRange.isFinite()) { "present rangeMeters[$i] must be finite" }
+                    map.rangeMeters[i] = persistedRange
+                } else {
+                    map.rangeMeters[i] = Float.NaN
+                }
+                map.orientation[i] = snapshot.orientations[i]?.copyOf()
+            }
             map.wallHeadingDeg = snapshot.wallHeadingDeg
             return map
         }
