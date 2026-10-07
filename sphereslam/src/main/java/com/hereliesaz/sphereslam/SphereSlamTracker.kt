@@ -14,12 +14,16 @@ import java.util.concurrent.atomic.AtomicReference
  * SphereSLAM consumes copies of the same camera luminance frames on a private worker and publishes
  * wall-relative observations for relocalization and drift correction.
  */
-class SphereSlamTracker(
-    private val native: Native = KpmNative,
-    private val worker: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "sphereslam-kpm").apply { isDaemon = true }
-    },
+class SphereSlamTracker internal constructor(
+    private val native: Native,
+    private val worker: ExecutorService,
 ) : AutoCloseable {
+
+    /** Public tracker construction owns its private worker and native implementation. */
+    constructor() : this(KpmNative, newWorker())
+
+    /** Test seam; intentionally not part of the consumer API. */
+    internal constructor(native: Native) : this(native, newWorker())
 
     data class CameraModel(
         val width: Int,
@@ -35,26 +39,35 @@ class SphereSlamTracker(
         }
     }
 
-    data class Observation(
+    /**
+     * One sidecar KPM observation.
+     *
+     * [cameraFromPage3x4] is the row-major artoolkitX camera-from-page transform and is copied on
+     * input/output. Its translation is in KPM's page units (millimetres when reference DPI is
+     * physically calibrated); it is not an ARCore/OpenGL view matrix.
+     */
+    class Observation internal constructor(
         val timestampNs: Long,
         val pageNo: Int,
         val error: Float,
         val inliers: Int,
-        /**
-         * artoolkitX page-to-camera 3x4 transform, row-major.
-         *
-         * KPM generates page coordinates in millimetres from the supplied reference DPI. Until the
-         * capture path supplies a wall-metric DPI, translation scale is relative. Consumers must not
-         * replace ARCore's metric pose with this transform.
-         */
-        val pageToCamera3x4: FloatArray,
+        cameraFromPage3x4: FloatArray,
     ) {
+        private val cameraFromPage3x4Value = cameraFromPage3x4.copyOf()
+
         init {
-            require(pageToCamera3x4.size == 12)
+            require(cameraFromPage3x4Value.size == 12)
         }
+
+        val cameraFromPage3x4: FloatArray
+            get() = cameraFromPage3x4Value.copyOf()
+
+        @Deprecated("Use cameraFromPage3x4", ReplaceWith("cameraFromPage3x4"))
+        val pageToCamera3x4: FloatArray
+            get() = cameraFromPage3x4
     }
 
-    interface Native {
+    internal interface Native {
         val available: Boolean
         fun create(camera: CameraModel): Long
         fun destroy(handle: Long)
@@ -103,11 +116,7 @@ class SphereSlamTracker(
         }
     }
 
-    /**
-     * Start a fresh wall atlas with this calibrated camera. Used by a new target capture so pages
-     * from an older wall cannot contaminate the new reference. The reset and following page-add are
-     * ordered on the same worker.
-     */
+    /** Start a fresh wall atlas with this calibrated camera. */
     fun reset(camera: CameraModel) {
         if (closed.get()) return
         worker.execute {
@@ -139,9 +148,6 @@ class SphereSlamTracker(
             if (closed.get()) return@execute
             val handle = nativeHandle
             val model = cameraModel
-            // The calibrated session dimensions describe LIVE camera frames. A planar reference is
-            // allowed to be a separately rectified image with its own dimensions; artoolkitX KPM
-            // stores page image geometry independently from camera calibration.
             if (handle == 0L || model == null) {
                 referenceReady = false
                 referenceGeometry = null
@@ -160,11 +166,7 @@ class SphereSlamTracker(
         }
     }
 
-    /**
-     * Synchronously stop publishing/matching the current page before an asynchronous replacement is
-     * prepared. The native handle is intentionally left alive until [reset] supplies the next camera
-     * model, but no old observation can escape after this call.
-     */
+    /** Stop publishing/matching the current page without tearing down the calibrated native handle. */
     fun clearReference() {
         referenceReady = false
         referenceGeometry = null
@@ -173,8 +175,8 @@ class SphereSlamTracker(
     }
 
     /**
-     * Copies and submits one live frame without blocking on KPM. Only the newest unprocessed frame
-     * is retained, so a slow matcher cannot build latency behind ARCore.
+     * Copy and submit one live frame without blocking on KPM. Only the newest unprocessed frame is
+     * retained, so a slow matcher cannot build latency behind ARCore.
      */
     fun submitFrame(
         luma: ByteBuffer,
@@ -227,6 +229,11 @@ class SphereSlamTracker(
     }
 
     companion object {
+        private fun newWorker(): ExecutorService =
+            Executors.newSingleThreadExecutor { runnable ->
+                Thread(runnable, "sphereslam-kpm").apply { isDaemon = true }
+            }
+
         internal fun packLuma(source: ByteBuffer, width: Int, height: Int, rowStride: Int): ByteArray {
             require(width > 0 && height > 0)
             require(rowStride >= width)
@@ -289,7 +296,7 @@ class SphereSlamTracker(
                 pageNo = pageNo,
                 error = out[12],
                 inliers = out[13].toInt(),
-                pageToCamera3x4 = out.copyOfRange(0, 12),
+                cameraFromPage3x4 = out.copyOfRange(0, 12),
             )
         }
     }
