@@ -10,6 +10,7 @@ import java.io.File
 import java.nio.FloatBuffer
 
 /** Raw SuperPoint outputs: the dense score map and the descriptor field, each with its shape. */
+@ExperimentalSphereSlamModelsApi
 data class SuperPointOutput(
     val scores: FloatArray,
     val scoresShape: LongArray,
@@ -29,6 +30,7 @@ data class SuperPointOutput(
  * different variant doesn't fight a hard-coded decoder. Input is normalized grayscale NCHW
  * `[1,1,N,N]` in 0..1.
  */
+@ExperimentalSphereSlamModelsApi
 class SuperPointDetector(
     private val appContext: Context,
     private val assetName: String = MODEL_ASSET,
