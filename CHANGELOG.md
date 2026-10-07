@@ -50,3 +50,7 @@ canonical poses, anchors, tracker observations, photosphere DTOs/snapshots, and 
 - JDK 21 toolchain.
 - Android Java/Kotlin bytecode target remains 17.
 - Dependency/toolchain versions are pinned to current stable releases.
+- JitPack no longer relies on its cached submodule gitdir for artoolkitX; it materializes and verifies
+  the exact pinned commit.
+- JitPack bootstraps the checksum-verified Gradle 9.8.0 distribution directly, avoiding failures from
+  a corrupted/inaccessible cached wrapper JAR.
