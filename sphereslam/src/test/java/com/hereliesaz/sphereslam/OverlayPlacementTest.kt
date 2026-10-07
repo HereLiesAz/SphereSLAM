@@ -10,7 +10,7 @@ class OverlayPlacementTest {
         SphereSlamStandaloneSession.Pose(
             timestampNs = 0L,
             pageNo = 0,
-            viewMatrix = viewMatrix,
+            cameraFromCanonical = viewMatrix,
             reprojectionError = 0f,
             inlierCount = 20,
             reference = SphereSlamStandaloneSession.Reference(
