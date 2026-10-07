@@ -170,6 +170,25 @@ class PhotosphereMapTest {
         assertNull(restored.tile(TileId(1, 0))!!.rangeMeters)
     }
 
+
+    @Test
+    fun `tile and snapshot arrays are defensive copies`() {
+        val m = fullRing()
+        val orientation = floatArrayOf(0f, 0f, 0f, 1f)
+        val id = m.markUpdated(0f, 0f, representativeOrientation = orientation)!!
+        orientation[3] = 0f
+
+        val tileOrientation = m.tile(id)!!.representativeOrientation!!
+        tileOrientation[0] = 99f
+        assertEquals(1f, m.tile(id)!!.representativeOrientation!![3], 0f)
+        assertEquals(0f, m.tile(id)!!.representativeOrientation!![0], 0f)
+
+        val snapshot = m.snapshot()
+        val needsUpdate = snapshot.needsUpdate
+        needsUpdate.fill(false)
+        assertTrue(snapshot.needsUpdate.any { it })
+    }
+
     @Test
     fun `fromSnapshot rejects a wrong-length array`() {
         val m = fullRing()
