@@ -125,6 +125,47 @@ class PhotosphereMapTest {
     }
 
     @Test
+    fun `a tile carries its optional depth and orientation tags`() {
+        val m = fullRing()
+        val q = floatArrayOf(0f, 0f, 0f, 1f)
+        val id = m.markUpdated(0f, 0f, nowMs = 1L, representativeOrientation = q, rangeMeters = 2.5f)!!
+        val tile = m.tile(id)!!
+        assertEquals(2.5f, tile.rangeMeters!!, 0f)
+        assertTrue(q.contentEquals(tile.representativeOrientation))
+        // A tile updated without a range reports none.
+        m.markUpdated(TileId(0, 0), nowMs = 1L)
+        assertNull(m.tile(TileId(0, 0))!!.rangeMeters)
+    }
+
+    @Test
+    fun `snapshot round-trips the full map state`() {
+        val m = fullRing()
+        m.markUpdated(0f, 0f, nowMs = 7L, representativeOrientation = floatArrayOf(0f, 0f, 0f, 1f), rangeMeters = 3f)
+        m.markUpdated(TileId(0, 0), nowMs = 9L)
+        m.recordStale(TileId(2, 1))
+
+        val restored = PhotosphereMap.fromSnapshot(m.snapshot())
+
+        assertEquals(m.coverageFraction(), restored.coverageFraction(), 0f)
+        assertEquals(m.tilesNeedingUpdate().toSet(), restored.tilesNeedingUpdate().toSet())
+        assertEquals(m.tile(TileId(0, 0)), restored.tile(TileId(0, 0)))
+        assertEquals(m.tile(TileId(2, 1)), restored.tile(TileId(2, 1)))
+        assertTrue(restored.hasWallHeading())
+    }
+
+    @Test
+    fun `fromSnapshot rejects a wrong-length array`() {
+        val m = fullRing()
+        val bad = m.snapshot().copy(lastUpdatedMs = LongArray(3))
+        try {
+            PhotosphereMap.fromSnapshot(bad)
+            throw AssertionError("expected IllegalArgumentException")
+        } catch (e: IllegalArgumentException) {
+            // expected
+        }
+    }
+
+    @Test
     fun `an out-of-range id is ignored, not crashing`() {
         val m = fullRing()
         m.markUpdated(TileId(99, 99), nowMs = 1L)
