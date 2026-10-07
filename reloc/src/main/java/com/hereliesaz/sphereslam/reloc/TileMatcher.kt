@@ -4,8 +4,8 @@ import org.opencv.core.Mat
 
 /**
  * Which known tile is the camera looking at? Given a live frame and a small set of candidate tiles
- * (each with a [PlanarFingerprint]), detect the frame's features once and relocalize against each
- * candidate, returning the best-supported match.
+ * (each with a [Fingerprint] — planar or depth-backed), detect the frame's features once and
+ * relocalize against each candidate, returning the best-supported match.
  *
  * Generic over the tile key [K] so it carries no dependency on the photosphere map: the caller
  * supplies whatever identifies a tile (e.g. its grid address) and the fingerprints for the tiles it
@@ -57,7 +57,7 @@ class TileMatcher<K>(
      * @param gray the live frame, single-channel.
      * @param candidates the in-view tiles' fingerprints keyed by tile identifier.
      */
-    fun match(gray: Mat, candidates: Map<K, PlanarFingerprint>): Match<K>? {
+    fun match(gray: Mat, candidates: Map<K, Fingerprint>): Match<K>? {
         if (candidates.isEmpty()) return null
         val features = relocalizer.detect(gray) ?: return null
         val scored = ArrayList<Match<K>>(candidates.size)
