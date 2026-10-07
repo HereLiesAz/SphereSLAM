@@ -51,9 +51,13 @@ class SphereSlamStandaloneSessionTest {
         assertEquals(19, pose.inlierCount)
         assertFalse(pose.physicallyMetric)
         // Centering shifts the KPM lower-left page origin to the middle of our 1 x 0.5 unit quad.
-        assertEquals(0.5f, pose.viewMatrix[12], 0.0001f)
-        assertEquals(-0.25f, pose.viewMatrix[13], 0.0001f)
-        assertEquals(-1f, pose.viewMatrix[14], 0.0001f)
+        assertEquals(0.5f, pose.cameraFromCanonical[12], 0.0001f)
+        assertEquals(-0.25f, pose.cameraFromCanonical[13], 0.0001f)
+        assertEquals(-1f, pose.cameraFromCanonical[14], 0.0001f)
+
+        val leaked = pose.cameraFromCanonical
+        leaked[12] = 99f
+        assertEquals(0.5f, pose.cameraFromCanonical[12], 0.0001f)
 
         session.close()
         assertEquals(1, engine.closeCalls)
@@ -104,9 +108,9 @@ class SphereSlamStandaloneSessionTest {
         assertEquals(1, pose.pageNo)
         // The page-local camera is centered over page 1. In canonical coordinates that page sits at
         // +1m X, so camera-from-canonical carries -1m X while retaining the page-centering Y/Z.
-        assertEquals(-0.5f, pose.viewMatrix[12], 0.0001f)
-        assertEquals(-0.25f, pose.viewMatrix[13], 0.0001f)
-        assertEquals(-1f, pose.viewMatrix[14], 0.0001f)
+        assertEquals(-0.5f, pose.cameraFromCanonical[12], 0.0001f)
+        assertEquals(-0.25f, pose.cameraFromCanonical[13], 0.0001f)
+        assertEquals(-1f, pose.cameraFromCanonical[14], 0.0001f)
         session.close()
     }
 
@@ -152,7 +156,7 @@ class SphereSlamStandaloneSessionTest {
             )
             return requireNotNull(
                 session.match(ByteBuffer.allocateDirect(8), pageNo.toLong()),
-            ).viewMatrix
+            ).cameraFromCanonical
         }
 
         // Same physical camera position, described in each page's local KPM coordinates.
