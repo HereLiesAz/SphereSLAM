@@ -1,3 +1,6 @@
+import org.gradle.jvm.toolchain.JavaLanguageVersion
+import org.gradle.api.plugins.JavaPluginExtension
+
 // SphereSLAM root build. AGP 9 provides built-in Kotlin support, so no kotlin-android plugin is
 // applied; per-module builds set the Kotlin JVM target via the KotlinCompile task.
 plugins {
@@ -15,6 +18,11 @@ allprojects {
 // so JitPack (and `publishToMavenLocal`) emit a consumable AAR per module.
 subprojects {
     plugins.withId("com.android.library") {
+        extensions.configure<JavaPluginExtension>("java") {
+            toolchain {
+                languageVersion.set(JavaLanguageVersion.of(libs.versions.jdk.get().toInt()))
+            }
+        }
         extensions.configure<com.android.build.api.dsl.LibraryExtension>("android") {
             publishing { singleVariant("release") { withSourcesJar() } }
         }
