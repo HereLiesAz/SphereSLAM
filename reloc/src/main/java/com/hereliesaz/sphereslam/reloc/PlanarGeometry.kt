@@ -11,6 +11,7 @@ package com.hereliesaz.sphereslam.reloc
  *
  * Pure and framework-free so it is unit-testable without OpenCV's native library loaded.
  */
+@ExperimentalSphereSlamRelocApi
 object PlanarGeometry {
 
     /** Map a reference-image pixel to its 3D point on the centered `z = 0` target plane. */
