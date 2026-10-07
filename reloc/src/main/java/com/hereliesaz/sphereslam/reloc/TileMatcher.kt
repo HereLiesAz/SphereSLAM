@@ -19,6 +19,7 @@ import org.opencv.core.Mat
  * @property relocalizer the PnP relocalizer used per candidate; its `fingerprint` field is ignored
  *   (each candidate's fingerprint is passed explicitly).
  */
+@ExperimentalSphereSlamRelocApi
 class TileMatcher<K>(
     private val relocalizer: Relocalizer,
 ) {
