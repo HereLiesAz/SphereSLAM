@@ -154,6 +154,23 @@ class PhotosphereMapTest {
     }
 
     @Test
+    fun `snapshot encodes absent ranges without NaN and restores absence`() {
+        val m = fullRing()
+        m.markUpdated(TileId(0, 0), rangeMeters = 2.5f)
+        m.markUpdated(TileId(1, 0))
+
+        val snapshot = m.snapshot()
+
+        assertTrue(snapshot.rangeMeters.all { it.isFinite() })
+        assertTrue(snapshot.rangePresent.any { it })
+        assertTrue(snapshot.rangePresent.any { !it })
+
+        val restored = PhotosphereMap.fromSnapshot(snapshot)
+        assertEquals(2.5f, restored.tile(TileId(0, 0))!!.rangeMeters!!, 0f)
+        assertNull(restored.tile(TileId(1, 0))!!.rangeMeters)
+    }
+
+    @Test
     fun `fromSnapshot rejects a wrong-length array`() {
         val m = fullRing()
         val bad = m.snapshot().copy(lastUpdatedMs = LongArray(3))
