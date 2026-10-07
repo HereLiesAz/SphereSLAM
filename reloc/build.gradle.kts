@@ -21,8 +21,8 @@ android {
 }
 
 dependencies {
-    // OpenCV Java API: ORB, BFMatcher, Calib3d.solvePnPRansac — the whole reloc in Kotlin, no JNI.
-    implementation(libs.opencv)
+    // :reloc intentionally exposes OpenCV-backed types; publish OpenCV on the consumer compile classpath.
+    api(libs.opencv)
     implementation(libs.androidx.core.ktx)
     // Optional: MiDaS depth for off-plane (sphere) placement. Depend on the perception module.
     implementation(project(":models"))
@@ -35,5 +35,6 @@ dependencies {
 tasks.withType<KotlinCompile>().configureEach {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
+        freeCompilerArgs.add("-opt-in=com.hereliesaz.sphereslam.reloc.ExperimentalSphereSlamRelocApi")
     }
 }
