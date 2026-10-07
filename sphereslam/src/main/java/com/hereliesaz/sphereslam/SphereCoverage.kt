@@ -1,7 +1,5 @@
 package com.hereliesaz.sphereslam
 
-import kotlin.math.floor
-
 /**
  * Angular-coverage accumulator for the guided sweep that fills SphereSLAM's surrounding feature map.
  *
@@ -66,6 +64,14 @@ class SphereCoverage(
         }
     }
 
+    /** The shared angular lattice; sector/band indexing and centers live here, not duplicated. */
+    private val grid = SphereGrid(
+        sectorCount,
+        viewableHalfAngleDeg,
+        elevationBandCount,
+        viewableElevationHalfAngleDeg,
+    )
+
     /** One count per (sector, band) bin, row-major: `sector * elevationBandCount + band`. */
     private val hits = IntArray(sectorCount * elevationBandCount)
     private var total = 0
@@ -108,8 +114,8 @@ class SphereCoverage(
     fun observe(headingDeg: Float, elevationDeg: Float = 0f): Boolean {
         if (!headingDeg.isFinite() || !elevationDeg.isFinite()) return false
         val anchor = wallHeadingDeg ?: norm360(headingDeg).also { wallHeadingDeg = it }
-        val sector = sectorOf(headingDeg, anchor) ?: return false
-        val band = bandOf(elevationDeg) ?: return false
+        val sector = grid.sectorOf(headingDeg, anchor) ?: return false
+        val band = grid.bandOf(elevationDeg) ?: return false
         total++
         val index = sector * elevationBandCount + band
         val wasEmpty = hits[index] == 0
@@ -137,7 +143,7 @@ class SphereCoverage(
         val out = ArrayList<Float>()
         for (s in 0 until sectorCount) {
             val anyEmpty = (0 until elevationBandCount).any { hits[s * elevationBandCount + it] == 0 }
-            if (anyEmpty) out.add(norm360(anchor + sectorCenterDelta(s)))
+            if (anyEmpty) out.add(norm360(anchor + grid.sectorCenterDelta(s)))
         }
         return out.toFloatArray()
     }
@@ -161,10 +167,10 @@ class SphereCoverage(
         val anchor = wallHeadingDeg ?: return emptyList()
         val out = ArrayList<Direction>()
         for (s in 0 until sectorCount) {
-            val az = norm360(anchor + sectorCenterDelta(s))
+            val az = norm360(anchor + grid.sectorCenterDelta(s))
             for (b in 0 until elevationBandCount) {
                 if (hits[s * elevationBandCount + b] == 0) {
-                    out.add(Direction(azimuthDeg = az, elevationDeg = bandCenterElevation(b)))
+                    out.add(Direction(azimuthDeg = az, elevationDeg = grid.bandCenterElevation(b)))
                 }
             }
         }
@@ -176,39 +182,6 @@ class SphereCoverage(
         hits.fill(0)
         total = 0
         wallHeadingDeg = null
-    }
-
-    /** Signed azimuth offset (deg) of sector [s]'s center from the anchor, in `[-half, +half]`. */
-    private fun sectorCenterDelta(s: Int): Float {
-        val step = (2f * viewableHalfAngleDeg) / sectorCount
-        return -viewableHalfAngleDeg + (s + 0.5f) * step
-    }
-
-    /** Signed elevation (deg) of band [b]'s center, in `[-half, +half]`; 0 for the collapsed band. */
-    private fun bandCenterElevation(b: Int): Float {
-        val step = (2f * viewableElevationHalfAngleDeg) / elevationBandCount
-        return -viewableElevationHalfAngleDeg + (b + 0.5f) * step
-    }
-
-    /** Sector index for [headingDeg] within the viewable arc around [anchor], or null if outside it. */
-    private fun sectorOf(headingDeg: Float, anchor: Float): Int? {
-        val delta = signedDelta(norm360(headingDeg), anchor) // [-180, 180]
-        if (delta < -viewableHalfAngleDeg || delta > viewableHalfAngleDeg) return null
-        val span = 2f * viewableHalfAngleDeg
-        val step = span / sectorCount
-        val s = floor((delta + viewableHalfAngleDeg) / step).toInt()
-        return s.coerceIn(0, sectorCount - 1)
-    }
-
-    /** Elevation band for [elevationDeg] within the viewable band, or null if outside it. */
-    private fun bandOf(elevationDeg: Float): Int? {
-        if (elevationDeg < -viewableElevationHalfAngleDeg || elevationDeg > viewableElevationHalfAngleDeg) {
-            return null
-        }
-        val span = 2f * viewableElevationHalfAngleDeg
-        val step = span / elevationBandCount
-        val b = floor((elevationDeg + viewableElevationHalfAngleDeg) / step).toInt()
-        return b.coerceIn(0, elevationBandCount - 1)
     }
 
     companion object {
@@ -233,13 +206,6 @@ class SphereCoverage(
 
         /** Normalize a heading to [0, 360). */
         fun norm360(deg: Float): Float = ((deg % 360f) + 360f) % 360f
-
-        /** Shortest signed angular difference a−b in degrees, in [-180, 180]. */
-        private fun signedDelta(a: Float, b: Float): Float {
-            var d = (a - b + 180f) % 360f
-            if (d < 0f) d += 360f
-            return d - 180f
-        }
 
         /**
          * Build coverage from a recorded log of camera directions — useful for replaying a persisted
