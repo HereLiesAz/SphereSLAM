@@ -11,7 +11,7 @@ plugins {
 // with the git tag at build time; this is the fallback for local publishToMavenLocal.
 allprojects {
     group = "com.github.HereLiesAz.SphereSLAM"
-    version = "0.23.2"
+    version = "0.23.3"
 }
 
 // Publishing convention: every Android library module gets a maven-publish `release` publication,
