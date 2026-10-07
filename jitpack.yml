@@ -4,9 +4,9 @@
 # pointing at a dead /home/jitpack/.../.git/modules path, so do not use `git submodule update` here.
 # Materialize the exact gitlink commit into a clean standalone checkout instead.
 #
-# JitPack has also produced builds where the checked-out wrapper JAR could not be opened. The build
-# therefore bootstraps the exact Gradle distribution declared by the project and verifies its
-# official SHA-256 before use. Normal consumers can still use ./gradlew.
+# JitPack may not carry the exact native toolchain version pinned by SphereSLAM. Bootstrap the exact
+# Gradle and CMake distributions declared by the project, verify their published SHA-256 hashes, and
+# point AGP at the standalone CMake install explicitly.
 jdk:
   - openjdk21
 
@@ -21,6 +21,12 @@ before_install:
   - echo "bafd5ce9cfaea0fbccfdc8439a1ac42fbd4cd9c89dc9a988228d8a2639a58e6c  /tmp/gradle-9.8.0-bin.zip" | sha256sum --check -
   - rm -rf /tmp/gradle-9.8.0
   - unzip -q /tmp/gradle-9.8.0-bin.zip -d /tmp
+  - curl --fail --location --retry 3 --output /tmp/cmake-4.4.4-linux-x86_64.tar.gz https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-linux-x86_64.tar.gz
+  - echo "e5bb807f7728cb60cd8b27ebc97a2edb469b68655f21e844a600c3575b76f5bb  /tmp/cmake-4.4.4-linux-x86_64.tar.gz" | sha256sum --check -
+  - rm -rf /tmp/cmake-4.4.4-linux-x86_64
+  - tar -xzf /tmp/cmake-4.4.4-linux-x86_64.tar.gz -C /tmp
+  - test "$(/tmp/cmake-4.4.4-linux-x86_64/bin/cmake --version | head -n 1)" = "cmake version 4.4.4"
+  - printf '\ncmake.dir=/tmp/cmake-4.4.4-linux-x86_64\n' >> local.properties
 
 install:
   - /tmp/gradle-9.8.0/bin/gradle publishToMavenLocal -x test -x lint --no-daemon --stacktrace
