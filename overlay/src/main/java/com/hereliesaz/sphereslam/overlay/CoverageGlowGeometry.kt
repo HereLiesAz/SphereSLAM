@@ -10,7 +10,7 @@ import com.hereliesaz.sphereslam.CoverageGlowProjection
  * the shader multiplies the glow by, so an off-screen direction (an edge nudge) can glow more faintly
  * than one actually in view.
  */
-object CoverageGlowGeometry {
+internal object CoverageGlowGeometry {
 
     /** Floats per vertex: x, y, intensity. */
     const val FLOATS_PER_VERTEX = 3
