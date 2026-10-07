@@ -41,7 +41,6 @@ Optional rendering helper:
 
 - `CoverageGlowView`
 - `CoverageGlowRenderer`
-- `CoverageGlowGeometry`
 
 Because public overlay methods use `:sphereslam` types, the Gradle dependency is published with
 `api(project(":sphereslam"))`.
