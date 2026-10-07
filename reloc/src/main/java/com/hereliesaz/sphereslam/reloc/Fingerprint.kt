@@ -10,6 +10,7 @@ import org.opencv.core.MatOfPoint3f
  * ([PlanarFingerprint]) and a triangulated off-page tile ([TileFingerprint]) are the same thing to
  * it, differing only in where their points live.
  */
+@ExperimentalSphereSlamRelocApi
 interface Fingerprint {
     /** Feature descriptors, one row each; type must match the live frame's descriptors. */
     val descriptors: Mat
