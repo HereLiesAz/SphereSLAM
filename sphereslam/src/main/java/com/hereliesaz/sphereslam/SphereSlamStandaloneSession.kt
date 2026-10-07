@@ -11,19 +11,34 @@ import java.nio.ByteBuffer
  * "latest observation" race.
  *
  * KPM supplies the 6-DoF camera-from-wall pose while a registered planar wall page is visible. This
- * is sufficient to drive GraffitiXR's wall-locked overlay without an ARCore Session. It is not
- * inertial dead reckoning and it does not claim a pose when the wall cannot be matched.
+ * is sufficient to drive a wall-locked overlay without an ARCore Session. It is not inertial dead
+ * reckoning and it does not claim a pose when the wall cannot be matched.
+ *
+ * Public render poses use one convention: column-major 4x4 camera-from-canonical transforms. When
+ * [Pose.physicallyMetric] is true, translation is in metres.
  */
-class SphereSlamStandaloneSession(
+class SphereSlamStandaloneSession internal constructor(
     val frameWidth: Int,
     val frameHeight: Int,
     val calibration: SphereSlamCalibration,
-    private val engineFactory: EngineFactory = EngineFactory { width, height, c ->
-        SphereSlam.create(width, height, c)
-    },
+    private val engineFactory: EngineFactory,
 ) : AutoCloseable {
 
-    fun interface EngineFactory {
+    /** Public constructor. Test/implementation injection is intentionally not part of the API. */
+    constructor(
+        frameWidth: Int,
+        frameHeight: Int,
+        calibration: SphereSlamCalibration,
+    ) : this(
+        frameWidth = frameWidth,
+        frameHeight = frameHeight,
+        calibration = calibration,
+        engineFactory = EngineFactory { width, height, c ->
+            SphereSlam.create(width, height, c)
+        },
+    )
+
+    internal fun interface EngineFactory {
         fun create(
             width: Int,
             height: Int,
@@ -31,38 +46,61 @@ class SphereSlamStandaloneSession(
         ): SphereSlamEngine
     }
 
-    data class Reference(
+    /**
+     * Metadata for one registered page.
+     *
+     * [canonicalFromPage] is defensively copied on input and output so callers cannot mutate the
+     * session's atlas transform after registration.
+     */
+    class Reference internal constructor(
         val pageNo: Int,
         val imageNo: Int,
         val geometry: SphereSlamPoseMath.PageGeometry,
-        /**
-         * Rigid transform from this centered page frame into the immutable canonical wall frame.
-         * Page 0 uses identity; every grown page must be registered into that same root before it is
-         * admitted to the atlas.
-         */
-        val canonicalFromPage: FloatArray,
+        canonicalFromPage: FloatArray,
         val featureCount: Int,
-        /**
-         * True only when the width supplied by the caller is an actual physical measurement.
-         * False means the pose is internally scaled and visually stable, but distance values are not
-         * physical metres.
-         */
         val physicallyMetric: Boolean,
-    )
+    ) {
+        private val canonicalFromPageValue = canonicalFromPage.copyOf()
 
-    data class Pose(
+        /** Column-major rigid transform from this centered page frame into the canonical wall frame. */
+        val canonicalFromPage: FloatArray
+            get() = canonicalFromPageValue.copyOf()
+    }
+
+    /**
+     * One matched frame in the canonical wall coordinate system.
+     *
+     * [cameraFromCanonical] is column-major 4x4 and is defensively copied on every read.
+     */
+    class Pose internal constructor(
         val timestampNs: Long,
         val pageNo: Int,
-        val viewMatrix: FloatArray,
+        cameraFromCanonical: FloatArray,
         val reprojectionError: Float,
         val inlierCount: Int,
         val reference: Reference,
     ) {
+        private val cameraFromCanonicalValue = cameraFromCanonical.copyOf()
+
         init {
-            require(viewMatrix.size == 16)
+            require(cameraFromCanonicalValue.size == 16)
+            require(cameraFromCanonicalValue.all { it.isFinite() })
         }
 
-        val physicallyMetric: Boolean get() = reference.physicallyMetric
+        /** Column-major camera-from-canonical transform. */
+        val cameraFromCanonical: FloatArray
+            get() = cameraFromCanonicalValue.copyOf()
+
+        /**
+         * Legacy rendering name. Prefer [cameraFromCanonical], which states the transform direction
+         * and coordinate frame explicitly.
+         */
+        @Deprecated("Use cameraFromCanonical", ReplaceWith("cameraFromCanonical"))
+        val viewMatrix: FloatArray
+            get() = cameraFromCanonical
+
+        val physicallyMetric: Boolean
+            get() = reference.physicallyMetric
     }
 
     private var engine: SphereSlamEngine = newEngine()
@@ -76,10 +114,10 @@ class SphereSlamStandaloneSession(
      * Add a planar wall reference.
      *
      * @param referenceWidthMeters width represented by the whole reference image. Pass a measured
-     * physical width and [physicallyMetric]=true for real metric translation. For the initial
-     * standalone path, callers may use a normalized width such as 1f and keep
-     * [physicallyMetric]=false; the overlay remains geometrically registered because reference
-     * geometry and camera translation share the same scale.
+     * physical width and [physicallyMetric]=true for real metric translation. Callers may use a
+     * normalized width such as 1f with [physicallyMetric]=false for visual-only registration.
+     * @param canonicalFromPage column-major rigid transform placing this page in the canonical wall
+     * frame. The value is copied before it is retained.
      */
     fun addReference(
         luma: ByteBuffer,
@@ -114,15 +152,16 @@ class SphereSlamStandaloneSession(
             pageNo = pageNo,
             imageNo = imageNo,
             geometry = geometry,
-            canonicalFromPage = canonicalFromPage.copyOf(),
+            canonicalFromPage = canonicalFromPage,
             featureCount = featureCount,
             physicallyMetric = physicallyMetric,
         ).also { references[pageNo] = it }
     }
 
     /**
-     * Match one tightly packed direct luma frame and return a centered OpenGL world-to-view pose.
-     * Null means no wall page matched this frame.
+     * Match one tightly packed direct luma frame.
+     *
+     * @return a canonical camera pose for this exact frame, or null when no registered page matched.
      */
     fun match(luma: ByteBuffer, timestampNs: Long): Pose? {
         requireOpen()
@@ -138,10 +177,7 @@ class SphereSlamStandaloneSession(
         return Pose(
             timestampNs = timestampNs,
             pageNo = match.pageNo,
-            // Every KPM page owns a local centred coordinate system. Rebase that local view into
-            // the one canonical wall frame before it escapes the session so the renderer,
-            // and persistence never observe a page-dependent coordinate jump.
-            viewMatrix = SphereSlamPoseMath.pageViewToCanonicalView(
+            cameraFromCanonical = SphereSlamPoseMath.pageViewToCanonicalView(
                 cameraFromPage,
                 reference.canonicalFromPage,
             ),
@@ -151,10 +187,7 @@ class SphereSlamStandaloneSession(
         )
     }
 
-    /**
-     * Drop the atlas and create a fresh native matcher with the same live-camera calibration.
-     * Used when the artist captures a different wall.
-     */
+    /** Drop the atlas and create a fresh native matcher with the same live-camera calibration. */
     fun reset() {
         requireOpen()
         engine.close()
