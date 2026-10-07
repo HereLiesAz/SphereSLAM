@@ -49,7 +49,7 @@ android {
 
 dependencies {
     implementation(libs.androidx.core.ktx)
-    implementation(project(":core:common"))
+    api(project(":core:common"))
     // OpenCV from Maven Central. Its Prefab part exposes the native C++ world to CMake
     // (find_package(OpenCV) -> OpenCV::opencv_java5) and auto-packages libopencv_java5.so.
     implementation(libs.opencv)
