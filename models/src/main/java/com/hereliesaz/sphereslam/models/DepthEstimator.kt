@@ -10,6 +10,7 @@ import java.io.File
 import java.nio.FloatBuffer
 
 /** A single monocular depth map, relative (unitless) unless the model is a metric variant. */
+@ExperimentalSphereSlamModelsApi
 data class DepthMap(
     val width: Int,
     val height: Int,
@@ -38,6 +39,7 @@ data class DepthMap(
  * Fails soft: a missing asset or load error leaves [isLoaded] false and [estimate] returning null.
  * All public methods are synchronized; ORT sessions are not re-entrant.
  */
+@ExperimentalSphereSlamModelsApi
 class DepthEstimator(
     private val appContext: Context,
     private val assetName: String = MODEL_ASSET,
