@@ -11,6 +11,7 @@ import kotlin.math.sqrt
  * "Diverged" means two poses differ by more than the snap thresholds; a stabilizer passes such a
  * jump through unsmoothed (a fast pan / a reacquisition) rather than lagging it.
  */
+@ExperimentalSphereSlamRelocApi
 object PoseBlend {
 
     /** Translation difference (metres) beyond which two poses are considered a discontinuity. */
