@@ -161,3 +161,135 @@ class TrackingStateMachineTest {
         assertEquals(TrackingState.LOST, m.onVisualMiss(bridgeAvailable = false, nowMs = 200L))
     }
 }
+
+class TrackingStateMachineBridgeTimeoutTest {
+    private fun locked(maxBridgeMs: Long = 100L, lostAfterMs: Long = 200L) =
+        TrackingStateMachine(
+            TrackingStateConfig(confirmationFrames = 1, lostAfterMs = lostAfterMs, maxBridgeMs = maxBridgeMs),
+        ).also { it.onAcceptedVisual(0L) }
+
+    @Test
+    fun `consecutive bridged misses time out to reacquiring then lost`() {
+        val m = locked(maxBridgeMs = 100L, lostAfterMs = 200L)
+        assertEquals(TrackingState.IMU_BRIDGE, m.onVisualMiss(bridgeAvailable = true, nowMs = 10L))
+        assertEquals(TrackingState.IMU_BRIDGE, m.onVisualMiss(bridgeAvailable = true, nowMs = 60L))
+        assertEquals(TrackingState.IMU_BRIDGE, m.onVisualMiss(bridgeAvailable = true, nowMs = 109L))
+        // Bridge began at 10 ms; at 110 ms it has held 100 ms and expires.
+        assertEquals(TrackingState.REACQUIRING, m.onVisualMiss(bridgeAvailable = true, nowMs = 110L))
+        // A still-available bridge must not re-arm once reacquiring.
+        assertEquals(TrackingState.REACQUIRING, m.onVisualMiss(bridgeAvailable = true, nowMs = 200L))
+        // Reacquire clock started at expiry (110 ms): LOST at 110 + 200.
+        assertEquals(TrackingState.REACQUIRING, m.onVisualMiss(bridgeAvailable = true, nowMs = 309L))
+        assertEquals(TrackingState.LOST, m.onVisualMiss(bridgeAvailable = true, nowMs = 310L))
+    }
+
+    @Test
+    fun `a visual accept re-arms the bridge`() {
+        val m = locked(maxBridgeMs = 100L)
+        m.onVisualMiss(bridgeAvailable = true, nowMs = 10L)
+        m.onVisualMiss(bridgeAvailable = true, nowMs = 90L)
+        assertEquals(TrackingState.LOCKED, m.onAcceptedVisual(95L))
+        assertEquals(TrackingState.IMU_BRIDGE, m.onVisualMiss(bridgeAvailable = true, nowMs = 150L))
+        assertEquals(TrackingState.IMU_BRIDGE, m.onVisualMiss(bridgeAvailable = true, nowMs = 240L))
+    }
+
+    @Test
+    fun `zero bridge window never bridges`() {
+        val m = locked(maxBridgeMs = 0L)
+        assertEquals(TrackingState.REACQUIRING, m.onVisualMiss(bridgeAvailable = true, nowMs = 10L))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `negative bridge window is rejected`() {
+        TrackingStateConfig(maxBridgeMs = -1L)
+    }
+}
+
+class PoseMathRotationTest {
+    /** Column-major rotation about the given unit axis by [deg] (Rodrigues). */
+    private fun rotation(axis: FloatArray, deg: Float, t: FloatArray = floatArrayOf(0f, 0f, 0f)): FloatArray {
+        val h = Math.toRadians(deg.toDouble() / 2.0)
+        val s = kotlin.math.sin(h).toFloat()
+        val q = floatArrayOf(axis[0] * s, axis[1] * s, axis[2] * s, kotlin.math.cos(h).toFloat())
+        return PoseMath.fromQuaternionTranslation(q, t)
+    }
+
+    private fun assertRoundTrip(m: FloatArray) {
+        val back = PoseMath.fromQuaternionTranslation(PoseMath.matrixToQuaternion(m), PoseMath.translationOf(m))
+        assertArrayEquals(m, back, 1e-5f)
+    }
+
+    @Test
+    fun `matrixToQuaternion round-trips through every branch`() {
+        assertRoundTrip(rotation(floatArrayOf(0f, 0f, 1f), 30f)) // trace > 0
+        assertRoundTrip(rotation(floatArrayOf(1f, 0f, 0f), 180f)) // m00 dominant
+        assertRoundTrip(rotation(floatArrayOf(0f, 1f, 0f), 170f)) // m11 dominant
+        assertRoundTrip(rotation(floatArrayOf(0f, 0f, 1f), 179f)) // m22 dominant
+        val n = 1f / kotlin.math.sqrt(3f)
+        assertRoundTrip(rotation(floatArrayOf(n, n, n), 150f, floatArrayOf(1f, -2f, 3f)))
+    }
+
+    @Test
+    fun `nlerpQuat endpoints and hemisphere correction`() {
+        val a = PoseMath.matrixToQuaternion(rotation(floatArrayOf(0f, 0f, 1f), 0f))
+        val b = PoseMath.matrixToQuaternion(rotation(floatArrayOf(0f, 0f, 1f), 90f))
+        assertArrayEquals(a, PoseMath.nlerpQuat(a, b, 0f), 1e-6f)
+        assertArrayEquals(b, PoseMath.nlerpQuat(a, b, 1f), 1e-6f)
+        // The negated quaternion is the same rotation; nlerp must take the short way, not via zero.
+        val negB = floatArrayOf(-b[0], -b[1], -b[2], -b[3])
+        val mid = PoseMath.nlerpQuat(a, negB, 0.5f)
+        val expectedMid = PoseMath.matrixToQuaternion(rotation(floatArrayOf(0f, 0f, 1f), 45f))
+        val dot = kotlin.math.abs(mid.indices.sumOf { (mid[it] * expectedMid[it]).toDouble() })
+        assertEquals(1.0, dot, 1e-5)
+    }
+}
+
+class PoseBlendRotationTest {
+    /** Column-major camera-from-map for a camera at centre [c] with rotation [deg] about +Y. */
+    private fun cameraAt(c: FloatArray, deg: Float): FloatArray {
+        val h = Math.toRadians(deg.toDouble() / 2.0)
+        val q = floatArrayOf(0f, kotlin.math.sin(h).toFloat(), 0f, kotlin.math.cos(h).toFloat())
+        val r = PoseMath.fromQuaternionTranslation(q, floatArrayOf(0f, 0f, 0f))
+        val t = FloatArray(3) { row -> -(r[row] * c[0] + r[4 + row] * c[1] + r[8 + row] * c[2]) }
+        return PoseMath.fromQuaternionTranslation(q, t)
+    }
+
+    @Test
+    fun `pure rotation in place is not a translation divergence`() {
+        // Same camera centre, 10 deg turn: translation columns differ a lot, centres do not.
+        val a = cameraAt(floatArrayOf(2f, 0f, 3f), 0f)
+        val b = cameraAt(floatArrayOf(2f, 0f, 3f), 10f)
+        assertFalse(PoseBlend.diverged(a, b))
+    }
+
+    @Test
+    fun `a large turn diverges on angle`() {
+        val a = cameraAt(floatArrayOf(0f, 0f, 0f), 0f)
+        assertTrue(PoseBlend.diverged(a, cameraAt(floatArrayOf(0f, 0f, 0f), 20f)))
+    }
+
+    @Test
+    fun `a moved camera centre diverges even when rotated`() {
+        val a = cameraAt(floatArrayOf(0f, 0f, 0f), 5f)
+        assertTrue(PoseBlend.diverged(a, cameraAt(floatArrayOf(0.5f, 0f, 0f), 5f)))
+    }
+
+    @Test
+    fun `blend interpolates the camera centre, not the translation column`() {
+        val c = floatArrayOf(1f, 0.5f, -2f)
+        val out = PoseBlend.blend(cameraAt(c, 0f), cameraAt(c, 12f), 0.5f)
+        // Rotating in place must keep the camera centre fixed throughout the blend.
+        assertArrayEquals(c, PoseBlend.cameraCenter(out), 1e-5f)
+        assertArrayEquals(cameraAt(c, 6f), out, 1e-5f)
+    }
+
+    @Test
+    fun `blend midpoint of two rotated cameras lands at the centre midpoint`() {
+        val out = PoseBlend.blend(
+            cameraAt(floatArrayOf(0f, 0f, 0f), 30f),
+            cameraAt(floatArrayOf(1f, 0f, 1f), 30f),
+            0.5f,
+        )
+        assertArrayEquals(floatArrayOf(0.5f, 0f, 0.5f), PoseBlend.cameraCenter(out), 1e-5f)
+    }
+}

@@ -32,6 +32,11 @@ package com.hereliesaz.sphereslam.reloc
  * before smoothing, while acceptance and continuity still gate on the raw candidate. This keeps the
  * correction out of the tracking decision — it only changes what is drawn.
  *
+ * Continuity is gated against the last accepted raw pose, with two exceptions: the baseline is
+ * dropped once tracking is [TrackingState.LOST], and during [TrackingState.INITIALIZING] a candidate
+ * that fails continuity against the unconfirmed seed replaces it (see the confirmation rule in
+ * [TrackingStateConfig]) instead of being vetoed by a possibly-outlying first pose.
+ *
  * Not thread-safe; drive it from one worker. [reset] clears all state on a new reference / session.
  *
  * @property referenceWidthUnits the reference width in the pose's units, for the acceptance policy's
@@ -120,6 +125,11 @@ class RobustTrackingLoop(
             reacquiring = reacquiring,
         )
         if (!acceptance.accepted) {
+            val continuityFailure = acceptance.rejection == PoseRejection.TRANSLATION_JUMP ||
+                acceptance.rejection == PoseRejection.ANGULAR_JUMP
+            if (continuityFailure && stateMachine.state == TrackingState.INITIALIZING) {
+                return reseed(viewMatrix, nowMs, acceptance.rejection)
+            }
             return miss(bridgeAvailable, nowMs).copy(rejection = acceptance.rejection)
         }
 
@@ -136,8 +146,27 @@ class RobustTrackingLoop(
         return Outcome(renderPose = rendered, state = state, accepted = true)
     }
 
+    /**
+     * During [TrackingState.INITIALIZING] the continuity baseline is an *unconfirmed* pose, which may
+     * itself be the outlier. Rather than let it veto every later candidate, a candidate that fails
+     * continuity against it replaces it as the new seed: the confirmation count restarts at this
+     * candidate, so a lock still needs [TrackingStateConfig.confirmationFrames] consecutive
+     * mutually-consistent poses. Nothing is rendered for the re-seed frame.
+     */
+    private fun reseed(viewMatrix: FloatArray, nowMs: Long, rejection: PoseRejection?): Outcome {
+        stateMachine.onVisualMiss(bridgeAvailable = false, nowMs = nowMs) // restart the count
+        stabilizer.reset()
+        lastAccepted = viewMatrix.copyOf()
+        lastRendered = null
+        val state = stateMachine.onAcceptedVisual(nowMs)
+        return Outcome(renderPose = null, state = state, accepted = false, rejection = rejection)
+    }
+
     private fun miss(bridgeAvailable: Boolean, nowMs: Long): Outcome {
         val state = stateMachine.onVisualMiss(bridgeAvailable, nowMs)
+        // Once LOST (or a never-confirmed acquisition broke its streak), the old pose says nothing about
+        // where the camera now is; drop it so relock is not gated by a stale continuity baseline.
+        if (state == TrackingState.LOST || state == TrackingState.INITIALIZING) lastAccepted = null
         // A brief IMU_BRIDGE keeps the smoothing baseline so a quick visual return blends rather than
         // snaps; a real loss (REACQUIRING/LOST) resets it, since re-lock is a genuine discontinuity.
         if (state != TrackingState.IMU_BRIDGE) stabilizer.reset()

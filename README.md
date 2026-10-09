@@ -10,7 +10,7 @@ SphereSLAM has two layers:
 1. **Planar KPM** — natural-feature tracking of one or more rectified planar references in one
    canonical wall frame. This is the supported consumer API in `:sphereslam`.
 2. **Photosphere / depth relocalization** — orientation-indexed tiles, PnP relocalization,
-   robustness gates, depth-backed triangulation, and relock seeding. This lives in `:reloc` and is
+   robustness gates, depth-backed triangulation building blocks, and relock seeding. This lives in `:reloc` and is
    intentionally experimental while its OpenCV-facing fingerprint surface evolves.
 
 ## API status
@@ -163,10 +163,17 @@ glow.update(
 )
 ~~~
 
+## Native availability
+
+The native engine ships for `arm64-v8a` and `armeabi-v7a` only. On any other ABI, or on any other
+load failure, `SphereSlam.isAvailable()` returns false instead of throwing.
+
 ## Experimental relocalization API
 
 The `:reloc` module intentionally exposes OpenCV-backed types. Its dependency metadata exports
-OpenCV so those signatures are valid for consumers.
+OpenCV so those signatures are valid for consumers. SphereSLAM does not load OpenCV's native
+library itself: load `libopencv_java5` (for example `System.loadLibrary("opencv_java5")`) before
+constructing a `Relocalizer`.
 
 ~~~kotlin
 dependencies {
@@ -206,7 +213,7 @@ deprecated aliases.
 - Physical-size placement/retention: built
 - Angular coverage and glow: built
 - Photosphere freshness/relock loop: built, experimental API
-- Depth-backed tile triangulation/corroboration: built, experimental API
+- Depth-backed tile triangulation/corroboration: building blocks (not yet wired), experimental API
 - Full omnidirectional production map-growth pipeline: still evolving
 
 Provenance: the planar engine originated in HereLiesAz/GraffitiXR and is maintained here as a

@@ -69,7 +69,7 @@ class PanoramaTile(
 
 /**
  * A plain, serialization-ready snapshot of a [PhotosphereMap]'s full state, for persisting the
- * photosphere across process death (as GraffitiXR persists the fingerprint / atlas). The library
+ * photosphere across process death (alongside whatever fingerprint / atlas the host persists). The library
  * does not pick a wire format — the host serializes this DTO however it likes and rebuilds the map
  * with [PhotosphereMap.fromSnapshot].
  *
@@ -81,6 +81,15 @@ class PanoramaTile(
  * [scanned] records capture history independently of timestamp/freshness. [rangePresent] marks which
  * [rangeMeters] entries are meaningful, so snapshots produced by [PhotosphereMap.snapshot] contain
  * only finite float values and remain valid standard JSON without special NaN handling.
+ *
+ * When [scanned] is omitted (snapshots persisted before it existed) it is inferred per tile: a tile
+ * counts as scanned if it is fresh, has a positive timestamp, or carries an orientation or a
+ * (non-NaN) range. A tile captured at timestamp `0L` that has since gone stale and carries neither
+ * tag is indistinguishable from a never-scanned one; pass [scanned] explicitly to preserve it. The
+ * inference tolerates mismatched array lengths; [PhotosphereMap.fromSnapshot] then rejects them.
+ *
+ * [wallHeadingDeg] must be finite (or null for an unanchored map); [PhotosphereMap.fromSnapshot]
+ * rejects NaN/infinite headings.
  */
 class PhotosphereMapSnapshot(
     val sectorCount: Int,
@@ -92,9 +101,7 @@ class PhotosphereMapSnapshot(
     lastUpdatedMs: LongArray,
     orientations: Array<FloatArray?>,
     rangeMeters: FloatArray,
-    scanned: BooleanArray = BooleanArray(lastUpdatedMs.size) { i ->
-        lastUpdatedMs[i] > 0L || !needsUpdate[i]
-    },
+    scanned: BooleanArray = inferScanned(needsUpdate, lastUpdatedMs, orientations, rangeMeters),
     rangePresent: BooleanArray = BooleanArray(rangeMeters.size) { i ->
         !rangeMeters[i].isNaN()
     },
@@ -246,7 +253,8 @@ class PhotosphereMap(
 
     /**
      * Mark the tile a camera direction falls in as freshly captured (no longer needing an update).
-     * Auto-anchors the wall heading on the first call if unset. A no-op (returns null) when either
+     * If the wall heading is unset, the first call whose elevation lies inside the viewable
+     * elevation arc anchors it; an out-of-band call never anchors. A no-op (returns null) when either
      * angle is non-finite or the direction is outside the viewable region.
      *
      * @param representativeOrientation optional unit quaternion `[x, y, z, w]` stored on the tile.
@@ -261,9 +269,10 @@ class PhotosphereMap(
         rangeMeters: Float? = null,
     ): TileId? {
         if (!headingDeg.isFinite() || !elevationDeg.isFinite()) return null
+        // Band check first: an out-of-region sample must not anchor the map.
+        val b = grid.bandOf(elevationDeg) ?: return null
         val anchor = wallHeadingDeg ?: SphereGrid.norm360(headingDeg).also { wallHeadingDeg = it }
         val s = grid.sectorOf(headingDeg, anchor) ?: return null
-        val b = grid.bandOf(elevationDeg) ?: return null
         val id = TileId(s, b)
         applyUpdated(id, nowMs, representativeOrientation, rangeMeters)
         return id
@@ -516,7 +525,8 @@ class PhotosphereMap(
          * Rebuild a map from a [PhotosphereMapSnapshot]. The grid dimensions come from the snapshot;
          * the per-tile arrays must all be length `sectorCount * elevationBandCount`.
          *
-         * @throws IllegalArgumentException if the snapshot's grid is invalid or an array length is wrong.
+         * @throws IllegalArgumentException if the snapshot's grid is invalid, an array length is wrong,
+         *   a present range is non-finite, or [PhotosphereMapSnapshot.wallHeadingDeg] is NaN/infinite.
          */
         fun fromSnapshot(snapshot: PhotosphereMapSnapshot): PhotosphereMap {
             val map = PhotosphereMap(
@@ -547,8 +557,25 @@ class PhotosphereMap(
                 }
                 map.orientation[i] = snapshot.orientations[i]?.copyOf()
             }
-            map.wallHeadingDeg = snapshot.wallHeadingDeg
+            val heading = snapshot.wallHeadingDeg
+            require(heading == null || heading.isFinite()) {
+                "wallHeadingDeg must be finite or null, was $heading"
+            }
+            map.wallHeadingDeg = heading?.let { SphereGrid.norm360(it) }
             return map
         }
     }
+}
+
+/** Legacy `scanned` inference for [PhotosphereMapSnapshot]; bounds-safe on mismatched arrays. */
+private fun inferScanned(
+    needsUpdate: BooleanArray,
+    lastUpdatedMs: LongArray,
+    orientations: Array<FloatArray?>,
+    rangeMeters: FloatArray,
+): BooleanArray = BooleanArray(lastUpdatedMs.size) { i ->
+    lastUpdatedMs[i] > 0L ||
+        needsUpdate.getOrNull(i) == false ||
+        orientations.getOrNull(i) != null ||
+        rangeMeters.getOrNull(i)?.isNaN() == false
 }

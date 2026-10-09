@@ -175,19 +175,72 @@ class SphereSlamStandaloneSessionTest {
 
     @Test
     fun reset_dropsOldPageGeometryAndCreatesFreshEngine() {
-        val engines = ArrayDeque(listOf(FakeEngine(), FakeEngine()))
+        val first = FakeEngine()
+        val second = FakeEngine()
+        val engines = ArrayDeque(listOf(first, second))
+        var created = 0
         val session = SphereSlamStandaloneSession(
             4, 4,
             SphereSlamCalibration(4f, 4f, 2f, 2f),
-            SphereSlamStandaloneSession.EngineFactory { _, _, _ -> engines.removeFirst() },
+            SphereSlamStandaloneSession.EngineFactory { _, _, _ ->
+                created++
+                engines.removeFirst()
+            },
         )
         session.addReference(ByteBuffer.allocateDirect(16), 4, 4, 1f, false)
         assertTrue(session.hasReference)
+        assertEquals(1, created)
+        assertEquals(1, first.addPageCalls)
 
         session.reset()
 
+        // The old engine (and its native atlas) is closed; a second one was created and is in use.
+        assertEquals(1, first.closeCalls)
+        assertFalse(first.isReady)
+        assertEquals(2, created)
+        assertTrue(engines.isEmpty())
+        assertEquals(0, second.closeCalls)
+        assertTrue(session.isReady)
         assertFalse(session.hasReference)
+        // Even if the fresh engine reports a match, no page is registered, so nothing is published.
+        second.nextMatch = PlanarMatch(0, FloatArray(12).also { it[0] = 1f; it[5] = 1f; it[10] = 1f }, 0f, 1)
         assertNull(session.match(ByteBuffer.allocateDirect(16), 1L))
+
+        session.addReference(ByteBuffer.allocateDirect(16), 4, 4, 1f, false)
+        assertEquals(1, second.addPageCalls)
+        assertEquals(1, first.addPageCalls)
+        session.close()
+        assertEquals(1, second.closeCalls)
+        assertEquals(1, first.closeCalls)
+    }
+
+    @Test
+    fun addReference_rejectsNonRigidCanonicalFromPageAtRegistration() {
+        val engine = FakeEngine()
+        val session = SphereSlamStandaloneSession(
+            frameWidth = 4,
+            frameHeight = 2,
+            calibration = SphereSlamCalibration(4f, 4f, 2f, 1f),
+            engineFactory = SphereSlamStandaloneSession.EngineFactory { _, _, _ -> engine },
+        )
+        val nonRigid = listOf(
+            SphereSlamPoseMath.identity4().also { it[0] = 2f }, // scale
+            SphereSlamPoseMath.identity4().also { it[4] = 0.3f }, // shear
+            SphereSlamPoseMath.identity4().also { it[3] = 1f }, // projective bottom row
+            SphereSlamPoseMath.identity4().also { it[14] = Float.NaN },
+            FloatArray(12),
+        )
+        for (bad in nonRigid) {
+            try {
+                session.addReference(
+                    ByteBuffer.allocateDirect(8), 4, 2, 1f, true, canonicalFromPage = bad,
+                )
+                org.junit.Assert.fail("expected rejection of ${bad.toList()}")
+            } catch (_: IllegalArgumentException) {
+            }
+        }
+        assertFalse(session.hasReference)
+        assertEquals(0, engine.addPageCalls)
         session.close()
     }
 
@@ -200,13 +253,17 @@ class SphereSlamStandaloneSessionTest {
 
         var nextMatch: PlanarMatch? = null
         var closeCalls = 0
+        var addPageCalls = 0
 
         override fun addPage(
             luma: ByteBuffer,
             width: Int,
             height: Int,
             page: PlanarPage,
-        ): Int = 64
+        ): Int {
+            addPageCalls++
+            return 64
+        }
 
         override fun match(luma: ByteBuffer): PlanarMatch? = nextMatch
 

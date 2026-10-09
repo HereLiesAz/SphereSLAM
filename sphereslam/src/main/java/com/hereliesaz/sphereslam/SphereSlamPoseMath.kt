@@ -75,8 +75,8 @@ object SphereSlamPoseMath {
      * Convert artoolkitX's row-major camera-from-page 3x4 transform to a column-major OpenGL
      * world-to-view matrix in metres.
      *
-     * KPM's page origin is at the lower-left of the reference image. GraffitiXR renders wall
-     * artwork around its local origin, so [pageCenterXmm]/[pageCenterYmm] shift that lower-left KPM
+     * KPM's page origin is at the lower-left of the reference image. Host renderers typically draw
+     * wall artwork around its local origin, so [pageCenterXmm]/[pageCenterYmm] shift that lower-left KPM
      * frame to a centered wall frame before the handedness conversion.
      *
      * The sign/transpose layout below intentionally mirrors artoolkitX
@@ -152,14 +152,39 @@ object SphereSlamPoseMath {
         0f, 0f, 0f, 1f,
     )
 
-    private fun requireRigid4(matrix: FloatArray, name: String) {
+    /**
+     * Require a finite column-major 4x4 with an affine bottom row. With [requireOrthonormal], also
+     * require the upper 3x3 to be a proper rotation (orthonormal columns, determinant +1) within
+     * [ROTATION_TOLERANCE], i.e. a genuinely rigid transform. Throws IllegalArgumentException.
+     */
+    internal fun requireRigid4(matrix: FloatArray, name: String, requireOrthonormal: Boolean = false) {
         require(matrix.size == 16) { "$name must contain 16 floats" }
         require(matrix.all { it.isFinite() }) { "$name must be finite" }
-        require(kotlin.math.abs(matrix[3]) < 1e-5f)
-        require(kotlin.math.abs(matrix[7]) < 1e-5f)
-        require(kotlin.math.abs(matrix[11]) < 1e-5f)
-        require(kotlin.math.abs(matrix[15] - 1f) < 1e-5f)
+        require(kotlin.math.abs(matrix[3]) < 1e-5f) { "$name must have an affine bottom row" }
+        require(kotlin.math.abs(matrix[7]) < 1e-5f) { "$name must have an affine bottom row" }
+        require(kotlin.math.abs(matrix[11]) < 1e-5f) { "$name must have an affine bottom row" }
+        require(kotlin.math.abs(matrix[15] - 1f) < 1e-5f) { "$name must have an affine bottom row" }
+        if (!requireOrthonormal) return
+        for (a in 0..2) {
+            for (b in a..2) {
+                var dot = 0f
+                for (k in 0..2) dot += matrix[a * 4 + k] * matrix[b * 4 + k]
+                val expected = if (a == b) 1f else 0f
+                require(kotlin.math.abs(dot - expected) < ROTATION_TOLERANCE) {
+                    "$name rotation must be orthonormal (no scale or shear)"
+                }
+            }
+        }
+        val det =
+            matrix[0] * (matrix[5] * matrix[10] - matrix[9] * matrix[6]) -
+                matrix[4] * (matrix[1] * matrix[10] - matrix[9] * matrix[2]) +
+                matrix[8] * (matrix[1] * matrix[6] - matrix[5] * matrix[2])
+        require(kotlin.math.abs(det - 1f) < ROTATION_TOLERANCE) {
+            "$name rotation must be proper (determinant +1, no reflection)"
+        }
     }
+
+    private const val ROTATION_TOLERANCE = 1e-3f
 
     private fun invertRigid4(m: FloatArray): FloatArray {
         val out = identity4()

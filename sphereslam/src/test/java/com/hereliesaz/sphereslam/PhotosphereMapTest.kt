@@ -262,4 +262,86 @@ class PhotosphereMapTest {
         assertFalse(m.needsUpdate(TileId(99, 99)))
         assertNull(m.tile(TileId(99, 99)))
     }
+
+    @Test
+    fun `an out-of-band first sample does not anchor the map`() {
+        val m = fullRing()
+        // Pointing at the floor (below the 60 deg elevation arc) must not anchor.
+        assertNull(m.markUpdated(headingDeg = 200f, elevationDeg = -80f))
+        assertFalse(m.hasWallHeading())
+        val id = m.markUpdated(headingDeg = 30f, elevationDeg = 0f)
+        assertNotNull(id)
+        assertTrue(m.hasWallHeading())
+        // Anchored at 30 deg (not 200): 4 sectors of 90 deg, the sample sits at delta 0 -> sector 2,
+        // whose center is anchor + 45 = 75 deg.
+        assertEquals(TileId(2, 1), id)
+        assertEquals(75f, m.tile(id!!)!!.center.azimuthDeg, 1e-4f)
+    }
+
+    @Test
+    fun `fromSnapshot rejects a non-finite wall heading and normalizes a finite one`() {
+        val m = fullRing()
+        m.markUpdated(headingDeg = 10f)
+        for (badHeading in listOf(Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY)) {
+            try {
+                PhotosphereMap.fromSnapshot(m.snapshot().copy(wallHeadingDeg = badHeading))
+                throw AssertionError("expected IllegalArgumentException for $badHeading")
+            } catch (e: IllegalArgumentException) {
+                // expected
+            }
+        }
+        val unanchored = PhotosphereMap.fromSnapshot(m.snapshot().copy(wallHeadingDeg = null))
+        assertFalse(unanchored.hasWallHeading())
+        val wrapped = PhotosphereMap.fromSnapshot(m.snapshot().copy(wallHeadingDeg = 370f))
+        assertEquals(10f, wrapped.snapshot().wallHeadingDeg!!, 1e-4f)
+    }
+
+    @Test
+    fun `legacy snapshot with mismatched arrays is rejected, not crashed, when scanned is inferred`() {
+        // Omitting `scanned` runs the default inference; a short needsUpdate must not throw
+        // ArrayIndexOutOfBounds from the constructor, and fromSnapshot must reject it cleanly.
+        val snapshot = PhotosphereMapSnapshot(
+            sectorCount = 4,
+            viewableHalfAngleDeg = 180f,
+            elevationBandCount = 3,
+            viewableElevationHalfAngleDeg = 60f,
+            wallHeadingDeg = 0f,
+            needsUpdate = BooleanArray(2) { true },
+            lastUpdatedMs = LongArray(12),
+            orientations = arrayOfNulls(12),
+            rangeMeters = FloatArray(12) { Float.NaN },
+        )
+        try {
+            PhotosphereMap.fromSnapshot(snapshot)
+            throw AssertionError("expected IllegalArgumentException")
+        } catch (e: IllegalArgumentException) {
+            // expected
+        }
+    }
+
+    @Test
+    fun `legacy scanned inference keeps a stale t=0 capture that carries a tag`() {
+        val n = 12
+        val orientations = arrayOfNulls<FloatArray>(n).also { it[0] = floatArrayOf(0f, 0f, 0f, 1f) }
+        val ranges = FloatArray(n) { Float.NaN }.also { it[1] = 2.5f }
+        val snapshot = PhotosphereMapSnapshot(
+            sectorCount = 4,
+            viewableHalfAngleDeg = 180f,
+            elevationBandCount = 3,
+            viewableElevationHalfAngleDeg = 60f,
+            wallHeadingDeg = 0f,
+            needsUpdate = BooleanArray(n) { true }, // every tile stale
+            lastUpdatedMs = LongArray(n), // every timestamp 0L
+            orientations = orientations,
+            rangeMeters = ranges,
+        )
+        val scanned = snapshot.scanned
+        assertTrue("orientation-tagged t=0 tile was scanned", scanned[0])
+        assertTrue("range-tagged t=0 tile was scanned", scanned[1])
+        assertFalse("untagged stale t=0 tile reads as never scanned", scanned[2])
+        val restored = PhotosphereMap.fromSnapshot(snapshot)
+        assertTrue(restored.hasBeenScanned(TileId(0, 0)))
+        assertTrue(restored.hasBeenScanned(TileId(0, 1)))
+        assertFalse(restored.hasBeenScanned(TileId(0, 2)))
+    }
 }

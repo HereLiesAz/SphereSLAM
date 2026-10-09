@@ -40,4 +40,19 @@ class CoverageGlowGeometryTest {
         assertEquals(1f, data[2], 0f)   // first, on-screen
         assertEquals(0.4f, data[5], 0f) // second, off-screen
     }
+
+    @Test
+    fun `point size is clamped to the driver range`() {
+        assertEquals(64f, CoverageGlowGeometry.clampPointSize(220f, 1f, 64f), 0f)
+        assertEquals(32f, CoverageGlowGeometry.clampPointSize(32f, 1f, 64f), 0f)
+        assertEquals(2f, CoverageGlowGeometry.clampPointSize(0.5f, 2f, 64f), 0f)
+        assertEquals(1f, CoverageGlowGeometry.clampPointSize(0.5f, 0f, 64f), 0f)
+    }
+
+    @Test
+    fun `an unqueried or invalid range leaves the request unclamped`() {
+        assertEquals(220f, CoverageGlowGeometry.clampPointSize(220f, 0f, 0f), 0f)
+        assertEquals(220f, CoverageGlowGeometry.clampPointSize(220f, 10f, 5f), 0f)
+        assertEquals(220f, CoverageGlowGeometry.clampPointSize(220f, Float.NaN, 64f), 0f)
+    }
 }

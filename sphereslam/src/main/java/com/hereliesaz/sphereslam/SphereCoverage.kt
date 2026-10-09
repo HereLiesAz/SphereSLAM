@@ -78,7 +78,8 @@ class SphereCoverage(
 
     /**
      * Compass heading (degrees) the camera faces when the surface is captured head-on — the center of
-     * the viewable arc. Null until anchored; the first observation auto-anchors to its own heading.
+     * the viewable arc. Null until anchored; the first in-region observation auto-anchors to its own
+     * heading.
      */
     private var wallHeadingDeg: Float? = null
 
@@ -102,8 +103,9 @@ class SphereCoverage(
     fun hasWallHeading(): Boolean = wallHeadingDeg != null
 
     /**
-     * Fold one camera direction into the coverage. Auto-anchors the wall heading on the first call if
-     * unset (to this call's heading).
+     * Fold one camera direction into the coverage. If the wall heading is unset, the first sample
+     * whose elevation lies inside the viewable elevation arc anchors it (to that sample's heading);
+     * samples outside the elevation arc are ignored and never anchor.
      *
      * @param headingDeg absolute compass bearing of the camera axis, degrees (0 = north, clockwise).
      * @param elevationDeg camera axis angle above (+) / below (−) the horizon, degrees; defaults to
@@ -113,9 +115,10 @@ class SphereCoverage(
      */
     fun observe(headingDeg: Float, elevationDeg: Float = 0f): Boolean {
         if (!headingDeg.isFinite() || !elevationDeg.isFinite()) return false
+        // Band check first: an out-of-region sample (e.g. pointing at the floor) must not anchor.
+        val band = grid.bandOf(elevationDeg) ?: return false
         val anchor = wallHeadingDeg ?: norm360(headingDeg).also { wallHeadingDeg = it }
         val sector = grid.sectorOf(headingDeg, anchor) ?: return false
-        val band = grid.bandOf(elevationDeg) ?: return false
         total++
         val index = sector * elevationBandCount + band
         val wasEmpty = hits[index] == 0

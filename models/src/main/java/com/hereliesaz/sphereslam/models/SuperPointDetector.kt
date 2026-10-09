@@ -52,7 +52,7 @@ class SuperPointDetector(
         return try {
             val dir = File(appContext.filesDir, MODEL_DIR).apply { mkdirs() }
             val graph = File(dir, assetName)
-            if (!copyAssetIfNeeded(assetName, graph)) return false
+            if (!ModelAssets.copyAssetIfNeeded(appContext, assetName, graph, TAG)) return false
             val environment = OrtEnvironment.getEnvironment()
             session = environment.createSession(graph.absolutePath, OrtSession.SessionOptions())
             env = environment
@@ -70,12 +70,12 @@ class SuperPointDetector(
     fun detect(bitmap: Bitmap): SuperPointOutput? {
         val s = session ?: return null
         val environment = env ?: return null
+        var scaled: Bitmap? = null
         return try {
             val n = inputSize
-            val scaled = Bitmap.createScaledBitmap(bitmap, n, n, true)
+            scaled = Bitmap.createScaledBitmap(bitmap, n, n, true)
             val pixels = IntArray(n * n)
             scaled.getPixels(pixels, 0, n, 0, 0, n, n)
-            if (scaled !== bitmap) scaled.recycle()
             val gray = FloatArray(n * n)
             for (i in pixels.indices) {
                 val p = pixels[i]
@@ -102,6 +102,9 @@ class SuperPointDetector(
         } catch (t: Throwable) {
             Log.w(TAG, "inference failed", t)
             null
+        } finally {
+            // Recycle on every path (including a throwing getPixels / createTensor / run).
+            scaled?.let { if (it !== bitmap) it.recycle() }
         }
     }
 
@@ -109,18 +112,6 @@ class SuperPointDetector(
         val a = FloatArray(remaining())
         get(a)
         return a
-    }
-
-    private fun copyAssetIfNeeded(name: String, dest: File): Boolean {
-        return try {
-            if (dest.exists() && dest.length() > 0L) return true
-            val tmp = File(dest.parentFile, "${dest.name}.tmp")
-            appContext.assets.open(name).use { input -> tmp.outputStream().use { input.copyTo(it) } }
-            if (!tmp.renameTo(dest)) { tmp.delete(); return false }
-            dest.exists() && dest.length() > 0L
-        } catch (t: Throwable) {
-            Log.w(TAG, "asset $name unavailable", t); false
-        }
     }
 
     @Synchronized

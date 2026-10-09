@@ -332,6 +332,32 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeMatchPlanar(
 #endif
 }
 
+// Replace the atlas with an empty one. KPM has no API to remove pages from a handle's reference set,
+// so the handle is rebuilt from the session's retained calibration; old pages can never match again.
+JNIEXPORT jboolean JNICALL
+Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeClearPages(
+        JNIEnv *, jobject, jlong sessionValue) {
+#ifdef HAVE_ARX_KPM
+    KpmSession *session = asSession(sessionValue);
+    std::lock_guard<std::mutex> registryLock(gKpmRegistryMutex);
+    if (!session || gKpmSessions.find(session) == gKpmSessions.end() || !session->cameraParams) {
+        return JNI_FALSE;
+    }
+    if (session->handle) kpmDeleteHandle(&session->handle);
+    if (session->atlas) kpmDeleteRefDataSet(&session->atlas);
+    session->handle = kpmCreateHandle(session->cameraParams);
+    if (!session->handle) {
+        // nativeAddPlanarPage / nativeMatchPlanar treat a null handle as unusable (-1).
+        LOGE("nativeClearPages: KPM handle re-creation failed");
+        return JNI_FALSE;
+    }
+    return JNI_TRUE;
+#else
+    (void) sessionValue;
+    return JNI_FALSE;
+#endif
+}
+
 JNIEXPORT void JNICALL
 Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeDestroySession(
         JNIEnv *, jobject, jlong sessionValue) {

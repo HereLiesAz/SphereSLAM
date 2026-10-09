@@ -47,8 +47,12 @@ object CoverageGlowProjection {
      * @param cameraHeadingDeg camera axis compass heading, degrees (as [CameraAttitudeProvider]
      *   reports; 0 = north, clockwise).
      * @param cameraElevationDeg camera axis elevation, degrees (above the horizon positive).
-     * @param horizontalFovDeg the preview's horizontal field of view, degrees.
-     * @param verticalFovDeg the preview's vertical field of view, degrees.
+     * @param horizontalFovDeg the preview's horizontal field of view, degrees, finite and strictly
+     *   inside `(0, 180)`.
+     * @param verticalFovDeg the preview's vertical field of view, degrees, finite and strictly inside
+     *   `(0, 180)`.
+     * @throws IllegalArgumentException if either field of view is outside `(0, 180)` (a pinhole
+     *   projection is undefined at 0 and 180 degrees and beyond).
      * @return one [GlowMark] per placeable direction; directions at or behind the view plane are
      *   dropped, and the list is empty when [directions] is empty or the camera looks straight
      *   up/down (no stable screen basis).
@@ -60,6 +64,12 @@ object CoverageGlowProjection {
         horizontalFovDeg: Float,
         verticalFovDeg: Float,
     ): List<GlowMark> {
+        require(horizontalFovDeg.isFinite() && horizontalFovDeg > 0f && horizontalFovDeg < 180f) {
+            "horizontalFovDeg must be in (0, 180), was $horizontalFovDeg"
+        }
+        require(verticalFovDeg.isFinite() && verticalFovDeg > 0f && verticalFovDeg < 180f) {
+            "verticalFovDeg must be in (0, 180), was $verticalFovDeg"
+        }
         if (directions.isEmpty()) return emptyList()
         val forward = enu(cameraHeadingDeg, cameraElevationDeg)
         val worldUp = floatArrayOf(0f, 0f, 1f)

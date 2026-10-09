@@ -9,7 +9,7 @@ import kotlin.math.sqrt
  * and where the point landed in that image — recover the point's 3D position, and report how well the
  * views agree ([Triangulation.reprojectionRmsPx]) and how well they constrain depth
  * ([Triangulation.minParallaxDeg]). Those two numbers are the raw inputs a geometric gate weighs
- * before a tile is admitted (that gate lands in 0.20); this stage only measures, it does not judge.
+ * before a tile is admitted (that gate is [TileGate]); this stage only measures, it does not judge.
  *
  * Pure math — linear (DLT) triangulation with a hand-rolled 4×4 symmetric eigensolver, Double
  * internally for conditioning — so it runs and is unit-tested without OpenCV or a device.

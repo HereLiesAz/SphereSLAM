@@ -14,6 +14,8 @@ android {
         minSdk = 26
         consumerProguardFiles("consumer-rules.pro")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // Native ABIs shipped. Other ABIs (x86/x86_64 emulators) get no libsphereslam.so;
+        // KpmBridge.isAvailable() then reports false instead of crashing.
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
@@ -32,11 +34,6 @@ android {
         }
     }
 
-    // Consume the OpenCV Maven artifact's Prefab part from CMake (find_package(OpenCV)).
-    buildFeatures {
-        prefab = true
-    }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -50,9 +47,6 @@ android {
 dependencies {
     implementation(libs.androidx.core.ktx)
     api(project(":core:common"))
-    // OpenCV from Maven Central. Its Prefab part exposes the native C++ world to CMake
-    // (find_package(OpenCV) -> OpenCV::opencv_java5) and auto-packages libopencv_java5.so.
-    implementation(libs.opencv)
     testImplementation(libs.junit)
 }
 

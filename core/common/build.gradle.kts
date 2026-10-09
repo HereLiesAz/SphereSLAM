@@ -22,8 +22,6 @@ android {
 
 dependencies {
     implementation(libs.androidx.core.ktx)
-    // NativeLibLoader calls OpenCVLoader.
-    implementation(libs.opencv)
     testImplementation(libs.junit)
 }
 
