@@ -13,14 +13,20 @@ import java.nio.ByteBuffer
  * The pinned artoolkitX binary/FREAK matcher requires camera calibration even though it exposes a
  * homography-handle constructor, so runtime sessions are deliberately calibrated from fx/fy/cx/cy.
  * When the artoolkitX submodule is absent, every KPM entry point safely reports unavailable.
+ *
+ * ABI support: libsphereslam is built for `arm64-v8a` and `armeabi-v7a` only. On any other ABI
+ * (e.g. x86/x86_64 emulators), or whenever the native library fails to load for any reason, class
+ * initialization still succeeds and [isAvailable] returns false; no ExceptionInInitializerError is
+ * thrown. Callers must check [isAvailable] before using the session entry points, which otherwise
+ * fail with UnsatisfiedLinkError.
  */
 @InternalSphereSlamApi
 object KpmBridge {
-    init {
-        NativeLibLoader.loadAll()
-    }
+    /** Whether libsphereslam loaded. Never throws; see [NativeLibLoader.loadAll]. */
+    private val nativeLoaded: Boolean = NativeLibLoader.loadAll()
 
-    fun isAvailable(): Boolean = runCatching { nativeKpmAvailable() }.getOrDefault(false)
+    fun isAvailable(): Boolean =
+        nativeLoaded && runCatching { nativeKpmAvailable() }.getOrDefault(false)
 
     fun smokeTest(width: Int, height: Int): Boolean =
         width > 0 && height > 0 && nativeKpmSmokeTest(width, height)
@@ -93,6 +99,17 @@ object KpmBridge {
         return nativeMatchPlanar(session, luma, out)
     }
 
+    /**
+     * Drops every page from the session's atlas, keeping its calibration. After this, [matchPlanar]
+     * reports no match until a page is added again with [addPlanarPage]; previously added pages can
+     * never match again. Returns false when the session is unknown or the matcher could not be
+     * rebuilt.
+     */
+    fun clearPages(session: Long): Boolean {
+        require(session != 0L)
+        return nativeClearPages(session)
+    }
+
     fun destroySession(session: Long) {
         if (session != 0L) nativeDestroySession(session)
     }
@@ -118,6 +135,7 @@ object KpmBridge {
         maxFeatures: Int,
     ): Int
     private external fun nativeMatchPlanar(session: Long, luma: ByteBuffer, out: FloatArray): Int
+    private external fun nativeClearPages(session: Long): Boolean
     private external fun nativeDestroySession(session: Long)
 
     const val MATCH_OUTPUT_FLOATS = 14

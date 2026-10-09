@@ -44,7 +44,9 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
     @Volatile private var latestHeadingDeg: Float? = null
     @Volatile private var latestElevationDeg: Float? = null
     @Volatile private var reliable: Boolean = true
-    private var registered = false
+    // Guarded by `lock`; volatile so unsynchronized readers see the latest registration state.
+    @Volatile private var registered = false
+    private val lock = Any()
 
     /**
      * @return latest camera-axis compass heading in degrees `[0, 360)` (0 = north, clockwise), or null
@@ -61,21 +63,35 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
     /** False once the system reports the magnetometer unreliable (needs a figure-8 recalibration). */
     val isReliable: Boolean get() = reliable
 
-    /** Begin sampling. Safe to call repeatedly. UI rate suffices for keyframe-cadence coverage. */
+    /**
+     * Begin sampling. Safe to call repeatedly and from any thread. UI rate suffices for
+     * keyframe-cadence coverage. A fresh start resets [isReliable] to true (the system re-reports
+     * accuracy on registration) and discards any previous sample.
+     */
     fun start() {
         val sm = sensorManager ?: return
         val sensor = rotationSensor ?: return
-        if (registered) return
-        registered = sm.registerListener(this, sensor, SensorManager.SENSOR_DELAY_UI)
+        synchronized(lock) {
+            if (registered) return
+            reliable = true
+            latestHeadingDeg = null
+            latestElevationDeg = null
+            registered = sm.registerListener(this, sensor, SensorManager.SENSOR_DELAY_UI)
+        }
     }
 
-    /** Stop sampling. Idempotent. Clears the last sample so a later [start] never reports stale data. */
+    /**
+     * Stop sampling. Idempotent and safe from any thread. Clears the last sample so a later [start]
+     * never reports stale data.
+     */
     fun stop() {
-        if (!registered) return
-        sensorManager?.unregisterListener(this)
-        registered = false
-        latestHeadingDeg = null
-        latestElevationDeg = null
+        synchronized(lock) {
+            if (!registered) return
+            sensorManager?.unregisterListener(this)
+            registered = false
+            latestHeadingDeg = null
+            latestElevationDeg = null
+        }
     }
 
     override fun onSensorChanged(event: SensorEvent) {

@@ -38,4 +38,16 @@ internal object CoverageGlowGeometry {
         }
         return out
     }
+
+    /**
+     * Clamp a requested point-sprite size to the driver's `GL_ALIASED_POINT_SIZE_RANGE`
+     * ([rangeMin], [rangeMax]); `gl_PointSize` outside that range is undefined. A missing or invalid
+     * range (non-finite, non-positive max, or min > max — e.g. before a GL context exists) leaves
+     * the request unclamped apart from a lower bound of 1 px.
+     */
+    fun clampPointSize(requested: Float, rangeMin: Float, rangeMax: Float): Float {
+        val validRange = rangeMin.isFinite() && rangeMax.isFinite() && rangeMax > 0f && rangeMin <= rangeMax
+        if (!validRange) return maxOf(requested, 1f)
+        return requested.coerceIn(maxOf(rangeMin, 1f).coerceAtMost(rangeMax), rangeMax)
+    }
 }

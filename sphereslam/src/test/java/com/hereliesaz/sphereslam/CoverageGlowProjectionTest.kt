@@ -85,4 +85,26 @@ class CoverageGlowProjectionTest {
             CoverageGlowProjection.project(emptyList(), 0f, 0f, 60f, 45f).isEmpty(),
         )
     }
+
+    @Test
+    fun `field of view outside the open interval 0 to 180 is rejected`() {
+        val bad = listOf(0f, -10f, 180f, 200f, Float.NaN, Float.POSITIVE_INFINITY)
+        for (fov in bad) {
+            for ((h, v) in listOf(fov to 45f, 60f to fov)) {
+                try {
+                    CoverageGlowProjection.project(listOf(dir(0f, 0f)), 0f, 0f, h, v)
+                    org.junit.Assert.fail("expected rejection of fov h=$h v=$v")
+                } catch (_: IllegalArgumentException) {
+                }
+            }
+        }
+        // Validation happens even with no directions to place.
+        try {
+            CoverageGlowProjection.project(emptyList(), 0f, 0f, 180f, 45f)
+            org.junit.Assert.fail("expected rejection of fov 180")
+        } catch (_: IllegalArgumentException) {
+        }
+        // Just inside the bounds is accepted.
+        assertEquals(1, CoverageGlowProjection.project(listOf(dir(0f, 0f)), 0f, 0f, 179.9f, 0.1f).size)
+    }
 }

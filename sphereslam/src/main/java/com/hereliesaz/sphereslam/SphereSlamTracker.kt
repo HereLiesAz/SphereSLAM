@@ -4,6 +4,7 @@ import com.hereliesaz.sphereslam.nativebridge.KpmBridge
 import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -13,6 +14,12 @@ import java.util.concurrent.atomic.AtomicReference
  * This class never produces the renderer's primary view/projection matrices. ARCore keeps that job.
  * SphereSLAM consumes copies of the same camera luminance frames on a private worker and publishes
  * wall-relative observations for relocalization and drift correction.
+ *
+ * The tracker holds at most one reference page: [setReference] replaces the native atlas and
+ * [clearReference] empties it, so a previously registered page can never produce an observation
+ * afterwards. When the native engine is unavailable (see [SphereSlam.isAvailable]; e.g. on ABIs
+ * other than arm64-v8a/armeabi-v7a) every call is a safe no-op and [isNativeAvailable] is false.
+ * Calls racing or following [close] are ignored.
  */
 class SphereSlamTracker internal constructor(
     private val native: Native,
@@ -82,6 +89,9 @@ class SphereSlamTracker internal constructor(
             maxFeatures: Int,
         ): Boolean
         fun match(handle: Long, luma: ByteArray, timestampNs: Long): Observation?
+
+        /** Remove every page from the handle's atlas. */
+        fun clear(handle: Long): Boolean
     }
 
     private data class PendingFrame(val luma: ByteArray, val timestampNs: Long)
@@ -104,9 +114,9 @@ class SphereSlamTracker internal constructor(
     fun configure(camera: CameraModel) {
         if (closed.get()) return
         if (camera == cameraModel && nativeHandle != 0L) return
-        worker.execute {
-            if (closed.get()) return@execute
-            if (camera == cameraModel && nativeHandle != 0L) return@execute
+        submit {
+            if (closed.get()) return@submit
+            if (camera == cameraModel && nativeHandle != 0L) return@submit
             destroyHandle()
             cameraModel = camera
             referenceReady = false
@@ -119,8 +129,8 @@ class SphereSlamTracker internal constructor(
     /** Start a fresh wall atlas with this calibrated camera. */
     fun reset(camera: CameraModel) {
         if (closed.get()) return
-        worker.execute {
-            if (closed.get()) return@execute
+        submit {
+            if (closed.get()) return@submit
             destroyHandle()
             cameraModel = camera
             referenceReady = false
@@ -130,6 +140,10 @@ class SphereSlamTracker internal constructor(
         }
     }
 
+    /**
+     * Register [luma] as the tracker's only reference page, replacing any earlier one in the native
+     * atlas. Runs asynchronously on the tracker worker; [isReferenceReady] flips once it is accepted.
+     */
     fun setReference(
         luma: ByteBuffer,
         width: Int,
@@ -144,16 +158,18 @@ class SphereSlamTracker internal constructor(
         require(dpi > 0f)
         require(maxFeatures > 0)
         val packed = packLuma(luma, width, height, rowStride)
-        worker.execute {
-            if (closed.get()) return@execute
+        submit {
+            if (closed.get()) return@submit
             val handle = nativeHandle
             val model = cameraModel
             if (handle == 0L || model == null) {
                 referenceReady = false
                 referenceGeometry = null
-                return@execute
+                return@submit
             }
-            val accepted = native.setReference(
+            // Replace, never append: drop any earlier page from the native atlas first.
+            referenceReady = false
+            val accepted = native.clear(handle) && native.setReference(
                 handle, packed, width, height, dpi, pageNo, imageNo, maxFeatures
             )
             referenceReady = accepted
@@ -166,12 +182,24 @@ class SphereSlamTracker internal constructor(
         }
     }
 
-    /** Stop publishing/matching the current page without tearing down the calibrated native handle. */
+    /**
+     * Stop publishing/matching the current page and remove it from the native atlas, keeping the
+     * calibrated native handle. A later [setReference] starts from an empty atlas.
+     */
     fun clearReference() {
         referenceReady = false
         referenceGeometry = null
         pendingFrame.set(null)
         latest.set(null)
+        if (closed.get()) return
+        submit {
+            if (closed.get()) return@submit
+            val handle = nativeHandle
+            if (handle != 0L) native.clear(handle)
+            referenceReady = false
+            referenceGeometry = null
+            latest.set(null)
+        }
     }
 
     /**
@@ -194,7 +222,7 @@ class SphereSlamTracker internal constructor(
 
     private fun scheduleDrain() {
         if (!drainScheduled.compareAndSet(false, true)) return
-        worker.execute {
+        val scheduled = submit {
             try {
                 while (!closed.get()) {
                     val frame = pendingFrame.getAndSet(null) ?: break
@@ -208,12 +236,24 @@ class SphereSlamTracker internal constructor(
                 if (!closed.get() && pendingFrame.get() != null) scheduleDrain()
             }
         }
+        if (!scheduled) drainScheduled.set(false)
+    }
+
+    /**
+     * Queue [task] on the worker. Returns false when the worker already shut down (a call racing
+     * [close]); that is treated exactly like calling after close: ignored.
+     */
+    private fun submit(task: () -> Unit): Boolean = try {
+        worker.execute(task)
+        true
+    } catch (_: RejectedExecutionException) {
+        false
     }
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         pendingFrame.set(null)
-        worker.execute {
+        submit {
             destroyHandle()
             latest.set(null)
         }
@@ -253,7 +293,10 @@ class SphereSlamTracker internal constructor(
     }
 
     private object KpmNative : Native {
-        override val available: Boolean get() = KpmBridge.isAvailable()
+        // KpmBridge.isAvailable() never throws; runCatching also covers a linkage error raised by a
+        // KpmBridge class that failed to initialize, so configure() degrades instead of crashing.
+        override val available: Boolean
+            get() = runCatching { KpmBridge.isAvailable() }.getOrDefault(false)
 
         override fun create(camera: CameraModel): Long = KpmBridge.createCalibratedSession(
             camera.width, camera.height, camera.fx, camera.fy, camera.cx, camera.cy
@@ -284,6 +327,8 @@ class SphereSlamTracker internal constructor(
                 maxFeatures,
             ) > 0
         }
+
+        override fun clear(handle: Long): Boolean = KpmBridge.clearPages(handle)
 
         override fun match(handle: Long, luma: ByteArray, timestampNs: Long): Observation? {
             val direct = ByteBuffer.allocateDirect(luma.size)

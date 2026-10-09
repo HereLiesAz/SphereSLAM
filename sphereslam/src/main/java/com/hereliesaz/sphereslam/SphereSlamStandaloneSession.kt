@@ -118,6 +118,8 @@ class SphereSlamStandaloneSession internal constructor(
      * normalized width such as 1f with [physicallyMetric]=false for visual-only registration.
      * @param canonicalFromPage column-major rigid transform placing this page in the canonical wall
      * frame. The value is copied before it is retained.
+     * @throws IllegalArgumentException if [canonicalFromPage] is not a finite rigid transform
+     * (affine bottom row, orthonormal proper rotation); nothing is registered in that case.
      */
     fun addReference(
         luma: ByteBuffer,
@@ -132,9 +134,8 @@ class SphereSlamStandaloneSession internal constructor(
     ): Reference {
         requireOpen()
         require(!references.containsKey(pageNo)) { "page $pageNo is already registered" }
-        require(canonicalFromPage.size == 16 && canonicalFromPage.all { it.isFinite() }) {
-            "canonicalFromPage must be a finite 4x4 transform"
-        }
+        // Validate rigidity here, at registration, rather than on the first match that uses it.
+        SphereSlamPoseMath.requireRigid4(canonicalFromPage, "canonicalFromPage", requireOrthonormal = true)
         val dpi = SphereSlamPoseMath.dpiForReferenceWidth(width, referenceWidthMeters)
         val geometry = SphereSlamPoseMath.pageGeometry(width, height, dpi)
         val featureCount = engine.addPage(

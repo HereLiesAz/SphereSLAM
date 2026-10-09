@@ -153,4 +153,23 @@ class SphereCoverageTest {
         assertEquals(2, c.observationCount)
         assertEquals(2f / (SphereCoverage.DEFAULT_SECTORS * 2), c.coverageFraction(), 1e-6f)
     }
+
+    @Test
+    fun `an out-of-band first sample does not anchor the wall heading`() {
+        val c = SphereCoverage(
+            sectorCount = 4,
+            viewableHalfAngleDeg = 90f,
+            elevationBandCount = 2,
+            viewableElevationHalfAngleDeg = 45f,
+        )
+        // Looking at the floor at heading 180: outside the elevation arc, must not anchor.
+        assertFalse(c.observe(180f, -80f))
+        assertFalse(c.hasWallHeading())
+        assertEquals(0, c.observationCount)
+        // The first in-band sample anchors at its own heading (0), so 180 is now behind the wall.
+        assertTrue(c.observe(0f, 10f))
+        assertTrue(c.hasWallHeading())
+        assertFalse(c.observe(180f, 10f))
+        assertEquals(1, c.observationCount)
+    }
 }

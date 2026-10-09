@@ -2,60 +2,41 @@ package com.hereliesaz.sphereslam.common.util
 
 import android.util.Log
 import com.hereliesaz.sphereslam.common.InternalSphereSlamApi
-import org.opencv.android.OpenCVLoader
-import java.util.concurrent.atomic.AtomicBoolean
 
+/**
+ * Loads SphereSLAM's native engine (`libsphereslam.so`).
+ *
+ * Loading never throws. Any failure — most commonly an `UnsatisfiedLinkError` on an ABI the AAR does
+ * not ship (the native library is built for `arm64-v8a` and `armeabi-v7a` only, so x86/x86_64
+ * emulators have no `libsphereslam.so`) — is logged and reported as `false`, so callers can degrade
+ * to "unavailable" instead of crashing in a class initializer.
+ *
+ * libsphereslam has no OpenCV dependency (the embedded artoolkitX subset is built with
+ * `HAVE_OPENCV 0`), so OpenCV is not loaded here.
+ */
 @InternalSphereSlamApi
 object NativeLibLoader {
-    private val isLoaded = AtomicBoolean(false)
-    // OpenCV loads before libsphereslam. Tracked separately so that if the sphereslam load fails and a
-    // caller retries, we skip re-running the OpenCV load sequence (it already succeeded) and only retry
-    // the step that failed, rather than re-invoking System.loadLibrary for an already-loaded OpenCV.
-    private val opencvLoaded = AtomicBoolean(false)
+    private const val TAG = "NativeLibLoader"
 
+    @Volatile private var loaded = false
+
+    /**
+     * Load libsphereslam once. Returns true when it is loaded (now or previously); false when the
+     * load failed. A failed load may be retried by calling again.
+     */
     @Synchronized
-    fun loadAll() {
-        if (isLoaded.get()) return
-
-        try {
-            if (!opencvLoaded.get()) {
-            // Step 1: Ensure OpenCV is loaded. GraffitiXR depends on its native symbols.
-            // Priority 1: Try exact versioned name (v5)
-            // Priority 2: Try generic name
-            // Priority 3: Try OpenCVLoader.initLocal()
-            val opencvOk = try {
-                System.loadLibrary("opencv_java5")
-                Log.i("NativeLibLoader", "libopencv_java5.so loaded directly.")
-                true
-            } catch (e: UnsatisfiedLinkError) {
-                try {
-                    System.loadLibrary("opencv_java")
-                    Log.i("NativeLibLoader", "libopencv_java.so loaded directly.")
-                    true
-                } catch (e2: UnsatisfiedLinkError) {
-                    Log.w("NativeLibLoader", "Direct load failed (${e.message} / ${e2.message}), trying OpenCVLoader fallback...")
-                    OpenCVLoader.initLocal()
-                }
-            }
-
-            if (!opencvOk) {
-                val errorMsg = "CRITICAL: OpenCV native symbols could not be registered."
-                Log.e("NativeLibLoader", errorMsg)
-                throw RuntimeException(errorMsg)
-            }
-            opencvLoaded.set(true)
-            }
-
-            // Step 2: Load our primary C++ engine (depends on symbols from Step 1)
+    fun loadAll(): Boolean {
+        if (loaded) return true
+        return try {
             System.loadLibrary("sphereslam")
-            Log.i("NativeLibLoader", "libsphereslam.so loaded successfully.")
-
-            // Only set to true if BOTH loaded successfully
-            isLoaded.set(true)
-        } catch (e: UnsatisfiedLinkError) {
-            val errorMsg = "CRITICAL: Native libraries could not be loaded!"
-            Log.e("NativeLibLoader", errorMsg, e)
-            throw RuntimeException("$errorMsg ${e.message}", e)
+            Log.i(TAG, "libsphereslam.so loaded successfully.")
+            loaded = true
+            true
+        } catch (t: Throwable) {
+            // UnsatisfiedLinkError (missing ABI / library), SecurityException, or anything else:
+            // never propagate out of a class initializer.
+            Log.e(TAG, "libsphereslam.so could not be loaded; SphereSLAM native is unavailable.", t)
+            false
         }
     }
 }

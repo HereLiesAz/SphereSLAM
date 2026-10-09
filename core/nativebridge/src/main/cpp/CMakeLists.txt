@@ -3,10 +3,7 @@ cmake_minimum_required(VERSION 4.4.4)
 
 project("sphereslam_native")
 
-# OpenCV is imported from Maven Central (org.opencv:opencv). Since 4.9.0 that artifact ships a
-# Prefab part, so with buildFeatures { prefab = true } in build.gradle.kts, AGP generates a CMake
-# config package for it.
-find_package(OpenCV REQUIRED CONFIG)
+# libsphereslam has no OpenCV dependency: the embedded artoolkitX subset is built with HAVE_OPENCV 0.
 
 # SphereSLAM: the self-contained artoolkitX KPM bridge.
 add_library(sphereslam SHARED
@@ -16,7 +13,7 @@ add_library(sphereslam SHARED
 # 16 KB page-size support. Android's newer devices (and Play's requirement) use a 16 KB memory page
 # size; a shared library laid out for 4 KB pages fails to load there. Force 16 KB ELF segment
 # alignment explicitly so libsphereslam.so is correct regardless of the NDK's default (older NDKs
-# default to 4 KB). Prebuilt deps (ONNX Runtime, OpenCV) ship their own 16 KB-aligned .so.
+# default to 4 KB).
 target_link_options(sphereslam PRIVATE
     "-Wl,-z,max-page-size=16384"
     "-Wl,-z,common-page-size=16384"
@@ -25,9 +22,9 @@ target_link_options(sphereslam PRIVATE
 # ---------------------------------------------------------------------------
 # SphereSLAM / artoolkitX KPM.
 #
-# This is a SIDE-BY-SIDE native tracker. ARCore remains independent in feature/ar.
+# This is a SIDE-BY-SIDE native tracker; ARCore, when the host app uses it, stays independent.
 # KPM is compiled only when the pinned artoolkitX submodule is checked out. Without it, KpmBridge
-# builds safe unavailable stubs and the rest of GraffitiXR is unchanged.
+# builds safe unavailable stubs that report KPM as unavailable.
 set(ARX_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/artoolkitx/Source/ARX)
 set(ARX_SOURCE_ROOT ${ARX_ROOT}/..)
 
@@ -179,8 +176,8 @@ if(EXISTS ${ARX_ROOT}/KPM/include/ARX/KPM/kpm.h)
     )
 
     # artoolkitX's libAR normally owns JNI_OnLoad when built as a standalone Android shared
-    # library. GraffitiXR already owns the process loader in GraffitiJNI.cpp, so keep arUtil.c's
-    # helper functions while renaming only that colliding loader symbol in the embedded build.
+    # library. libsphereslam is embedded in a host app that may own its own loader, so keep
+    # arUtil.c's helper functions while renaming only that potentially colliding loader symbol.
     set_source_files_properties(
         ${ARX_ROOT}/AR/arUtil.c
         PROPERTIES COMPILE_DEFINITIONS "JNI_OnLoad=arxEmbeddedJniOnLoad"
@@ -239,11 +236,9 @@ endif()
 
 find_library(log-lib log)
 
+# KpmBridge.cpp uses only JNI and <android/log.h>; no GL, EGL, bitmap or OpenCV symbols. libandroid
+# stays linked for the embedded artoolkitX Android platform code.
 target_link_libraries(sphereslam
     ${log-lib}
-    OpenCV::opencv_java5
-    GLESv3
-    EGL
     android
-    jnigraphics
 )

@@ -2,30 +2,20 @@
 # Policy: every declared dependency/tool version is pinned to the latest stable release or newer.
 [versions]
 agp = "9.4.1"
-kotlin = "2.4.20"
 coreKtx = "1.19.1"
-coroutines = "1.11.0"
-kotlinxSerialization = "1.11.0"
 onnxruntime = "1.30.0"
 opencv = "5.0.0.1"
 junit = "4.13.2"
-mockk = "1.14.11"
 ndk = "30.0.16248370"
 cmake = "4.4.4"
 jdk = "21"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
-kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
-kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
-kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
-# OpenCV from Maven Central. Its Prefab part exposes the native world to CMake
-# (find_package(OpenCV) -> OpenCV::opencv_java5) and auto-packages libopencv_java5.so.
+# OpenCV from Maven Central (Java + native libopencv_java5.so); used by :reloc only.
 opencv = { group = "org.opencv", name = "opencv", version.ref = "opencv" }
 onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
-mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
 
 [plugins]
 android-library = { id = "com.android.library", version.ref = "agp" }
-kotlinx-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
