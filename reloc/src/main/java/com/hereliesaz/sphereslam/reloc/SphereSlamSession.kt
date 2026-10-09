@@ -17,10 +17,14 @@ import org.opencv.core.Mat
  * host builds fingerprints and hands them in with [supplyTile]; the trust call rides the
  * [TileCorroborator] seam. This object is the wiring, not the judgment.
  *
- * **Frames.** The matcher and tile poses are row-major 4×4 ([RelocResult]); the robustness loop and
- * the predictor are column-major 16 (OpenGL). The session owns that conversion so a consumer sees one
- * convention: the returned [onFrame] pose is **column-major 16, camera-from-map**, ready to hand a GL
- * renderer.
+ * **Frames.** The matcher and tile poses are row-major 4×4 in OpenCV's camera convention
+ * ([RelocResult]: x right, y down, z forward); the robustness loop and the predictor are column-major
+ * 16 in the OpenGL eye frame (x right, y up, looking down −z). The session owns that conversion — a
+ * storage transpose plus the `diag(1, −1, −1)` axis flip, the same flip the planar layer applies in
+ * `SphereSlamPoseMath.pageToOpenGlViewMeters` — so a consumer sees one convention: the returned
+ * [onFrame] pose is **column-major 16, camera-from-map, OpenGL eye frame**, ready to hand a GL
+ * renderer. (The flip leaves camera centres and relative rotation angles unchanged, so gating is
+ * unaffected.)
  *
  * This is the **experimental photosphere / depth** entry layer — anchoring across a space. Its
  * OpenCV-backed fingerprint and frame types are intentionally visible and therefore `:reloc`
@@ -29,33 +33,58 @@ import org.opencv.core.Mat
  * For a supported planar-wall API, use [com.hereliesaz.sphereslam.SphereSlam] and its session
  * family. The two layers are complementary, not duplicate entry points.
  *
- * Not thread-safe; drive it from one worker. The OpenCV-touching path ([onFrame]) needs native; the
- * decisions it is built from ([chooseCandidates], [rowMajorToColumnMajor]) are pure and unit-tested.
+ * Not thread-safe; drive it from one worker. The OpenCV-touching edge ([onFrame]'s feature matching)
+ * needs native; everything downstream of the match — candidate choice, pose conversion, the loop and
+ * predictor wiring, photosphere folding, and [reset] — is unit-tested through an internal seam that
+ * substitutes the matcher.
+ *
+ * **Ownership.** Fingerprints handed to [supplyTile] are owned by the session from then on: [close]
+ * releases their native buffers. The [Relocalizer] stays owned by the caller (close it separately).
  *
  * @param relocalizer the PnP relocalizer the matcher wraps (its intrinsics gate the solve).
  * @param photosphere the tile map (freshness, relock seeds, glow, persistence).
  * @param loop the robustness loop (acceptance, stabilization, state).
  * @param reviewConfig candidate field-of-view and TTL for the review loop.
  * @param relockSeedLimit how many relock candidates to try when tracking is lost (the cheap cap).
- * @param assumedReprojectionError reprojection error reported to the loop for a match (the matcher
- *   surfaces inliers, not residual); 0 means "do not reject on residual". Tune per front-end.
- * @param predictor optional low-latency early-anchor / off-page bridge (see [EarlyPosePredictor]).
+ * @param predictor optional low-latency early-anchor / off-page bridge (see [EarlyPosePredictor];
+ *   [AttitudePosePredictor] is the bundled implementation).
+ *
+ * Each match's measured inlier reprojection residual ([TileMatcher.Match.reprojectionErrorPx]) is
+ * what the loop's acceptance policy gates on.
  */
 @ExperimentalSphereSlamRelocApi
-class SphereSlamSession(
-    private val relocalizer: Relocalizer,
+class SphereSlamSession internal constructor(
+    private val evaluateFrame: (Mat, Map<TileId, Fingerprint>) -> TileMatcher.Evaluation<TileId>,
     private val photosphere: PhotosphereMap,
-    private val loop: RobustTrackingLoop = RobustTrackingLoop(),
-    reviewConfig: PhotosphereReviewLoop.ReviewConfig = PhotosphereReviewLoop.ReviewConfig(),
-    private val relockSeedLimit: Int = 8,
-    private val assumedReprojectionError: Float = 0f,
-    private val predictor: EarlyPosePredictor? = null,
-) {
-    private val matcher = TileMatcher<TileId>(relocalizer)
+    private val loop: RobustTrackingLoop,
+    reviewConfig: PhotosphereReviewLoop.ReviewConfig,
+    private val relockSeedLimit: Int,
+    private val predictor: EarlyPosePredictor?,
+) : AutoCloseable {
+
+    constructor(
+        relocalizer: Relocalizer,
+        photosphere: PhotosphereMap,
+        loop: RobustTrackingLoop = RobustTrackingLoop(),
+        reviewConfig: PhotosphereReviewLoop.ReviewConfig = PhotosphereReviewLoop.ReviewConfig(),
+        relockSeedLimit: Int = 8,
+        predictor: EarlyPosePredictor? = null,
+    ) : this(
+        TileMatcher<TileId>(relocalizer)::evaluate,
+        photosphere,
+        loop,
+        reviewConfig,
+        relockSeedLimit,
+        predictor,
+    )
+
     private val reviewLoop = PhotosphereReviewLoop(photosphere, reviewConfig)
     private val fingerprints = HashMap<TileId, Fingerprint>()
 
     private var lastState: TrackingState = TrackingState.INITIALIZING
+
+    /** The tracking state after the most recent frame ([TrackingState.INITIALIZING] after [reset]). */
+    val trackingState: TrackingState get() = lastState
 
     /** Absolute directions of every tile still needing an update — drive the coverage glow from this. */
     var glowDirections: List<SphereCoverage.Direction> = emptyList()
@@ -97,6 +126,27 @@ class SphereSlamSession(
         nowElapsedRealtimeNs: Long,
         timestampSource: CameraTimestampSource,
         nowMs: Long,
+    ): FloatArray? = processFrame(
+        evaluate = { candidates -> evaluateFrame(gray, candidates) },
+        attitudeQuat = attitudeQuat,
+        headingDeg = headingDeg,
+        elevationDeg = elevationDeg,
+        frameTimestampNs = frameTimestampNs,
+        nowElapsedRealtimeNs = nowElapsedRealtimeNs,
+        timestampSource = timestampSource,
+        nowMs = nowMs,
+    )
+
+    /** [onFrame] with the native matching step injected — the whole per-frame wiring, testable. */
+    internal fun processFrame(
+        evaluate: (Map<TileId, Fingerprint>) -> TileMatcher.Evaluation<TileId>,
+        attitudeQuat: FloatArray,
+        headingDeg: Float,
+        elevationDeg: Float,
+        frameTimestampNs: Long,
+        nowElapsedRealtimeNs: Long,
+        timestampSource: CameraTimestampSource,
+        nowMs: Long,
     ): FloatArray? {
         // 1. Which tiles to try: the in-view cone normally, the recency/adjacency relock set when lost.
         val candidateIds = chooseCandidates(lastState, headingDeg, elevationDeg)
@@ -106,7 +156,7 @@ class SphereSlamSession(
         // 2. Recognize every attempted candidate, while still using only the strongest pose for
         // tracking. The full verdict is retained so freshness never mistakes a lower-scoring
         // recognized tile for an unmatched/changed tile.
-        val evaluation = if (candidates.isEmpty()) null else matcher.evaluate(gray, candidates)
+        val evaluation = if (candidates.isEmpty()) null else evaluate(candidates)
         val match = evaluation?.best
         val columnMajorPose = match?.let { toColumnMajorMapPose(it) }
 
@@ -115,7 +165,7 @@ class SphereSlamSession(
         val outcome = loop.onFrame(
             viewMatrix = columnMajorPose,
             inlierCount = match?.inliers ?: 0,
-            reprojectionError = assumedReprojectionError,
+            reprojectionError = match?.reprojectionErrorPx ?: 0f,
             frameTimestampNs = frameTimestampNs,
             nowElapsedRealtimeNs = nowElapsedRealtimeNs,
             timestampSource = timestampSource,
@@ -124,14 +174,17 @@ class SphereSlamSession(
         )
         lastState = outcome.state
 
-        // 4. Keep the predictor's reference on a fresh accept; otherwise fall back to its prediction.
+        // 4. Keep the predictor's reference on a fresh accept; while bridging, fall back to its prediction.
         val renderPose = when {
             outcome.accepted && outcome.renderPose != null -> {
                 predictor?.correct(outcome.renderPose, attitudeQuat)
                 outcome.renderPose
             }
             outcome.renderPose != null -> outcome.renderPose
-            else -> predictor?.predict(attitudeQuat)
+            // Only a live bridge may draw a prediction; once the bridge times out (REACQUIRING/LOST)
+            // the rotation-only guess is no longer trusted and nothing is drawn.
+            outcome.state == TrackingState.IMU_BRIDGE -> predictor?.predict(attitudeQuat)
+            else -> null
         }
 
         // 5. Fold truthful per-candidate recognition verdicts into the photosphere; refresh glow +
@@ -145,7 +198,11 @@ class SphereSlamSession(
         return renderPose
     }
 
-    /** Lift a match into the map frame: tile fingerprints compose through [TileFingerprint.anchorFromTile]; a planar reference is already in the map frame. */
+    /**
+     * Lift a match into the map frame (tile fingerprints compose through
+     * [TileFingerprint.anchorFromTile]; a planar reference is already in the map frame), then convert
+     * from OpenCV row-major to the OpenGL column-major eye frame.
+     */
     private fun toColumnMajorMapPose(match: TileMatcher.Match<TileId>): FloatArray {
         val fp = fingerprints[match.key]
         val rowMajorMap = if (fp is TileFingerprint) {
@@ -153,12 +210,26 @@ class SphereSlamSession(
         } else {
             match.cameraFromObject
         }
-        return rowMajorToColumnMajor(rowMajorMap)
+        return openCvToOpenGlColumnMajor(rowMajorMap)
     }
 
-    /** Reset tracking and the predictor reference (new canonical frame). Keeps supplied fingerprints. */
+    /**
+     * Reset tracking — the robustness loop (state machine, continuity baseline, smoothing) and the
+     * predictor reference — for a new canonical frame. Keeps supplied fingerprints.
+     */
     fun reset() {
         lastState = TrackingState.INITIALIZING
+        loop.reset()
+        predictor?.reset()
+    }
+
+    /** Release every held fingerprint's native buffers and forget them. Does not close the [Relocalizer]. */
+    override fun close() {
+        for (fp in fingerprints.values) {
+            fp.descriptors.release()
+            fp.points3d.release()
+        }
+        fingerprints.clear()
         predictor?.reset()
     }
 
@@ -175,6 +246,18 @@ class SphereSlamSession(
         internal fun reacquiring(state: TrackingState): Boolean =
             state == TrackingState.LOST || state == TrackingState.REACQUIRING
 
+        /**
+         * OpenCV camera-from-map (row-major 4×4; x right, y down, z forward) → OpenGL camera-from-map
+         * (column-major 16; x right, y up, looking down −z): negate rows 1 and 2 (`diag(1,−1,−1)·M`),
+         * then transpose storage.
+         */
+        fun openCvToOpenGlColumnMajor(rowMajorCv: FloatArray): FloatArray {
+            require(rowMajorCv.size == 16) { "matrix must be length 16" }
+            val flipped = rowMajorCv.copyOf()
+            for (row in 1..2) for (col in 0 until 4) flipped[row * 4 + col] = -flipped[row * 4 + col]
+            return rowMajorToColumnMajor(flipped)
+        }
+
         /** Row-major 4×4 → column-major 16 (a transpose of storage for the same transform). */
         fun rowMajorToColumnMajor(rowMajor: FloatArray): FloatArray {
             require(rowMajor.size == 16) { "matrix must be length 16" }
@@ -187,8 +270,9 @@ class SphereSlamSession(
 
 /**
  * A low-latency pose predictor the session folds in to hide solve lag and bridge off-page views —
- * the shape of [AttitudePosePredictor] (`:reloc`), kept as an interface so the session depends on the
- * capability, not the concrete class. Poses are column-major 16 (the loop's convention).
+ * implemented by [AttitudePosePredictor] (`:reloc`), kept as an interface so the session depends on
+ * the capability, not the concrete class. Poses are column-major 16, OpenGL eye frame (the loop's
+ * convention).
  */
 @ExperimentalSphereSlamRelocApi
 interface EarlyPosePredictor {

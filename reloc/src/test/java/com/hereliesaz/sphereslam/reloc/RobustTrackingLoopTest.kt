@@ -188,3 +188,80 @@ class RobustTrackingLoopTest {
         assertEquals("fresh acquisition after reset", TrackingState.INITIALIZING, out.state)
     }
 }
+
+class RobustTrackingLoopRelockTest {
+    private fun loop(confirmationFrames: Int = 2, maxBridgeMs: Long = 1_000L, bridge: ((FloatArray) -> FloatArray?)? = null) =
+        RobustTrackingLoop(
+            referenceWidthUnits = 1f,
+            stateMachine = TrackingStateMachine(
+                TrackingStateConfig(confirmationFrames = confirmationFrames, lostAfterMs = 100L, maxBridgeMs = maxBridgeMs),
+            ),
+            bridgeRotatedPose = bridge,
+        )
+
+    private fun RobustTrackingLoop.good(nowMs: Long, pose: FloatArray = idMatrix()) = onFrame(
+        viewMatrix = pose, inlierCount = 30, reprojectionError = 1f,
+        frameTimestampNs = 0L, nowElapsedRealtimeNs = 0L,
+        timestampSource = CameraTimestampSource.UNKNOWN, nowMs = nowMs,
+    )
+
+    private fun RobustTrackingLoop.none(nowMs: Long, bridge: Boolean = false) = onFrame(
+        viewMatrix = null, inlierCount = 0, reprojectionError = 0f,
+        frameTimestampNs = 0L, nowElapsedRealtimeNs = 0L,
+        timestampSource = CameraTimestampSource.UNKNOWN, nowMs = nowMs, bridgeAvailable = bridge,
+    )
+
+    @Test
+    fun `relock after LOST is not gated by the stale pre-loss pose`() {
+        val l = loop()
+        l.good(0L); assertEquals(TrackingState.LOCKED, l.good(16L).state)
+        l.none(20L) // REACQUIRING
+        assertEquals(TrackingState.LOST, l.none(200L).state)
+        // 50 reference-widths away: beyond even the reacquire limit (8) against the old pose.
+        val far = movedMatrix(50f)
+        val first = l.good(300L, far)
+        assertTrue("stale baseline dropped on LOST", first.accepted)
+        assertEquals(TrackingState.LOCKED, l.good(316L, far).state)
+    }
+
+    @Test
+    fun `an outlying first pose does not veto a consistent acquisition`() {
+        val l = loop(confirmationFrames = 2)
+        val outlier = l.good(0L, movedMatrix(40f))
+        assertTrue(outlier.accepted)
+        assertEquals(TrackingState.INITIALIZING, outlier.state)
+        // Inconsistent with the unconfirmed seed: re-seeds instead of being rejected forever.
+        val reseed = l.good(16L, idMatrix())
+        assertFalse(reseed.accepted)
+        assertEquals(PoseRejection.TRANSLATION_JUMP, reseed.rejection)
+        assertNull(reseed.renderPose)
+        assertEquals(TrackingState.INITIALIZING, reseed.state)
+        // A second pose consistent with the new seed confirms the lock.
+        val confirm = l.good(32L, idMatrix())
+        assertTrue(confirm.accepted)
+        assertEquals(TrackingState.LOCKED, confirm.state)
+    }
+
+    @Test
+    fun `alternating inconsistent poses never lock`() {
+        val l = loop(confirmationFrames = 2)
+        var t = 0L
+        repeat(6) { i ->
+            val out = l.good(t, movedMatrix(if (i % 2 == 0) 40f else 0f))
+            assertEquals(TrackingState.INITIALIZING, out.state)
+            t += 16L
+        }
+    }
+
+    @Test
+    fun `consecutive bridge misses expire into reacquiring with no render pose`() {
+        val l = loop(maxBridgeMs = 50L, bridge = { it })
+        l.good(0L); l.good(16L)
+        assertEquals(TrackingState.IMU_BRIDGE, l.none(20L, bridge = true).state)
+        assertEquals(TrackingState.IMU_BRIDGE, l.none(60L, bridge = true).state)
+        val expired = l.none(70L, bridge = true)
+        assertEquals(TrackingState.REACQUIRING, expired.state)
+        assertNull(expired.renderPose)
+        assertEquals(TrackingState.LOST, l.none(170L, bridge = true).state)
+    }
+}

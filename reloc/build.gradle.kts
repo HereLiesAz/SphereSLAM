@@ -24,8 +24,6 @@ dependencies {
     // :reloc intentionally exposes OpenCV-backed types; publish OpenCV on the consumer compile classpath.
     api(libs.opencv)
     implementation(libs.androidx.core.ktx)
-    // Optional: MiDaS depth for off-plane (sphere) placement. Depend on the perception module.
-    implementation(project(":models"))
     // The pure-Kotlin photosphere map/grid/glow the session facade orchestrates and exposes in its
     // public API (one-way :reloc → :sphereslam), so consumers get those types transitively.
     api(project(":sphereslam"))

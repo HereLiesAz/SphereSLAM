@@ -59,6 +59,19 @@ but their shape is still changing before 1.0.
 Because these public signatures expose OpenCV classes, `:reloc` publishes OpenCV as an `api`
 dependency rather than hiding it behind `implementation`.
 
+OpenCV's Java native library must be loaded by the host before any `:reloc` type that allocates
+OpenCV objects (for example `Relocalizer`) is constructed; SphereSLAM's internal native loader loads
+only `libsphereslam` and does not load OpenCV. `Relocalizer` and `SphereSlamSession` are
+`AutoCloseable`: close them to release their native buffers (the session releases the fingerprints
+handed to `supplyTile`, not the caller's `Relocalizer`).
+
+`SphereSlamSession.onFrame` returns a column-major, camera-from-map pose in the OpenGL eye frame
+(x right, y up, looking down -z), the same convention as the planar layer. `Relocalizer` results
+stay row-major in OpenCV's camera convention (y down, z forward).
+
+Depth-backed tiles (`TileTriangulator`, `TileGate`, `TileFingerprint`, `DepthScaleFit`) are building
+blocks: they are not yet wired into `SphereSlamSession`'s map growth.
+
 #### `:models`
 
 Optional ONNX model wrappers are marked with `ExperimentalSphereSlamModelsApi`. They are not part
@@ -172,6 +185,24 @@ SphereSlamTracker()
 ~~~
 
 The native implementation interface and executor injection are internal test seams.
+
+`setReference` replaces the current reference; `clearReference` empties the native atlas. A call
+that races `close()` is ignored rather than touching a released engine.
+
+### Native availability
+
+The native engine ships for `arm64-v8a` and `armeabi-v7a` only. On any other ABI (for example
+x86/x86_64 emulators), or on any other native load failure, `SphereSlam.isAvailable()` reports
+false; neither it nor `KpmBridge` throws. `:core:common` and `:core:nativebridge` neither depend on
+nor load OpenCV.
+
+### Input validation
+
+- `SphereSlamStandaloneSession.addReference` throws `IllegalArgumentException` when
+  `canonicalFromPage` is not a rigid transform.
+- `CoverageGlowProjection.project` throws when a field of view is outside `(0, 180)` degrees.
+- `PhotosphereMap.fromSnapshot` rejects a non-finite `wallHeadingDeg` and normalizes a finite one.
+- `SphereCoverage` and `PhotosphereMap` auto-anchor their wall heading only from an in-band sample.
 
 ## 5. Threading
 

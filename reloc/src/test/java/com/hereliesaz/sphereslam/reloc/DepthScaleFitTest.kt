@@ -57,3 +57,33 @@ class DepthScaleFitTest {
         assertTrue((fit.depthFor(2f) ?: -1f) > 0f)
     }
 }
+
+class DepthScaleFitRobustTest {
+    private val a = 3f
+    private val b = 0.5f
+
+    @Test
+    fun `gross outliers do not drag the fit`() {
+        val zs = FloatArray(20) { 0.5f + it * 0.4f }
+        val x = FloatArray(zs.size) { 1f / zs[it] }
+        val y = FloatArray(zs.size) { a * x[it] + b }
+        // Corrupt 30% of samples badly.
+        for (i in intArrayOf(1, 4, 7, 10, 13, 16)) y[i] += if (i % 2 == 0) 5f else -3f
+        val fit = DepthScaleFit.fit(x, y)!!
+        assertEquals(a, fit.a, 1e-3f)
+        assertEquals(b, fit.b, 1e-3f)
+    }
+
+    @Test
+    fun `degeneracy check is scale invariant`() {
+        // Tiny absolute spread but a healthy relative one: plain |denominator| thresholds would refuse.
+        val x = FloatArray(8) { 1e-4f * (1f + it) }
+        val y = FloatArray(8) { 2000f * x[it] + 0.1f }
+        val fit = DepthScaleFit.fit(x, y)
+        assertNotNull(fit)
+        assertEquals(2000f, fit!!.a, 1f)
+        // Negligible relative spread at a large magnitude is refused.
+        val flat = FloatArray(8) { 1000f + 1e-4f * it }
+        assertNull(DepthScaleFit.fit(flat, FloatArray(8) { 2f * flat[it] }))
+    }
+}

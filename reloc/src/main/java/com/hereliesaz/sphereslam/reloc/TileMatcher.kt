@@ -29,24 +29,29 @@ class TileMatcher<K>(
      * @property key the caller's identifier for the matched tile.
      * @property cameraFromObject row-major 4×4 camera-from-tile pose (see [RelocResult]).
      * @property inliers PnP inliers supporting the match (confidence).
+     * @property reprojectionErrorPx mean inlier reprojection residual, pixels (see
+     *   [RelocResult.reprojectionErrorPx]); 0 when unknown.
      */
     data class Match<K>(
         val key: K,
         val cameraFromObject: FloatArray,
         val inliers: Int,
+        val reprojectionErrorPx: Float = 0f,
     ) {
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
             if (other !is Match<*>) return false
             return key == other.key &&
                 cameraFromObject.contentEquals(other.cameraFromObject) &&
-                inliers == other.inliers
+                inliers == other.inliers &&
+                reprojectionErrorPx == other.reprojectionErrorPx
         }
 
         override fun hashCode(): Int {
             var r = key?.hashCode() ?: 0
             r = 31 * r + cameraFromObject.contentHashCode()
             r = 31 * r + inliers
+            r = 31 * r + reprojectionErrorPx.hashCode()
             return r
         }
     }
@@ -71,27 +76,31 @@ class TileMatcher<K>(
     fun evaluate(gray: Mat, candidates: Map<K, Fingerprint>): Evaluation<K> {
         if (candidates.isEmpty()) return Evaluation(null, emptySet(), emptySet())
         val features = relocalizer.detect(gray) ?: return Evaluation(null, emptySet(), emptySet())
-        val scored = ArrayList<Match<K>>(candidates.size)
-        val recognized = LinkedHashSet<K>()
-        val unmatched = LinkedHashSet<K>()
-        for ((key, fingerprint) in candidates) {
-            val result = relocalizer.relocalizeWith(
-                features.keypoints,
-                features.descriptors,
-                fingerprint,
-            )
-            if (result == null) {
-                unmatched.add(key)
-            } else {
-                recognized.add(key)
-                scored.add(Match(key, result.cameraFromObject, result.inliers))
+        try {
+            val scored = ArrayList<Match<K>>(candidates.size)
+            val recognized = LinkedHashSet<K>()
+            val unmatched = LinkedHashSet<K>()
+            for ((key, fingerprint) in candidates) {
+                val result = relocalizer.relocalizeWith(
+                    features.keypoints,
+                    features.descriptors,
+                    fingerprint,
+                )
+                if (result == null) {
+                    unmatched.add(key)
+                } else {
+                    recognized.add(key)
+                    scored.add(Match(key, result.cameraFromObject, result.inliers, result.reprojectionErrorPx))
+                }
             }
+            return Evaluation(
+                best = bestOf(scored),
+                recognized = recognized,
+                checkedButUnmatched = unmatched,
+            )
+        } finally {
+            features.release() // the shared per-frame detection is not retained past this call
         }
-        return Evaluation(
-            best = bestOf(scored),
-            recognized = recognized,
-            checkedButUnmatched = unmatched,
-        )
     }
 
     /**

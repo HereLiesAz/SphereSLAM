@@ -24,8 +24,9 @@ data class DepthMap(
 
 /**
  * Monocular depth via ONNX Runtime (CPU). Ships wired to **MiDaS v2.1 Small (256×256, int8)**, the
- * default asset [MODEL_ASSET]; the sphere-coverage relocalizer uses the inverse-depth output to
- * place off-wall map points radially.
+ * default asset [MODEL_ASSET]. Its inverse-depth output is a **building block** for placing off-wall
+ * map points radially (calibrated by `:reloc`'s `DepthScaleFit`); that depth-backed placement is
+ * not yet wired into the relocalizer or session.
  *
  * ## Swapping the model
  * This wrapper is model-agnostic about everything but the ImageNet NCHW preprocessing and the
@@ -50,6 +51,7 @@ class DepthEstimator(
 
     private var env: OrtEnvironment? = null
     private var session: OrtSession? = null
+    private var loadedPath: String? = null
 
     @Volatile
     var isLoaded: Boolean = false
@@ -60,14 +62,18 @@ class DepthEstimator(
     var lastError: String? = null
         private set
 
-    /** Extract the bundled asset to filesDir and open the ORT session. Idempotent. Returns [isLoaded]. */
+    /**
+     * Extract the bundled asset to filesDir (refreshing a stale copy) and open the ORT session.
+     * Idempotent while the asset model is open; replaces a model opened via [loadFrom]. Returns [isLoaded].
+     */
     @Synchronized
     fun load(): Boolean {
-        if (isLoaded) return true
         return try {
             val dir = File(appContext.filesDir, MODEL_DIR).apply { mkdirs() }
             val graph = File(dir, assetName)
-            if (!copyAssetIfNeeded(assetName, graph)) {
+            if (isLoaded && loadedPath == graph.absolutePath) return true
+            if (isLoaded) close() // a different model (e.g. via loadFrom) is open; switch to the asset
+            if (!ModelAssets.copyAssetIfNeeded(appContext, assetName, graph, TAG)) {
                 lastError = "asset '$assetName' absent (copy failed)"
                 return false
             }
@@ -78,10 +84,14 @@ class DepthEstimator(
         }
     }
 
-    /** Open the session from an arbitrary on-disk `.onnx` (for a user-supplied model outside assets). */
+    /**
+     * Open the session from an arbitrary on-disk `.onnx` (for a user-supplied model outside assets).
+     * Idempotent for the same path; a different path closes the current session and loads the new one.
+     */
     @Synchronized
     fun loadFrom(onnxPath: String): Boolean {
-        if (isLoaded) return true
+        if (isLoaded && loadedPath == onnxPath) return true
+        if (isLoaded) close()
         return try {
             openSession(onnxPath)
         } catch (t: Throwable) {
@@ -94,9 +104,10 @@ class DepthEstimator(
         val environment = OrtEnvironment.getEnvironment()
         session = environment.createSession(path, OrtSession.SessionOptions())
         env = environment
+        loadedPath = path
         isLoaded = true
         lastError = null
-        Log.i(TAG, "loaded $assetName (inputs=${session?.inputNames} outputs=${session?.outputNames})")
+        Log.i(TAG, "loaded $path (inputs=${session?.inputNames} outputs=${session?.outputNames})")
         return true
     }
 
@@ -112,6 +123,7 @@ class DepthEstimator(
      */
     @Synchronized
     fun estimate(bitmap: Bitmap, outMaxDim: Int = DEFAULT_OUT_MAX_DIM): DepthMap? {
+        require(outMaxDim > 0) { "outMaxDim must be positive" }
         val s = session ?: return null
         val environment = env ?: return null
         return try {
@@ -127,13 +139,20 @@ class DepthEstimator(
         }
     }
 
-    /** Build the `[1,3,N,N]` ImageNet-normalized NCHW tensor. */
+    /**
+     * Build the `[1,3,N,N]` ImageNet-normalized NCHW tensor. The frame is resized to `N×N` without
+     * letterboxing, so a non-square frame's aspect is squashed; the depth map comes back in that
+     * squashed `N×N` grid (callers map it to frame pixels per axis: `u·W/N`, `v·H/N`).
+     */
     private fun preprocess(bitmap: Bitmap, environment: OrtEnvironment): OnnxTensor {
         val n = inputSize
         val scaled = Bitmap.createScaledBitmap(bitmap, n, n, true)
         val pixels = IntArray(n * n)
-        scaled.getPixels(pixels, 0, n, 0, 0, n, n)
-        if (scaled !== bitmap) scaled.recycle()
+        try {
+            scaled.getPixels(pixels, 0, n, 0, 0, n, n)
+        } finally {
+            if (scaled !== bitmap) scaled.recycle()
+        }
         val plane = n * n
         val chw = FloatArray(3 * plane)
         for (i in 0 until plane) {
@@ -152,7 +171,7 @@ class DepthEstimator(
         )
     }
 
-    /** Read `[1,H,W]` or `[1,1,H,W]` and nearest-neighbour downscale to outMaxDim. */
+    /** Read `[1,H,W]` or `[1,1,H,W]` and nearest-neighbour downscale so the long side is `<= outMaxDim`. */
     private fun readDepth(out: OnnxTensor, outMaxDim: Int): DepthMap {
         val shape = out.info.shape
         val h: Int
@@ -163,30 +182,14 @@ class DepthEstimator(
             else -> error("unexpected depth output rank ${shape.size}")
         }
         val src = out.floatBuffer
-        val scale = maxOf(1, maxOf(h, w) / outMaxDim)
-        val ow = w / scale
-        val oh = h / scale
+        val (scale, dims) = downscale(h, w, outMaxDim)
+        val (oh, ow) = dims
         val dst = FloatArray(ow * oh)
         for (y in 0 until oh) {
             val sy = y * scale
             for (x in 0 until ow) dst[y * ow + x] = src.get(sy * w + x * scale)
         }
         return DepthMap(ow, oh, dst)
-    }
-
-    private fun copyAssetIfNeeded(name: String, dest: File): Boolean {
-        return try {
-            if (dest.exists() && dest.length() > 0L) return true
-            val tmp = File(dest.parentFile, "${dest.name}.tmp")
-            appContext.assets.open(name).use { input ->
-                tmp.outputStream().use { output -> input.copyTo(output) }
-            }
-            if (!tmp.renameTo(dest)) { tmp.delete(); return false }
-            dest.exists() && dest.length() > 0L
-        } catch (t: Throwable) {
-            Log.w(TAG, "asset $name unavailable", t)
-            false
-        }
     }
 
     @Synchronized
@@ -196,6 +199,7 @@ class DepthEstimator(
         } catch (_: Throwable) {
         }
         session = null
+        loadedPath = null
         env = null // OrtEnvironment is a process-global singleton; do not close it here.
         isLoaded = false
     }
@@ -208,5 +212,15 @@ class DepthEstimator(
         private const val MODEL_DIR = "sphereslam-models"
         val MEAN = floatArrayOf(0.485f, 0.456f, 0.406f)
         val STD = floatArrayOf(0.229f, 0.224f, 0.225f)
+
+        /**
+         * Integer nearest-neighbour stride and resulting `(height, width)` for an `h×w` map so that
+         * the long side is at most [outMaxDim]: stride = `ceil(max(h, w) / outMaxDim)` (>= 1). Pure.
+         */
+        internal fun downscale(h: Int, w: Int, outMaxDim: Int): Pair<Int, Pair<Int, Int>> {
+            val longSide = maxOf(h, w)
+            val stride = maxOf(1, (longSide + outMaxDim - 1) / outMaxDim)
+            return stride to ((h / stride) to (w / stride))
+        }
     }
 }
