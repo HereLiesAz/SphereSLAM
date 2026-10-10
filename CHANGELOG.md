@@ -56,6 +56,14 @@ changed incompatibly.
   repeated-observation agreement before a large move; `agrees`, `HYBRID_AGREEMENT_*`, `State`,
   `Diagnostics`), and `MetricPageRectification` (metric fronto-parallel page from a wall plane;
   luma arrays in, pure-Kotlin perspective resample instead of OpenCV/Bitmap).
+- Photosphere keyframes: `PhotosphereKeyframe`, `PhotosphereKeyframeStore` (feeds a
+  `PhotosphereMap`, anchors its wall heading, keeps the latest keyframe per tile, `view(...)`),
+  `PhotosphereView`, and `PhotosphereFingerprintFrame` (`mapFromFingerprint`, `cameraFromMap`,
+  `referencePixelToWall`, `kpmPageMillimetersToWall`, `placement`). New
+  `PhotosphereMap.directionOfPixel(...)` rotates the pixel ray through heading, elevation **and
+  roll** (fix: GraffitiXR added `atan` offsets to heading/elevation, wrong for a rolled camera and
+  off-axis). `CameraAttitudeProvider` gains `latestRollDegrees()`, `latestDeviceToWorldMatrix()` and
+  the pure `cameraRollDegrees(r, cameraFromDevice)`.
 
 ### Native, build, and packaging
 

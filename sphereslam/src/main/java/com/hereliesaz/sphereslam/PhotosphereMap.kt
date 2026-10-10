@@ -565,6 +565,58 @@ class PhotosphereMap(
 
     companion object {
         /**
+         * Absolute direction of image pixel ([u], [v]) for a pinhole camera ([fx], [fy], [cx], [cy];
+         * OpenCV pixel convention, v down) whose optical axis points at ([cameraHeadingDeg],
+         * [cameraElevationDeg]) with image-right rolled [cameraRollDeg] above the horizon
+         * ([CameraAttitudeProvider.cameraRollDegrees]).
+         *
+         * Exact ray rotation, not `heading + atan(x)`: with roll, a horizontal pixel offset moves the
+         * direction in elevation too, and even unrolled the azimuth of an off-axis pixel depends on
+         * elevation.
+         *
+         * @return the direction, or null for non-finite input, non-positive focal lengths, or a camera
+         *   axis within ~0.006° of vertical (heading undefined).
+         */
+        fun directionOfPixel(
+            u: Float,
+            v: Float,
+            fx: Float,
+            fy: Float,
+            cx: Float,
+            cy: Float,
+            cameraHeadingDeg: Float,
+            cameraElevationDeg: Float,
+            cameraRollDeg: Float = 0f,
+        ): SphereCoverage.Direction? {
+            val inputs = floatArrayOf(u, v, fx, fy, cx, cy, cameraHeadingDeg, cameraElevationDeg, cameraRollDeg)
+            if (inputs.any { !it.isFinite() } || fx <= 0f || fy <= 0f) return null
+            val h = Math.toRadians(cameraHeadingDeg.toDouble())
+            val e = Math.toRadians(cameraElevationDeg.toDouble())
+            // East-North-Up camera basis: forward, horizontal right = forward × up, up = right × forward.
+            val f = doubleArrayOf(kotlin.math.cos(e) * kotlin.math.sin(h), kotlin.math.cos(e) * kotlin.math.cos(h), kotlin.math.sin(e))
+            val rx = f[1]; val ry = -f[0]
+            val rn = kotlin.math.sqrt(rx * rx + ry * ry)
+            if (rn < 1e-4) return null
+            val r0 = doubleArrayOf(rx / rn, ry / rn, 0.0)
+            val u0 = doubleArrayOf(
+                r0[1] * f[2] - r0[2] * f[1],
+                r0[2] * f[0] - r0[0] * f[2],
+                r0[0] * f[1] - r0[1] * f[0],
+            )
+            val roll = Math.toRadians(cameraRollDeg.toDouble())
+            val cr = kotlin.math.cos(roll); val sr = kotlin.math.sin(roll)
+            val right = DoubleArray(3) { cr * r0[it] + sr * u0[it] }
+            val up = DoubleArray(3) { -sr * r0[it] + cr * u0[it] }
+            val xn = (u - cx) / fx.toDouble()
+            val yn = (v - cy) / fy.toDouble()
+            val d = DoubleArray(3) { f[it] + xn * right[it] - yn * up[it] }
+            val n = kotlin.math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2])
+            val az = Math.toDegrees(kotlin.math.atan2(d[0], d[1])).toFloat()
+            val el = Math.toDegrees(kotlin.math.asin((d[2] / n).coerceIn(-1.0, 1.0))).toFloat()
+            return SphereCoverage.Direction(SphereGrid.norm360(az), el)
+        }
+
+        /**
          * Rebuild a map from a [PhotosphereMapSnapshot]. The grid dimensions come from the snapshot;
          * the per-tile arrays must all be length `sectorCount * elevationBandCount`.
          *

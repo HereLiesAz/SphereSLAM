@@ -43,6 +43,8 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
 
     @Volatile private var latestHeadingDeg: Float? = null
     @Volatile private var latestElevationDeg: Float? = null
+    @Volatile private var latestRollDeg: Float? = null
+    @Volatile private var latestDeviceToWorld: FloatArray? = null
     @Volatile private var reliable: Boolean = true
     // Guarded by `lock`; volatile so unsynchronized readers see the latest registration state.
     @Volatile private var registered = false
@@ -60,6 +62,17 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
      */
     fun latestElevationDegrees(): Float? = latestElevationDeg
 
+    /**
+     * @return latest roll of the device's +x axis (image-right for a rear camera solved in the
+     *   natural-orientation frame) above the horizon, degrees `(-180, 180]`, or null in the same
+     *   cases as [latestHeadingDegrees]. For another image frame use [cameraRollDegrees] with
+     *   [latestDeviceToWorldMatrix] and its `cameraFromDevice` rotation.
+     */
+    fun latestRollDegrees(): Float? = latestRollDeg
+
+    /** Latest device→world East-North-Up rotation (row-major 3×3, a fresh copy), or null. */
+    fun latestDeviceToWorldMatrix(): FloatArray? = latestDeviceToWorld?.copyOf()
+
     /** False once the system reports the magnetometer unreliable (needs a figure-8 recalibration). */
     val isReliable: Boolean get() = reliable
 
@@ -76,6 +89,8 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
             reliable = true
             latestHeadingDeg = null
             latestElevationDeg = null
+            latestRollDeg = null
+            latestDeviceToWorld = null
             registered = sm.registerListener(this, sensor, SensorManager.SENSOR_DELAY_UI)
         }
     }
@@ -91,6 +106,8 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
             registered = false
             latestHeadingDeg = null
             latestElevationDeg = null
+            latestRollDeg = null
+            latestDeviceToWorld = null
         }
     }
 
@@ -108,6 +125,8 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
         cameraAxisHeadingElevation(r)?.let { (h, e) ->
             latestHeadingDeg = h
             latestElevationDeg = e
+            latestRollDeg = cameraRollDegrees(r)
+            latestDeviceToWorld = r
         }
     }
 
@@ -140,6 +159,44 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
             heading = ((heading % 360f) + 360f) % 360f
             val elevation = Math.toDegrees(kotlin.math.asin(up.toDouble())).toFloat()
             return heading to elevation
+        }
+
+        /**
+         * Roll of the camera image's right axis above the horizon, degrees `(-180, 180]` — positive
+         * when the right edge of the image points above the horizon (device turned counter-clockwise
+         * as the user sees the screen). Pairs with [cameraAxisHeadingElevation] and
+         * [PhotosphereMap.directionOfPixel].
+         *
+         * @param r device→world East-North-Up rotation matrix, row-major 3×3.
+         * @param cameraFromDevice row-major 3×3 from the device body frame to the image's GL camera
+         *   frame (`com.hereliesaz.sphereslam.attitude.DeviceCameraRotation`); identity = device +x is
+         *   image-right.
+         * @return the roll, or null when [r] is malformed or the camera axis is near vertical.
+         */
+        fun cameraRollDegrees(r: FloatArray, cameraFromDevice: FloatArray? = null): Float? {
+            if (r.size < 9) return null
+            val c = cameraFromDevice ?: floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
+            if (c.size != 9) return null
+            // Image right in device coordinates is the first row of cameraFromDevice.
+            val dx = c[0]; val dy = c[1]; val dz = c[2]
+            val right = floatArrayOf(
+                r[0] * dx + r[1] * dy + r[2] * dz,
+                r[3] * dx + r[4] * dy + r[5] * dz,
+                r[6] * dx + r[7] * dy + r[8] * dz,
+            )
+            val f = floatArrayOf(-r[2], -r[5], -r[8]) // camera axis (device −Z) in world
+            val hx = f[1]; val hy = -f[0] // forward × up, horizontal right
+            val hn = kotlin.math.sqrt(hx * hx + hy * hy)
+            if (hn < 1e-4f) return null
+            val r0 = floatArrayOf(hx / hn, hy / hn, 0f)
+            val u0 = floatArrayOf(
+                r0[1] * f[2] - r0[2] * f[1],
+                r0[2] * f[0] - r0[0] * f[2],
+                r0[0] * f[1] - r0[1] * f[0],
+            )
+            val x = right[0] * r0[0] + right[1] * r0[1] + right[2] * r0[2]
+            val y = right[0] * u0[0] + right[1] * u0[1] + right[2] * u0[2]
+            return Math.toDegrees(kotlin.math.atan2(y.toDouble(), x.toDouble())).toFloat()
         }
     }
 }
