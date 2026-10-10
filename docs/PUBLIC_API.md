@@ -156,7 +156,7 @@ The library defensively copies:
 - `AnchoredStandaloneSession.AnchoredPose.cameraFromContent`
 - `PanoramaTile.representativeOrientation`
 - all array fields in `PhotosphereMapSnapshot`
-- `CoverageGlowRenderer.glowColor`
+- `CoverageGlowRenderer.hazeColor`
 
 Mutating an array supplied to or returned from these APIs does not mutate library state.
 
@@ -200,7 +200,7 @@ nor load OpenCV.
 
 - `SphereSlamStandaloneSession.addReference` throws `IllegalArgumentException` when
   `canonicalFromPage` is not a rigid transform.
-- `CoverageGlowProjection.project` throws when a field of view is outside `(0, 180)` degrees.
+- `CoverageGlowProjection.project` and `projectRegions` throw when a field of view is outside `(0, 180)` degrees.
 - `PhotosphereMap.fromSnapshot` rejects a non-finite `wallHeadingDeg` and normalizes a finite one.
 - `SphereCoverage` and `PhotosphereMap` auto-anchor their wall heading only from an in-band sample.
 
@@ -212,7 +212,7 @@ nor load OpenCV.
   pending frame.
 - `PhotosphereMap`, `PhotosphereReviewLoop`, and experimental `:reloc` state machines are not
   generally thread-safe unless explicitly documented otherwise.
-- `CoverageGlowRenderer.setMarks` is safe to call from any thread.
+- `CoverageGlowRenderer.setTriangles` is safe to call from any thread.
 
 ## 6. Experimental opt-in
 

@@ -386,6 +386,22 @@ class PhotosphereMap(
     }
 
     /**
+     * Every tile still needing an update as its full angular extent — what the coverage haze covers
+     * ([CoverageGlowProjection.projectRegions]). Accepted tiles are omitted, so the haze's border is
+     * the edge of what has been scanned. Empty until the map is anchored.
+     */
+    fun regionsNeedingUpdate(): List<SphereCoverage.TileRegion> {
+        val anchor = wallHeadingDeg ?: return emptyList()
+        val out = ArrayList<SphereCoverage.TileRegion>()
+        for (s in 0 until grid.sectorCount) {
+            for (b in 0 until grid.elevationBandCount) {
+                if (needsUpdateFlags[grid.index(s, b)]) out.add(grid.regionOf(s, b, anchor))
+            }
+        }
+        return out
+    }
+
+    /**
      * The tiles whose centers currently fall within the camera's view cone — the candidate set a tile
      * matcher should try to recognize this frame, so matching stays cheap no matter how large the map
      * grows. Pure angular test against the live attitude; needs the map anchored.

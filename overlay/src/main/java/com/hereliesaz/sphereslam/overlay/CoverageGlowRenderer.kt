@@ -12,59 +12,59 @@ import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
 /**
- * Draws the transparent "map more here" coverage glow.
+ * Draws the coverage haze: a flat, uniform, low-opacity fill over every unscanned tile. Accepted
+ * tiles get nothing, so the haze's border is the edge of what has been scanned. No falloff, no
+ * glow — every hazed pixel is exactly [hazeColor] at [hazeAlpha] over the camera preview.
  *
- * The fragment shader emits premultiplied color and the sprites blend additively
- * (`GL_ONE, GL_ONE`), so overlapping glows brighten rather than occlude. [pointSizePx] is clamped
- * at draw time to the driver's `GL_ALIASED_POINT_SIZE_RANGE`. If the shaders fail to compile or
- * link, the failure is logged and the renderer draws nothing (it never throws on the GL thread).
+ * Feed it triangles from [CoverageGlowProjection.projectRegions] via [setTriangles]. Those never
+ * overlap, so each pixel is drawn at most once and the opacity stays constant across tile seams.
+ * The shader emits premultiplied color and blends `ONE, ONE_MINUS_SRC_ALPHA`, leaving a correctly
+ * premultiplied framebuffer for the translucent surface to composite. If the shaders fail to
+ * compile or link, the failure is logged and the renderer draws nothing (it never throws on the GL
+ * thread).
  */
 class CoverageGlowRenderer(
-    glowColor: FloatArray = floatArrayOf(1f, 1f, 1f),
-    pointSizePx: Float = 220f,
-    baseAlpha: Float = 0.35f,
+    hazeColor: FloatArray = HOT_PINK,
+    hazeAlpha: Float = DEFAULT_HAZE_ALPHA,
 ) : GLSurfaceView.Renderer {
 
-    var glowColor: FloatArray = glowColor.copyOf()
+    /** Haze RGB, each in `[0, 1]`. Defaults to hot pink (#FF69B4). */
+    var hazeColor: FloatArray = hazeColor.copyOf()
         get() = field.copyOf()
         set(value) {
-            require(value.size == 3 && value.all { it.isFinite() }) {
-                "glowColor must contain three finite RGB values"
-            }
+            require(validColor(value)) { "hazeColor must contain three RGB values in [0, 1]" }
             field = value.copyOf()
         }
 
-    var pointSizePx: Float = pointSizePx
+    /** Haze opacity over the preview, `[0, 1]`; constant across every unscanned tile. */
+    var hazeAlpha: Float = hazeAlpha
         set(value) {
-            require(value.isFinite() && value > 0f) { "pointSizePx must be finite and positive" }
-            field = value
-        }
-
-    var baseAlpha: Float = baseAlpha
-        set(value) {
-            require(value.isFinite() && value in 0f..1f) { "baseAlpha must be in [0, 1]" }
+            require(value.isFinite() && value in 0f..1f) { "hazeAlpha must be in [0, 1]" }
             field = value
         }
 
     init {
-        require(this.glowColor.size == 3 && this.glowColor.all { it.isFinite() })
-        require(this.pointSizePx.isFinite() && this.pointSizePx > 0f)
-        require(this.baseAlpha.isFinite() && this.baseAlpha in 0f..1f)
+        require(validColor(this.hazeColor)) { "hazeColor must contain three RGB values in [0, 1]" }
+        require(this.hazeAlpha.isFinite() && this.hazeAlpha in 0f..1f) { "hazeAlpha must be in [0, 1]" }
     }
 
     private val latest = AtomicReference(FloatArray(0))
     private var program = 0
     private var aPosition = 0
-    private var aIntensity = 0
-    private var uPointSize = 0
     private var uColor = 0
-    private var uBaseAlpha = 0
+    private var uAlpha = 0
     private var vertexBuffer: FloatBuffer = allocate(0)
-    private var pointSizeRangeMin = 0f
-    private var pointSizeRangeMax = 0f
 
-    fun setMarks(marks: List<CoverageGlowProjection.GlowMark>) {
-        latest.set(CoverageGlowGeometry.buildVertexData(marks))
+    /**
+     * Replace the haze geometry: `GL_TRIANGLES` NDC vertex data,
+     * [CoverageGlowProjection.FLOATS_PER_REGION_VERTEX] floats per vertex, as returned by
+     * [CoverageGlowProjection.projectRegions]. An empty array clears the haze.
+     */
+    fun setTriangles(vertices: FloatArray) {
+        require(vertices.size % (3 * CoverageGlowProjection.FLOATS_PER_REGION_VERTEX) == 0) {
+            "vertices must hold whole triangles, size was ${vertices.size}"
+        }
+        latest.set(vertices.copyOf())
     }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
@@ -73,15 +73,9 @@ class CoverageGlowRenderer(
         // the old name is already gone, which glIsProgram reports, so nothing unrelated is deleted.
         if (program != 0 && GLES20.glIsProgram(program)) GLES20.glDeleteProgram(program)
         program = buildProgram(VERTEX_SHADER, FRAGMENT_SHADER)
-        val range = FloatArray(2)
-        GLES20.glGetFloatv(GLES20.GL_ALIASED_POINT_SIZE_RANGE, range, 0)
-        pointSizeRangeMin = range[0]
-        pointSizeRangeMax = range[1]
         aPosition = GLES20.glGetAttribLocation(program, "aPosition")
-        aIntensity = GLES20.glGetAttribLocation(program, "aIntensity")
-        uPointSize = GLES20.glGetUniformLocation(program, "uPointSize")
         uColor = GLES20.glGetUniformLocation(program, "uColor")
-        uBaseAlpha = GLES20.glGetUniformLocation(program, "uBaseAlpha")
+        uAlpha = GLES20.glGetUniformLocation(program, "uAlpha")
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -94,33 +88,24 @@ class CoverageGlowRenderer(
         if (data.isEmpty() || program == 0) return
 
         GLES20.glEnable(GLES20.GL_BLEND)
-        // The shader output is already premultiplied (rgb * a), so the source factor is ONE;
-        // destination ONE keeps the glow additive.
-        GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE)
+        // Premultiplied source over a cleared (0,0,0,0) target: each pixel is drawn once, so the
+        // framebuffer holds exactly (rgb * alpha, alpha) — what the translucent surface composites.
+        GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
         GLES20.glUseProgram(program)
-        GLES20.glUniform1f(
-            uPointSize,
-            CoverageGlowGeometry.clampPointSize(pointSizePx, pointSizeRangeMin, pointSizeRangeMax),
-        )
-        val color = glowColor
+        val color = hazeColor
         GLES20.glUniform3f(uColor, color[0], color[1], color[2])
-        GLES20.glUniform1f(uBaseAlpha, baseAlpha)
+        GLES20.glUniform1f(uAlpha, hazeAlpha)
 
         val buffer = ensureCapacity(data.size).apply {
             clear()
             put(data)
             position(0)
         }
-        val stride = CoverageGlowGeometry.FLOATS_PER_VERTEX * BYTES_PER_FLOAT
-        buffer.position(0)
+        val perVertex = CoverageGlowProjection.FLOATS_PER_REGION_VERTEX
         GLES20.glEnableVertexAttribArray(aPosition)
-        GLES20.glVertexAttribPointer(aPosition, 2, GLES20.GL_FLOAT, false, stride, buffer)
-        buffer.position(2)
-        GLES20.glEnableVertexAttribArray(aIntensity)
-        GLES20.glVertexAttribPointer(aIntensity, 1, GLES20.GL_FLOAT, false, stride, buffer)
-        GLES20.glDrawArrays(GLES20.GL_POINTS, 0, data.size / CoverageGlowGeometry.FLOATS_PER_VERTEX)
+        GLES20.glVertexAttribPointer(aPosition, perVertex, GLES20.GL_FLOAT, false, perVertex * BYTES_PER_FLOAT, buffer)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, data.size / perVertex)
         GLES20.glDisableVertexAttribArray(aPosition)
-        GLES20.glDisableVertexAttribArray(aIntensity)
         GLES20.glDisable(GLES20.GL_BLEND)
     }
 
@@ -185,30 +170,29 @@ class CoverageGlowRenderer(
         return shader
     }
 
-    private companion object {
-        const val BYTES_PER_FLOAT = 4
-        const val TAG = "CoverageGlowRenderer"
-        const val VERTEX_SHADER = """
+    companion object {
+        /** Hot pink, #FF69B4. */
+        val HOT_PINK: FloatArray get() = floatArrayOf(1f, 105f / 255f, 180f / 255f)
+
+        /** Default haze opacity: low enough to see the wall through, high enough to read the edge. */
+        const val DEFAULT_HAZE_ALPHA = 0.2f
+
+        private fun validColor(c: FloatArray) = c.size == 3 && c.all { it.isFinite() && it in 0f..1f }
+
+        private const val BYTES_PER_FLOAT = 4
+        private const val TAG = "CoverageGlowRenderer"
+        private const val VERTEX_SHADER = """
             attribute vec2 aPosition;
-            attribute float aIntensity;
-            uniform float uPointSize;
-            varying float vIntensity;
             void main() {
-                vIntensity = aIntensity;
                 gl_Position = vec4(aPosition, 0.0, 1.0);
-                gl_PointSize = uPointSize;
             }
         """
-        const val FRAGMENT_SHADER = """
+        private const val FRAGMENT_SHADER = """
             precision mediump float;
             uniform vec3 uColor;
-            uniform float uBaseAlpha;
-            varying float vIntensity;
+            uniform float uAlpha;
             void main() {
-                float d = distance(gl_PointCoord, vec2(0.5));
-                float falloff = clamp(1.0 - d * 2.0, 0.0, 1.0);
-                float a = uBaseAlpha * vIntensity * falloff * falloff;
-                gl_FragColor = vec4(uColor * a, a);
+                gl_FragColor = vec4(uColor * uAlpha, uAlpha);
             }
         """
     }

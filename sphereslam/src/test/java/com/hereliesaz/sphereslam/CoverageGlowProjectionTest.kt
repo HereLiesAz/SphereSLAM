@@ -107,4 +107,52 @@ class CoverageGlowProjectionTest {
         // Just inside the bounds is accepted.
         assertEquals(1, CoverageGlowProjection.project(listOf(dir(0f, 0f)), 0f, 0f, 179.9f, 0.1f).size)
     }
+
+    private fun region(az0: Float, az1: Float, el0: Float, el1: Float) =
+        SphereCoverage.TileRegion(az0, az1, el0, el1)
+
+    @Test
+    fun `a tile around the view axis fills a centered quad of whole triangles`() {
+        val n = 4
+        val v = CoverageGlowProjection.projectRegions(
+            listOf(region(350f, 370f, -10f, 10f)), 0f, 0f, 90f, 90f, subdivisions = n,
+        )
+        assertEquals(n * n * 6 * CoverageGlowProjection.FLOATS_PER_REGION_VERTEX, v.size)
+        val edge = Math.tan(Math.toRadians(10.0)).toFloat() // tan(10°) / tan(45°)
+        var minX = Float.MAX_VALUE; var maxX = -Float.MAX_VALUE
+        for (i in v.indices step 2) {
+            minX = minOf(minX, v[i]); maxX = maxOf(maxX, v[i])
+            assertTrue(Math.abs(v[i + 1]) <= edge * 1.02f + 1e-4f)
+        }
+        assertEquals(-edge, minX, 1e-4f)
+        assertEquals(edge, maxX, 1e-4f)
+    }
+
+    @Test
+    fun `adjacent tiles share their edge vertices exactly`() {
+        val left = CoverageGlowProjection.projectRegions(listOf(region(0f, 10f, -5f, 5f)), 5f, 0f, 60f, 60f, 2)
+        val right = CoverageGlowProjection.projectRegions(listOf(region(10f, 20f, -5f, 5f)), 5f, 0f, 60f, 60f, 2)
+        val leftMaxX = left.filterIndexed { i, _ -> i % 2 == 0 }.max()
+        val rightMinX = right.filterIndexed { i, _ -> i % 2 == 0 }.min()
+        assertEquals(leftMaxX, rightMinX, 0f)
+    }
+
+    @Test
+    fun `a tile behind the camera produces nothing`() {
+        assertEquals(0, CoverageGlowProjection.projectRegions(listOf(region(170f, 190f, -10f, 10f)), 0f, 0f, 60f, 45f).size)
+    }
+
+    @Test
+    fun `projectRegions validates subdivisions and fov`() {
+        for (call in listOf<() -> Unit>(
+            { CoverageGlowProjection.projectRegions(emptyList(), 0f, 0f, 60f, 45f, subdivisions = 0) },
+            { CoverageGlowProjection.projectRegions(emptyList(), 0f, 0f, 180f, 45f) },
+        )) {
+            try {
+                call(); throw AssertionError("expected IllegalArgumentException")
+            } catch (expected: IllegalArgumentException) {
+            }
+        }
+        assertEquals(0, CoverageGlowProjection.projectRegions(emptyList(), 0f, 0f, 60f, 45f).size)
+    }
 }

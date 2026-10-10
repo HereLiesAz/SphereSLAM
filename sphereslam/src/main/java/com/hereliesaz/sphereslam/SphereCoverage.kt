@@ -160,6 +160,24 @@ class SphereCoverage(
     data class Direction(val azimuthDeg: Float, val elevationDeg: Float)
 
     /**
+     * The full angular extent of one tile, for drawing the tile itself rather than a mark at its
+     * center (the coverage haze over [PhotosphereMap] tiles, [PhotosphereMap.regionsNeedingUpdate]).
+     *
+     * @property azimuthStartDeg absolute bearing of the tile's counter-clockwise edge, degrees.
+     * @property azimuthEndDeg absolute bearing of its clockwise edge, degrees; `> azimuthStartDeg`
+     *   and possibly beyond 360 when the tile straddles north (not normalized, so the span is
+     *   always `azimuthEndDeg - azimuthStartDeg`).
+     * @property elevationBottomDeg lower edge, degrees above the horizon.
+     * @property elevationTopDeg upper edge, degrees above the horizon; `> elevationBottomDeg`.
+     */
+    data class TileRegion(
+        val azimuthStartDeg: Float,
+        val azimuthEndDeg: Float,
+        val elevationBottomDeg: Float,
+        val elevationTopDeg: Float,
+    )
+
+    /**
      * Every still-unobserved bin center, as absolute directions — the signal a scene-anchored glow
      * draws over (feed it to [CoverageGlowProjection.project]).
      *
