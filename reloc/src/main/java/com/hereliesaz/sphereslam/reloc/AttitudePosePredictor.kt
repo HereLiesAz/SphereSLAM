@@ -1,5 +1,6 @@
 package com.hereliesaz.sphereslam.reloc
 
+import com.hereliesaz.sphereslam.attitude.AttitudeSample
 import com.hereliesaz.sphereslam.math.RotationMath
 
 /**
@@ -18,7 +19,10 @@ import com.hereliesaz.sphereslam.math.RotationMath
  * The device-frame delta is mapped into the camera frame through [cameraFromDevice]. The default
  * identity is correct for a rear camera on a device in its natural orientation, where Android's
  * device axes (x right, y up, z out of the screen) coincide with the GL eye axes (camera looking
- * down −z). Supply the fixed rotation for any other mounting / display rotation.
+ * down −z). Supply the fixed rotation for any other mounting / display rotation —
+ * [com.hereliesaz.sphereslam.attitude.DeviceCameraRotation.cameraFromDevice] computes it from the
+ * camera's sensor orientation and the rotation applied to the tracked image. Attitude can come from
+ * [com.hereliesaz.sphereslam.attitude.GameRotationAttitudeSource] via the [AttitudeSample] overloads.
  *
  * Not thread-safe; drive it from the same worker as the session.
  *
@@ -57,6 +61,12 @@ class AttitudePosePredictor(
         if (attitudeQuat.any { !it.isFinite() }) return null
         return rotateAboutCameraCentre(pose, cameraDelta(from, attitudeQuat))
     }
+
+    /** [correct] with the quaternion of an [AttitudeSample]. */
+    fun correct(columnMajorView: FloatArray, attitude: AttitudeSample) = correct(columnMajorView, attitude.quaternion)
+
+    /** [predict] with the quaternion of an [AttitudeSample]. */
+    fun predict(attitude: AttitudeSample): FloatArray? = predict(attitude.quaternion)
 
     override fun reset() {
         referencePose = null

@@ -19,6 +19,14 @@ changed incompatibly.
   `cvRowMajorToGlColumnMajor`. The private copies in `SphereSlamPoseMath`, `OverlayPlacement`,
   `PoseBlend`, `PoseAcceptancePolicy` and `SphereSlamSession.openCvToOpenGlColumnMajor` now use it
   (same results; `PoseBlend` still uses the camera centre).
+- New `com.hereliesaz.sphereslam.attitude` package: `GameRotationAttitudeSource`
+  (`TYPE_GAME_ROTATION_VECTOR` quaternion, accuracy, sensor timestamps), `AttitudeSample`,
+  `DeviceCameraRotation` (settles device→camera rotation: `R_z(sensorOrientation − appliedImageRotation)`;
+  display-upright frame = `bodyToDisplay(displayRotation)`; CameraX `rotationDegrees` itself is not
+  the device→camera angle), and `AttitudeRotationBridge` (incremental, camera-centre-holding rotation
+  bridge with a `bridgeFunction` for `RobustTrackingLoop.bridgeRotatedPose`). `AttitudePosePredictor`
+  gains `AttitudeSample` overloads. Tests pin `ROTATION_0/90/180/270` against a model of
+  `SensorManager.remapCoordinateSystem`.
 
 ### Native, build, and packaging
 
