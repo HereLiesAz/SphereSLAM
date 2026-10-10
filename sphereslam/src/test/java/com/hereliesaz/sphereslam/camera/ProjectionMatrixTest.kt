@@ -93,4 +93,16 @@ class ProjectionMatrixTest {
         assertThrows(IllegalArgumentException::class.java) { ProjectionMatrix.buildFrom(intrinsics, near = 5f, far = 1f) }
         assertThrows(IllegalArgumentException::class.java) { ProjectionMatrix.buildFrom(intrinsics, near = 0f, far = 1f) }
     }
+
+    @Test
+    fun `field of view reads back from the projection`() {
+        // fx = (w/2)/tan(30 deg) -> 60 deg horizontal.
+        val w = 1000
+        val fx = (w / 2f) / kotlin.math.tan(Math.toRadians(30.0)).toFloat()
+        val p = ProjectionMatrix.buildFrom(CameraIntrinsics(fx, fx, 500f, 375f, w, 750))
+        assertTrue(abs(ProjectionMatrix.horizontalFovDegrees(p)!! - 60f) < 1e-3f)
+        val vExpected = Math.toDegrees(2.0 * kotlin.math.atan(375.0 / fx)).toFloat()
+        assertTrue(abs(ProjectionMatrix.verticalFovDegrees(p)!! - vExpected) < 1e-3f)
+        assertTrue(ProjectionMatrix.horizontalFovDegrees(FloatArray(16)) == null)
+    }
 }

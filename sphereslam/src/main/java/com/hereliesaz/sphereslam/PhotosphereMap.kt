@@ -401,6 +401,33 @@ class PhotosphereMap(
         return out
     }
 
+    /** Every tile that is currently up to date (accepted and not expired), by id (anchor-independent). */
+    fun currentTiles(): List<TileId> {
+        val out = ArrayList<TileId>()
+        for (s in 0 until grid.sectorCount) {
+            for (b in 0 until grid.elevationBandCount) {
+                if (!needsUpdateFlags[grid.index(s, b)]) out.add(TileId(s, b))
+            }
+        }
+        return out
+    }
+
+    /**
+     * Every up-to-date tile as its full angular extent — the complement of [regionsNeedingUpdate]
+     * within the lattice. A "wash with holes" coverage overlay punches these out
+     * (`CoverageGlowProjection.projectRegions(map.currentRegions(), ...)`). Empty until anchored.
+     */
+    fun currentRegions(): List<SphereCoverage.TileRegion> {
+        val anchor = wallHeadingDeg ?: return emptyList()
+        val out = ArrayList<SphereCoverage.TileRegion>()
+        for (s in 0 until grid.sectorCount) {
+            for (b in 0 until grid.elevationBandCount) {
+                if (!needsUpdateFlags[grid.index(s, b)]) out.add(grid.regionOf(s, b, anchor))
+            }
+        }
+        return out
+    }
+
     /**
      * The tiles whose centers currently fall within the camera's view cone — the candidate set a tile
      * matcher should try to recognize this frame, so matching stays cheap no matter how large the map

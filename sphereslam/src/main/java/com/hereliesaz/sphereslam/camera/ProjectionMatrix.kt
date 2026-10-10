@@ -39,4 +39,20 @@ object ProjectionMatrix {
         m[14] = -2f * far * near / (far - near)
         return m
     }
+
+    /**
+     * Horizontal field of view in degrees implied by a [buildFrom]-style projection (`2·atan(1/P00)`;
+     * exact for a centred principal point). Null for a non-positive or non-finite focal term.
+     */
+    fun horizontalFovDegrees(projection: FloatArray): Float? = fovFrom(projection, 0)
+
+    /** Vertical counterpart of [horizontalFovDegrees] (`2·atan(1/P11)`). */
+    fun verticalFovDegrees(projection: FloatArray): Float? = fovFrom(projection, 5)
+
+    private fun fovFrom(projection: FloatArray, index: Int): Float? {
+        require(projection.size == 16) { "projection must be column-major length 16" }
+        val p = projection[index]
+        if (!p.isFinite() || p <= 1e-6f) return null
+        return Math.toDegrees(2.0 * kotlin.math.atan(1.0 / p)).toFloat()
+    }
 }

@@ -39,6 +39,16 @@ changed incompatibly.
   `CaptureRotation` (`rotateIntrinsics`, `unrotateIntrinsics`, `rotatePixel`; non-quarter-turn angles
   now throw), `LumaFrameTransform` / `RotatedLuma` (strided Y-plane pack, crop, rotate),
   `ProjectionMatrix.buildFrom`, and `ScreenIntrinsics` (`fitCenter`, `fallback`).
+- `PhotosphereMap.currentTiles()` / `currentRegions()` (the up-to-date complement of
+  `tilesNeedingUpdate()` / `regionsNeedingUpdate()`), and `ProjectionMatrix.horizontalFovDegrees` /
+  `verticalFovDegrees`.
+- `:overlay` `CoverageGlowRenderer` can be embedded in a host renderer: `createGlResources()`,
+  `drawEmbedded()` (non-clearing, premultiplied, draws into the currently bound framebuffer and
+  viewport and restores the GL state it touches) and `releaseGlResources()`. New
+  `FillMode.COMPLEMENT` draws a wash over everything except the supplied triangles (holes =
+  `projectRegions(map.currentRegions(), …)`), using a private offscreen mask, so no stencil/depth
+  buffer is needed; `FillMode.TRIANGLES` (default) keeps the haze behaviour. `CoverageGlowRenderer.WHITE`
+  added. GL objects are deleted only on the EGL context that created them.
 
 ### Native, build, and packaging
 
