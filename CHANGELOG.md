@@ -26,8 +26,13 @@
   snapshot "scanned" inference changed.
 - `SphereCoverage` / `PhotosphereMap` auto-anchor only on an in-band sample (coverage anchor
   ordering).
-- Glow renderer: shader compile/link checks, additive premultiplied blending (`ONE, ONE`), and point
-  size clamped to the driver's range.
+- Coverage glow replaced by a coverage haze: a flat, uniform hot-pink fill (#FF69B4, alpha 0.2, no
+  falloff) over every `PhotosphereMap` tile that still needs an update; accepted tiles stay clear.
+  New `PhotosphereMap.regionsNeedingUpdate`, `SphereCoverage.TileRegion` and
+  `CoverageGlowProjection.projectRegions`. Breaking: `CoverageGlowView.update` takes the
+  `PhotosphereMap`; `CoverageGlowRenderer` takes `hazeColor`/`hazeAlpha` and `setTriangles`
+  (`glowColor`, `pointSizePx`, `baseAlpha` and `setMarks` removed). Shader compile/link failures
+  are logged and draw nothing.
 - `CameraAttitudeProvider` is thread-safe; `start()` resets `isReliable`.
 - Strengthened tests across these modules.
 

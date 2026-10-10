@@ -344,4 +344,20 @@ class PhotosphereMapTest {
         assertTrue(restored.hasBeenScanned(TileId(0, 1)))
         assertFalse(restored.hasBeenScanned(TileId(0, 2)))
     }
+
+    @Test
+    fun `regionsNeedingUpdate covers every unaccepted photosphere tile and skips accepted ones`() {
+        val m = fullRing()
+        assertTrue(m.regionsNeedingUpdate().isEmpty()) // unanchored
+        m.markUpdated(headingDeg = 0f, elevationDeg = 0f) // anchors at 0, accepts sector 2 band 1
+        val regions = m.regionsNeedingUpdate()
+        assertEquals(11, regions.size)
+        assertFalse(regions.contains(SphereCoverage.TileRegion(0f, 90f, -20f, 20f)))
+        for (r in regions) {
+            assertEquals(90f, r.azimuthEndDeg - r.azimuthStartDeg, 1e-4f)
+            assertEquals(40f, r.elevationTopDeg - r.elevationBottomDeg, 1e-4f)
+        }
+        // Tile extents line up with the tiles the map itself reports.
+        assertEquals(m.tilesNeedingUpdate().size, regions.size)
+    }
 }

@@ -47,6 +47,12 @@ internal class SphereGrid(
     /** Row-major bin index for ([sector], [band]). */
     fun index(sector: Int, band: Int): Int = sector * elevationBandCount + band
 
+    /** Azimuth width of one sector, degrees. */
+    val sectorStepDeg: Float get() = (2f * viewableHalfAngleDeg) / sectorCount
+
+    /** Elevation height of one band, degrees. */
+    val bandStepDeg: Float get() = (2f * viewableElevationHalfAngleDeg) / elevationBandCount
+
     /** Signed azimuth offset (deg) of sector [s]'s center from the anchor, in `[-half, +half]`. */
     fun sectorCenterDelta(s: Int): Float {
         val step = (2f * viewableHalfAngleDeg) / sectorCount
@@ -57,6 +63,16 @@ internal class SphereGrid(
     fun bandCenterElevation(b: Int): Float {
         val step = (2f * viewableElevationHalfAngleDeg) / elevationBandCount
         return -viewableElevationHalfAngleDeg + (b + 0.5f) * step
+    }
+
+    /**
+     * Absolute angular extent of tile ([sector], [band]) for a wall anchored at [anchorDeg]. The
+     * start azimuth is normalized to `[0, 360)`; the end is start + [sectorStepDeg] (not wrapped).
+     */
+    fun regionOf(sector: Int, band: Int, anchorDeg: Float): SphereCoverage.TileRegion {
+        val start = norm360(anchorDeg + sectorCenterDelta(sector) - sectorStepDeg / 2f)
+        val bottom = bandCenterElevation(band) - bandStepDeg / 2f
+        return SphereCoverage.TileRegion(start, start + sectorStepDeg, bottom, bottom + bandStepDeg)
     }
 
     /** Sector index for [headingDeg] within the viewable arc around [anchorDeg], or null if outside. */

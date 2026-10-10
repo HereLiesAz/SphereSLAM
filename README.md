@@ -20,7 +20,7 @@ SphereSLAM is **pre-1.0**. There is no fictitious “frozen since 1.0” contrac
 | Module | Status | Intended use |
 | --- | --- | --- |
 | `:sphereslam` | **Supported pre-1.0 API** | Planar tracking, standalone tracking, ARCore sidecar tracking, coverage, placement |
-| `:overlay` | **Supported pre-1.0 API** | Optional coverage-glow UI |
+| `:overlay` | **Supported pre-1.0 API** | Optional coverage-haze UI |
 | `:reloc` | **Experimental** | OpenCV-backed photosphere/relocalization primitives |
 | `:models` | **Experimental** | Optional ONNX model helpers |
 | `:core:common` | **Internal** | Native loading/implementation support |
@@ -129,20 +129,21 @@ val rawCameraFromPage = observation?.cameraFromPage3x4
 
 `cameraFromPage3x4` is raw row-major KPM output. It is **not** an OpenGL or ARCore view matrix.
 
-## Coverage and glow
+## Coverage haze
+
+Every photosphere tile that still needs an update gets a flat, low-opacity hot-pink haze; accepted
+tiles stay clear, so the edge of the pink is the edge of what has been scanned. The haze is drawn
+from the `PhotosphereMap`'s own tiles — nothing else.
 
 ~~~kotlin
 val attitude = CameraAttitudeProvider(context).apply { start() }
-val coverage = SphereCoverage(elevationBandCount = 3)
-
-coverage.setWallHeading(headingWhenCapturedHeadOn)
+val map = PhotosphereMap(elevationBandCount = 3)
 
 val heading = attitude.latestHeadingDegrees() ?: return
 val elevation = attitude.latestElevationDegrees() ?: 0f
-coverage.observe(heading, elevation)
 
-val marks = CoverageGlowProjection.project(
-    directions = coverage.thinDirections(),
+val triangles = CoverageGlowProjection.projectRegions(
+    regions = map.regionsNeedingUpdate(),
     cameraHeadingDeg = heading,
     cameraElevationDeg = elevation,
     horizontalFovDeg = previewHFovDeg,
@@ -153,14 +154,9 @@ val marks = CoverageGlowProjection.project(
 Or use the optional `:overlay` artifact:
 
 ~~~kotlin
-val glow = CoverageGlowView(context)
-glow.update(
-    coverage.thinDirections(),
-    headingDeg,
-    elevationDeg,
-    horizontalFovDeg,
-    verticalFovDeg,
-)
+val haze = CoverageGlowView(context)
+haze.update(map, headingDeg, elevationDeg, horizontalFovDeg, verticalFovDeg)
+// haze.renderer.hazeColor / hazeAlpha to retune (defaults: #FF69B4 at 0.2)
 ~~~
 
 ## Native availability
@@ -211,7 +207,7 @@ deprecated aliases.
 - Planar KPM tracking: built
 - Multi-page canonical wall frame: built
 - Physical-size placement/retention: built
-- Angular coverage and glow: built
+- Angular coverage and tile haze: built
 - Photosphere freshness/relock loop: built, experimental API
 - Depth-backed tile triangulation/corroboration: building blocks (not yet wired), experimental API
 - Full omnidirectional production map-growth pipeline: still evolving
