@@ -49,6 +49,13 @@ changed incompatibly.
   `projectRegions(map.currentRegions(), …)`), using a private offscreen mask, so no stencil/depth
   buffer is needed; `FillMode.TRIANGLES` (default) keeps the haze behaviour. `CoverageGlowRenderer.WHITE`
   added. GL objects are deleted only on the EGL context that created them.
+- New `com.hereliesaz.sphereslam.sidecar` package (matrices only, no ARCore types) for
+  primary-tracker + KPM sidecar fusion: `HybridPoseHistory`, `HybridPageFrame`,
+  `HybridKpmCorrection` (gates + solve, `Reject`, `Accepted`, `Decision`, public `solveRaw`),
+  `HybridKpmOutcome` / `HybridKpmDiagnostics`, `HybridAnchorFusion` (anchor-local correction with
+  repeated-observation agreement before a large move; `agrees`, `HYBRID_AGREEMENT_*`, `State`,
+  `Diagnostics`), and `MetricPageRectification` (metric fronto-parallel page from a wall plane;
+  luma arrays in, pure-Kotlin perspective resample instead of OpenCV/Bitmap).
 
 ### Native, build, and packaging
 
