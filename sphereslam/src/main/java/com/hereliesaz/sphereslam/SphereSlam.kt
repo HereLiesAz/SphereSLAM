@@ -29,6 +29,47 @@ object SphereSlam {
 
     internal fun smokeTest(width: Int, height: Int): Boolean = KpmBridge.smokeTest(width, height)
 
+    /**
+     * Fail-closed runtime capability probe, stronger than [isAvailable]: the native entry points must
+     * be linked **and** a calibrated native KPM session must actually be creatable, ready, and
+     * closable. Creates and closes a temporary [SphereSlamEngine] with a synthetic calibration (no
+     * image is matched); real tracking still uses the camera's actual intrinsics.
+     *
+     * Never throws: any failure reports false. Call off the main thread if native session creation
+     * cost matters (it allocates the KPM handle once).
+     *
+     * @param frameWidth probe frame width, pixels, `> 0`.
+     * @param frameHeight probe frame height, pixels, `> 0`.
+     */
+    fun isOperational(frameWidth: Int = PROBE_WIDTH, frameHeight: Int = PROBE_HEIGHT): Boolean =
+        runCatching { probe(frameWidth, frameHeight, ::isAvailable, ::create) }.getOrDefault(false)
+
+    internal const val PROBE_WIDTH = 640
+    internal const val PROBE_HEIGHT = 480
+
+    /** The testable core of [isOperational]. */
+    internal fun probe(
+        frameWidth: Int,
+        frameHeight: Int,
+        available: () -> Boolean,
+        create: (Int, Int, SphereSlamCalibration) -> SphereSlamEngine,
+    ): Boolean {
+        require(frameWidth > 0 && frameHeight > 0)
+        if (!available()) return false
+        val calibration = SphereSlamCalibration(
+            fx = frameWidth.toFloat(),
+            fy = frameWidth.toFloat(),
+            cx = frameWidth / 2f,
+            cy = frameHeight / 2f,
+        )
+        val engine = create(frameWidth, frameHeight, calibration)
+        return try {
+            engine.isReady
+        } finally {
+            engine.close()
+        }
+    }
+
     fun create(
         frameWidth: Int,
         frameHeight: Int,

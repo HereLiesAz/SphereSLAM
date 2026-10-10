@@ -27,6 +27,11 @@ changed incompatibly.
   bridge with a `bridgeFunction` for `RobustTrackingLoop.bridgeRotatedPose`). `AttitudePosePredictor`
   gains `AttitudeSample` overloads. Tests pin `ROTATION_0/90/180/270` against a model of
   `SensorManager.remapCoordinateSystem`.
+- `SphereSlam.isOperational(frameWidth = 640, frameHeight = 480)`: fail-closed probe that creates,
+  checks and closes a calibrated native engine; never throws (replaces GraffitiXR's
+  `SphereSlamRuntimeProbe`).
+- `SphereSlamTracker.Observation.forTesting(...)`: public factory for host tests and replay
+  (the constructor stays internal; the tracker never reads a built observation).
 
 ### Native, build, and packaging
 
