@@ -132,9 +132,16 @@ class CoverageGlowProjectionTest {
     fun `adjacent tiles share their edge vertices exactly`() {
         val left = CoverageGlowProjection.projectRegions(listOf(region(0f, 10f, -5f, 5f)), 5f, 0f, 60f, 60f, 2)
         val right = CoverageGlowProjection.projectRegions(listOf(region(10f, 20f, -5f, 5f)), 5f, 0f, 60f, 60f, 2)
-        val leftMaxX = left.filterIndexed { i, _ -> i % 2 == 0 }.max()
-        val rightMinX = right.filterIndexed { i, _ -> i % 2 == 0 }.min()
-        assertEquals(leftMaxX, rightMinX, 0f)
+        // The shared az = 10 edge: the vertices with the largest x in `left` must reappear bit-for-bit
+        // in `right` (same az/el inputs => same projection). Compare vertex sets, not max vs min:
+        // different elevations on the edge differ by float noise even though the meridian is straight.
+        fun vertices(v: FloatArray) = (v.indices step 2).map { v[it] to v[it + 1] }.toSet()
+        val leftVerts = vertices(left)
+        val rightVerts = vertices(right)
+        val leftMaxX = leftVerts.maxOf { it.first }
+        val sharedEdge = leftVerts.filter { Math.abs(it.first - leftMaxX) < 1e-4f }
+        assertEquals(3, sharedEdge.size) // subdivisions + 1 vertices along the edge
+        assertTrue(rightVerts.containsAll(sharedEdge))
     }
 
     @Test
