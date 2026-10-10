@@ -12,6 +12,23 @@ The SLAM pieces deferred from the first consolidation. All additions are new API
   and the new inverse `frameToViewNormalized`, `fieldOfViewDegrees`, `screenIntrinsics` /
   `screenIntrinsicsFallback`. `ScreenIntrinsics` gains `fillCenter(...)` / `fillCenterFallback(...)`
   delegates. Ported with its tests from GraffitiXR `rendering.CameraFillCenter`.
+- `:reloc` `PhotosphereTrackingSession`: the standalone (no-ARCore) photosphere tracking runtime,
+  frame in / pose out (packed display-upright luma + `CameraIntrinsics` + timestamp +
+  `AttitudeSample` + body→camera rotation in; `FrameResult` / `TrackedPose` out, plus `Callbacks` for
+  keyframes, `map_from_fingerprint`, reference/atlas registration, failures, state and diagnostics).
+  Base rotation-only photosphere pose from the first attitude, quality-gated `PhotosphereKeyframe`s,
+  same-frame `map_from_fingerprint` solve and rebasing of the planar KPM pose into the map,
+  `RobustTrackingLoop` gating with an optional `correctAcceptedPose` hook, a ≤ 400 ms gyro bridge,
+  planar-session rebuild on an intrinsics change, `unitsPerPixel`, and multi-page atlas growth.
+  Ported from GraffitiXR `SphereSlamStandaloneTrackingAnalyzer`; CameraX, MobileGS, depth and UI stay
+  in the host.
+- `:reloc` `PhotosphereAtlasGrowth` (page proposal around the optical axis, overlap/baseline/margin
+  gates, perspective rectification through `MetricPageRectification.warpQuadToRect` instead of
+  OpenCV/Bitmap), `TargetQuality` / `TargetQualityConfig` / `TargetQualityReport` /
+  `ReferenceTooWeakException` (keyframe and page quality gate), and the failure taxonomy
+  `TrackingFailureReason` / `TrackingFailureSeverity` / `TrackingFailureEvent` /
+  `TrackingFailureClassifier` (no user-facing strings). Ported from GraffitiXR `StandaloneAtlasGrowth`,
+  `StandaloneTargetQuality` and `StandaloneFailure`.
 
 ### App → library consolidation (additive)
 

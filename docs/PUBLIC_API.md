@@ -89,6 +89,18 @@ stay row-major in OpenCV's camera convention (y down, z forward).
 Depth-backed tiles (`TileTriangulator`, `TileGate`, `TileFingerprint`, `DepthScaleFit`) are building
 blocks: they are not yet wired into `SphereSlamSession`'s map growth.
 
+`PhotosphereTrackingSession` is the standalone photosphere runtime: feed `onFrame(Frame(luma,
+intrinsics, timestampNs, attitude, cameraFromDevice, headingDeg, elevationDeg, rollDeg))` from the
+camera-analysis worker and render `FrameResult.pose?.cameraFromMap` (column-major GL
+camera-from-base-map) with `pose.projection`. The base map is defined by the first attitude sample and
+is rotation-only; the planar KPM pose (camera-from-fingerprint) is rebased through
+`map_from_fingerprint`, solved once per reference on the first lock
+(`Callbacks.onMapFromFingerprintSolved`) or supplied to `updatePrecisionLayer`. Hand the solved
+transform back on the next `updatePrecisionLayer` call (a different transform rebuilds the planar
+layer). Any exception while processing a frame is terminal (`TrackingState.FATAL`,
+`Callbacks.onFatalError`). `PhotosphereAtlasGrowth`, `TargetQuality` and `TrackingFailureClassifier`
+are usable on their own.
+
 #### `:models`
 
 Optional ONNX model wrappers are marked with `ExperimentalSphereSlamModelsApi`. They are not part
@@ -265,6 +277,8 @@ nor load OpenCV.
   `createGlResources`, `drawEmbedded` and `releaseGlResources` must run on the GL thread.
 - `GameRotationAttitudeSource` reads and `AttitudeRotationBridge` are thread-safe.
 - `PhotosphereKeyframeStore`, `HybridPoseHistory` and `HybridAnchorFusion` are not thread-safe.
+- `PhotosphereTrackingSession` synchronizes its methods; drive `onFrame` from one camera worker.
+  Callbacks run synchronously on the caller's thread.
 
 ### Embedding the coverage overlay
 

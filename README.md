@@ -218,6 +218,24 @@ fun useReloc() {
 }
 ~~~
 
+For a phone without ARCore, `PhotosphereTrackingSession` is the whole frame-in / pose-out runtime
+(base photosphere from device attitude, planar KPM precision layer rebased into it, gyro bridge,
+self-growing page atlas):
+
+~~~kotlin
+val tracking = PhotosphereTrackingSession(
+    PhotosphereTrackingSession.Config(timestampSource = CameraTimestampSource.REALTIME),
+    PhotosphereTrackingSession.Callbacks(onMapFromFingerprintSolved = { persist(it) }),
+)
+tracking.updatePrecisionLayer(PhotosphereTrackingSession.ReferenceImage(luma, w, h))
+// per display-upright analysis frame:
+val result = tracking.onFrame(
+    PhotosphereTrackingSession.Frame(packedLuma, intrinsics, timestampNs, attitude.latestSample(),
+        DeviceCameraRotation.cameraFromDevice(sensorOrientation, rotationDegrees)),
+)
+result.pose?.let { draw(it.cameraFromMap, it.projection) }
+~~~
+
 The optional `:models` module follows the same policy with
 `ExperimentalSphereSlamModelsApi`.
 
