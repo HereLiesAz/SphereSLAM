@@ -1,5 +1,7 @@
 package com.hereliesaz.sphereslam.reloc
 
+import com.hereliesaz.sphereslam.math.RotationMath
+
 /**
  * Minimal [EarlyPosePredictor]: holds the last visually-corrected pose and, between corrections,
  * rotates it by the device-attitude change since that correction. Rotation-only — the camera
@@ -64,25 +66,14 @@ class AttitudePosePredictor(
     /** The attitude delta re-expressed in the camera frame: `C · ΔR_device · Cᵀ` (row-major 3×3). */
     private fun cameraDelta(from: FloatArray, to: FloatArray): FloatArray {
         val deviceDelta = RotationDeltaMath.cameraRotationDelta(from, to)
-        return RotationDeltaMath.multiplyMat3(
-            RotationDeltaMath.multiplyMat3(cameraFromDevice, deviceDelta),
-            RotationDeltaMath.transposeMat3(cameraFromDevice),
-        )
+        return RotationMath.conjugateMat3(cameraFromDevice, deviceDelta)
     }
 
     internal companion object {
         val IDENTITY_3X3 = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
 
-        /**
-         * Left-multiply a column-major camera-from-map [view] by the row-major 3×3 [delta]:
-         * `[ΔR·R | ΔR·t]`. The camera centre `−Rᵀt` is unchanged, so this is a pure rotation of the
-         * camera in place. Pure; unit-tested.
-         */
-        fun rotateAboutCameraCentre(view: FloatArray, delta: FloatArray): FloatArray {
-            val m = FloatArray(16)
-            for (row in 0 until 3) for (col in 0 until 3) m[col * 4 + row] = delta[row * 3 + col]
-            m[15] = 1f
-            return PoseMath.multiply(m, view)
-        }
+        /** Delegates to [RotationDeltaMath.rotateAboutCameraCentre] (kept for existing callers). */
+        fun rotateAboutCameraCentre(view: FloatArray, delta: FloatArray): FloatArray =
+            RotationDeltaMath.rotateAboutCameraCentre(view, delta)
     }
 }

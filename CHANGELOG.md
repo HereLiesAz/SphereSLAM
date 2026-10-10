@@ -2,6 +2,16 @@
 
 ## Unreleased — audit fixes
 
+### App → library consolidation (additive)
+
+Generic code moved out of GraffitiXR. All additions are new API; nothing existing was removed or
+changed incompatibly.
+
+- New supported `com.hereliesaz.sphereslam.math.RotationMath` (quaternion / row-major 3×3 math,
+  `rotationAboutZ`, `cameraRotationDelta`, public `rotateAboutCameraCentre`, `conjugateMat3`,
+  `rotationAngleDegrees`). `:reloc` `RotationDeltaMath` delegates to it and gains `rotationAboutZ`
+  and a public `rotateAboutCameraCentre`.
+
 ### Native, build, and packaging
 
 - A native-load failure now degrades to "unavailable": `SphereSlam.isAvailable()` and `KpmBridge`
