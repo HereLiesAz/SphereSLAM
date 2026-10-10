@@ -67,6 +67,11 @@ changed incompatibly.
 - `com.hereliesaz.sphereslam.gyro.GyroCompensationMath`: gyro stabilisation of a screen-space
   overlay (infinite homography `K·R·K⁻¹`, optional plane parallax term, body→display remap, release
   threshold, MiDaS relative inverse depth helper), ported with its tests from GraffitiXR.
+- `:reloc` `Relocalizer` resolves the planar two-fold (flip) ambiguity: after RANSAC it re-solves the
+  inliers with `SOLVEPNP_IPPE` and adopts a candidate only when its inlier reprojection error is
+  strictly lower (as GraffitiXR's native `MobileGS::runRelocPass` and `HomographyTracker` do). New
+  trailing constructor parameter `planarRefine` (default `DEFAULT_PLANAR_REFINE = true`); set it to
+  false for the previous behaviour.
 
 ### Native, build, and packaging
 
