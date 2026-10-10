@@ -64,6 +64,9 @@ changed incompatibly.
   roll** (fix: GraffitiXR added `atan` offsets to heading/elevation, wrong for a rolled camera and
   off-axis). `CameraAttitudeProvider` gains `latestRollDegrees()`, `latestDeviceToWorldMatrix()` and
   the pure `cameraRollDegrees(r, cameraFromDevice)`.
+- `com.hereliesaz.sphereslam.gyro.GyroCompensationMath`: gyro stabilisation of a screen-space
+  overlay (infinite homography `K·R·K⁻¹`, optional plane parallax term, body→display remap, release
+  threshold, MiDaS relative inverse depth helper), ported with its tests from GraffitiXR.
 
 ### Native, build, and packaging
 
