@@ -44,6 +44,16 @@ The SLAM pieces deferred from the first consolidation. All additions are new API
   back-projection (`backProjectToPlane`, `backProjectToCameraPlane`), two-view triangulation through
   `TileTriangulator` (`triangulateTwoView`) and the display-orientation view helpers, ported from
   GraffitiXR `anchor.PlaneMarks` / `anchor.MetricMarks`.
+- `:reloc` `PlanarTracker`: live planar tracking of one captured reference with a gyro bridge —
+  packed luma + `CameraIntrinsics` (+ optional `AttitudeSample` and body→camera rotation) in, an
+  OpenGL camera-from-plane view matrix in the caller's half-extent units out. Same vision algorithm
+  and gates as GraffitiXR's native `HomographyTracker` (ORB, Lowe 0.75, `solvePnPRansac` + IPPE
+  refine, ≥ 30 reference features, ≥ 12 matches, ≥ 8 inliers, inlier ratio ≥ 0.35, inlier spread
+  ≥ 25 % per axis) on the OpenCV Java `Relocalizer`, with `BridgedHomographyTracker`'s ≤ 400 ms
+  rotation-only bridge and linearly decaying confidence. Replaces the app's `HomographyTracker`
+  JNI stack. Supporting additions: `Relocalizer.relocalizeDetailed` / `RelocDetail` (match count,
+  inlier ratio and inlier bounding box), `PlanarGeometry.pixelToExtents` and
+  `PlanarFingerprint.fromReferenceExtents` (reference stretched onto explicit half-extents).
 
 ### App → library consolidation (additive)
 

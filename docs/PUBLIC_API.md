@@ -97,6 +97,12 @@ OpenCV for `MetricMarks`); `WallFeatureMap` takes the row-major OpenCV `RelocRes
 Fingerprint object points are in the capture camera's OpenCV frame. Only `WallFeatureMap`'s
 `descriptorMat` / `matchDescriptors` / `growFromReloc` / `toFingerprint` need OpenCV's native library.
 
+`PlanarTracker` tracks one captured planar reference per frame and returns a column-major OpenGL
+camera-from-plane view in the half-extent units passed to `setReference` (plane +X right, +Y up,
+`z = 0`), bridging a brief miss with device attitude. It needs OpenCV's native library like
+`Relocalizer`. For KPM-based planar tracking without OpenCV use `SphereSlamStandaloneSession`
+(isotropic, metric page geometry) instead.
+
 `PhotosphereTrackingSession` is the standalone photosphere runtime: feed `onFrame(Frame(luma,
 intrinsics, timestampNs, attitude, cameraFromDevice, headingDeg, elevationDeg, rollDeg))` from the
 camera-analysis worker and render `FrameResult.pose?.cameraFromMap` (column-major GL
@@ -285,6 +291,7 @@ nor load OpenCV.
   `createGlResources`, `drawEmbedded` and `releaseGlResources` must run on the GL thread.
 - `GameRotationAttitudeSource` reads and `AttitudeRotationBridge` are thread-safe.
 - `PhotosphereKeyframeStore`, `HybridPoseHistory` and `HybridAnchorFusion` are not thread-safe.
+- `PlanarTracker` is not thread-safe; drive it from one camera worker.
 - `PhotosphereTrackingSession` synchronizes its methods; drive `onFrame` from one camera worker.
   Callbacks run synchronously on the caller's thread.
 

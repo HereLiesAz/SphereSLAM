@@ -223,6 +223,10 @@ frustum-gated (`visibleIndices` → `toFingerprint`); `RectifyHomography` pre-ca
 perspective; `MetricMarks` builds metric marks from a known plane or two views; `RadialDepthPlacement`
 places off-wall features from a calibrated relative depth map.
 
+`PlanarTracker` is the small case: track one captured reference image and get an OpenGL view matrix
+per frame (`setReference(luma, w, h, halfW, halfH)`, then `track(luma, w, h, intrinsics, attitude)`),
+with a short gyro bridge across misses.
+
 For a phone without ARCore, `PhotosphereTrackingSession` is the whole frame-in / pose-out runtime
 (base photosphere from device attitude, planar KPM precision layer rebased into it, gyro bridge,
 self-growing page atlas):

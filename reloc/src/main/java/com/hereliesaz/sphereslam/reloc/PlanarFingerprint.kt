@@ -46,5 +46,28 @@ class PlanarFingerprint(
             val points3d = MatOfPoint3f().apply { fromList(pts) }
             return PlanarFingerprint(descriptors, points3d, kps, binaryDescriptors = true)
         }
+
+        /**
+         * [fromReference] onto a plane of explicit half-extents ([PlanarGeometry.pixelToExtents]):
+         * poses solved against it come out in the units of [halfWidth] / [halfHeight].
+         */
+        fun fromReferenceExtents(gray: Mat, halfWidth: Float, halfHeight: Float, maxFeatures: Int = 1000): PlanarFingerprint {
+            val orb = ORB.create(maxFeatures)
+            val kps = MatOfKeyPoint()
+            val descriptors = Mat()
+            val mask = Mat()
+            try {
+                orb.detectAndCompute(gray, mask, kps, descriptors)
+            } finally {
+                mask.release()
+            }
+            val w = gray.cols()
+            val h = gray.rows()
+            val pts = kps.toArray().map { kp ->
+                val p = PlanarGeometry.pixelToExtents(kp.pt.x.toFloat(), kp.pt.y.toFloat(), w, h, halfWidth, halfHeight)
+                Point3(p[0].toDouble(), p[1].toDouble(), p[2].toDouble())
+            }
+            return PlanarFingerprint(descriptors, MatOfPoint3f().apply { fromList(pts) }, kps, binaryDescriptors = true)
+        }
     }
 }

@@ -30,4 +30,25 @@ object PlanarGeometry {
         val y = (0.5f - v / imageHeight) * heightMeters
         return floatArrayOf(x, y, 0f)
     }
+
+    /**
+     * Map a reference-image pixel onto a plane spanning exactly `[-halfWidth, halfWidth] ×
+     * [-halfHeight, halfHeight]` (`z = 0`, +X right, +Y up, top-left pixel at `(-halfWidth,
+     * +halfHeight)`), independent of the image aspect — for a reference stretched onto a design quad
+     * of given half-extents (GraffitiXR's `HomographyTracker` object frame).
+     */
+    fun pixelToExtents(
+        u: Float,
+        v: Float,
+        imageWidth: Int,
+        imageHeight: Int,
+        halfWidth: Float,
+        halfHeight: Float,
+    ): FloatArray {
+        require(imageWidth > 0 && imageHeight > 0) { "image dims must be positive" }
+        require(halfWidth > 0f && halfWidth.isFinite() && halfHeight > 0f && halfHeight.isFinite()) {
+            "half-extents must be positive"
+        }
+        return floatArrayOf((u / imageWidth - 0.5f) * 2f * halfWidth, -(v / imageHeight - 0.5f) * 2f * halfHeight, 0f)
+    }
 }

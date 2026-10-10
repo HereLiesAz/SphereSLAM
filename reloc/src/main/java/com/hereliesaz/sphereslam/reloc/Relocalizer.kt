@@ -34,6 +34,31 @@ data class RelocResult(
 )
 
 /**
+ * A [RelocResult] with the evidence behind it (see [Relocalizer.relocalizeDetailed]).
+ *
+ * @property matches ratio-test correspondences handed to RANSAC (`>= result.inliers`).
+ * @property inlierBounds `[minU, minV, maxU, maxV]` pixel bounding box of the PnP inliers.
+ */
+@ExperimentalSphereSlamRelocApi
+class RelocDetail(
+    val result: RelocResult,
+    val matches: Int,
+    inlierBounds: FloatArray,
+) {
+    private val bounds = inlierBounds.copyOf()
+
+    init {
+        require(inlierBounds.size == 4)
+    }
+
+    /** A fresh copy of `[minU, minV, maxU, maxV]`. */
+    val inlierBounds: FloatArray get() = bounds.copyOf()
+
+    /** Inlier share of the matches, 0 when there were none. */
+    val inlierRatio: Float get() = if (matches > 0) result.inliers.toFloat() / matches else 0f
+}
+
+/**
  * Basic markerless relocalization: match the live frame against a [PlanarFingerprint] and solve for
  * the camera pose with PnP+RANSAC. This is the whole "where is the camera relative to my target"
  * primitive for simple overlay AR — no tracking loop, no map, no IMU required.
@@ -155,7 +180,18 @@ class Relocalizer(
         frameKeypoints: MatOfKeyPoint,
         frameDescriptors: Mat,
         fingerprintOverride: Fingerprint? = null,
-    ): RelocResult? {
+    ): RelocResult? = relocalizeDetailed(frameKeypoints, frameDescriptors, fingerprintOverride)?.result
+
+    /**
+     * [relocalizeWith] plus the evidence a host gate needs beyond the inlier count: how many
+     * ratio-test matches went into RANSAC ([RelocDetail.matches], for an inlier-ratio gate) and the
+     * pixel bounding box of the inliers ([RelocDetail.inlierBounds], for a spatial-spread gate).
+     */
+    fun relocalizeDetailed(
+        frameKeypoints: MatOfKeyPoint,
+        frameDescriptors: Mat,
+        fingerprintOverride: Fingerprint? = null,
+    ): RelocDetail? {
         val fp = fingerprintOverride ?: fingerprint ?: return null
         if (fp.descriptors.empty() || frameDescriptors.empty()) return null
         if (fp.descriptors.type() != frameDescriptors.type()) return null
@@ -210,7 +246,11 @@ class Relocalizer(
             val ransacPose = composePose(rvec, tvec)
             val candidates = if (planarRefine) ippeCandidates(objPts, imgPts, inlierIdx) else emptyList()
             val (pose, residual) = lowestResidualPose(ransacPose, candidates, residualOf)
-            return RelocResult(cameraFromObject = pose, inliers = inlierCount, reprojectionErrorPx = residual)
+            return RelocDetail(
+                result = RelocResult(cameraFromObject = pose, inliers = inlierCount, reprojectionErrorPx = residual),
+                matches = objPts.size,
+                inlierBounds = inlierBounds(imgD, inlierIdx),
+            )
         } finally {
             for (m in knn) m.release()
             objectMat.release()
@@ -277,6 +317,22 @@ class Relocalizer(
     }
 
     companion object {
+        /** `[minU, minV, maxU, maxV]` of the [inlierIndices] subset of [imagePoints]; zeros when empty. Pure. */
+        internal fun inlierBounds(imagePoints: List<DoubleArray>, inlierIndices: IntArray): FloatArray {
+            var minU = Double.MAX_VALUE; var minV = Double.MAX_VALUE
+            var maxU = -Double.MAX_VALUE; var maxV = -Double.MAX_VALUE
+            var any = false
+            for (i in inlierIndices) {
+                if (i !in imagePoints.indices) continue
+                val p = imagePoints[i]
+                minU = minOf(minU, p[0]); maxU = maxOf(maxU, p[0])
+                minV = minOf(minV, p[1]); maxV = maxOf(maxV, p[1])
+                any = true
+            }
+            if (!any) return FloatArray(4)
+            return floatArrayOf(minU.toFloat(), minV.toFloat(), maxU.toFloat(), maxV.toFloat())
+        }
+
         /** Default Lowe ratio-test threshold. */
         const val DEFAULT_LOWE_RATIO = 0.75f
 
