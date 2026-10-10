@@ -32,6 +32,13 @@ changed incompatibly.
   `SphereSlamRuntimeProbe`).
 - `SphereSlamTracker.Observation.forTesting(...)`: public factory for host tests and replay
   (the constructor stays internal; the tracker never reads a built observation).
+- New `com.hereliesaz.sphereslam.camera` package: `CameraIntrinsics`, `CameraIntrinsicsEstimator`
+  (Camera2 characteristics → intrinsics, cached per camera id, `RawCalibration`; fix: an
+  aspect-changing stream such as 16:9 from a 4:3 sensor is now a centred crop plus uniform scale
+  instead of independent x/y scaling), `CameraIntrinsicsTransforms` (`crop`, `rescale`, `rotate`),
+  `CaptureRotation` (`rotateIntrinsics`, `unrotateIntrinsics`, `rotatePixel`; non-quarter-turn angles
+  now throw), `LumaFrameTransform` / `RotatedLuma` (strided Y-plane pack, crop, rotate),
+  `ProjectionMatrix.buildFrom`, and `ScreenIntrinsics` (`fitCenter`, `fallback`).
 
 ### Native, build, and packaging
 
