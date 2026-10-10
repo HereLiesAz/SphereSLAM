@@ -251,20 +251,12 @@ class SphereSlamSession internal constructor(
          * (column-major 16; x right, y up, looking down −z): negate rows 1 and 2 (`diag(1,−1,−1)·M`),
          * then transpose storage.
          */
-        fun openCvToOpenGlColumnMajor(rowMajorCv: FloatArray): FloatArray {
-            require(rowMajorCv.size == 16) { "matrix must be length 16" }
-            val flipped = rowMajorCv.copyOf()
-            for (row in 1..2) for (col in 0 until 4) flipped[row * 4 + col] = -flipped[row * 4 + col]
-            return rowMajorToColumnMajor(flipped)
-        }
+        fun openCvToOpenGlColumnMajor(rowMajorCv: FloatArray): FloatArray =
+            PoseMath.cvRowMajorToGlColumnMajor(rowMajorCv)
 
         /** Row-major 4×4 → column-major 16 (a transpose of storage for the same transform). */
-        fun rowMajorToColumnMajor(rowMajor: FloatArray): FloatArray {
-            require(rowMajor.size == 16) { "matrix must be length 16" }
-            val out = FloatArray(16)
-            for (row in 0 until 4) for (col in 0 until 4) out[col * 4 + row] = rowMajor[row * 4 + col]
-            return out
-        }
+        fun rowMajorToColumnMajor(rowMajor: FloatArray): FloatArray =
+            com.hereliesaz.sphereslam.math.RigidMath.rowMajorToColumnMajor(rowMajor)
     }
 }
 

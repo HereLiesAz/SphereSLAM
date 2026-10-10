@@ -11,6 +11,14 @@ changed incompatibly.
   `rotationAboutZ`, `cameraRotationDelta`, public `rotateAboutCameraCentre`, `conjugateMat3`,
   `rotationAngleDegrees`). `:reloc` `RotationDeltaMath` delegates to it and gains `rotationAboutZ`
   and a public `rotateAboutCameraCentre`.
+- New supported `com.hereliesaz.sphereslam.math.RigidMath` (column-major 4×4: `multiply`,
+  `rigidInverse`, `similarityInverse`, `scaleOf`, `translationNorm`, `cameraCentre`,
+  `rotationAngleDeg`, `rotationDeltaDeg`, quaternion helpers, and the OpenGL ↔ OpenCV flips
+  `glViewToCv` / `cvViewToGl` / `cvRowMajorToGlColumnMajor`). `:reloc` `PoseMath` delegates to it
+  and gains `scaleOf`, `similarityInverse`, `translationNorm`, `rotationAngleDeg`, `glViewToCv` and
+  `cvRowMajorToGlColumnMajor`. The private copies in `SphereSlamPoseMath`, `OverlayPlacement`,
+  `PoseBlend`, `PoseAcceptancePolicy` and `SphereSlamSession.openCvToOpenGlColumnMajor` now use it
+  (same results; `PoseBlend` still uses the camera centre).
 
 ### Native, build, and packaging
 
