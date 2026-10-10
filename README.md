@@ -171,7 +171,7 @@ To draw the coverage inside your own GL renderer (beneath your artwork), use
 | --- | --- |
 | `math` | `RotationMath`, `RigidMath` (quaternions, rigid/similarity 4×4, GL ↔ CV flips) |
 | `attitude` | `GameRotationAttitudeSource`, `DeviceCameraRotation`, `AttitudeRotationBridge` |
-| `camera` | `CameraIntrinsicsEstimator`, `CaptureRotation`, `LumaFrameTransform`, `ProjectionMatrix`, `ScreenIntrinsics` |
+| `camera` | `CameraIntrinsicsEstimator`, `CaptureRotation`, `LumaFrameTransform`, `ProjectionMatrix`, `ScreenIntrinsics` (`FIT_CENTER`), `CameraFillCenter` (`FILL_CENTER` projection, tap mapping, FOV) |
 | `sidecar` | ARCore + KPM sidecar fusion: `HybridPoseHistory`, `HybridKpmCorrection`, `HybridAnchorFusion`, `MetricPageRectification` |
 | `gyro` | `GyroCompensationMath` (gyro-stabilised screen overlays) |
 

@@ -2,6 +2,17 @@
 
 ## Unreleased — audit fixes
 
+### App → library consolidation, part 2 (additive)
+
+The SLAM pieces deferred from the first consolidation. All additions are new API.
+
+- New `com.hereliesaz.sphereslam.camera.CameraFillCenter`: `FILL_CENTER` display math beside
+  `ScreenIntrinsics.fitCenter` — `scale`, `intrinsics` (rescale to cover, then centre-crop, rounded at
+  view resolution so registration stays within ½ view pixel), `projection`, `viewToFrameNormalized`
+  and the new inverse `frameToViewNormalized`, `fieldOfViewDegrees`, `screenIntrinsics` /
+  `screenIntrinsicsFallback`. `ScreenIntrinsics` gains `fillCenter(...)` / `fillCenterFallback(...)`
+  delegates. Ported with its tests from GraffitiXR `rendering.CameraFillCenter`.
+
 ### App → library consolidation (additive)
 
 Generic code moved out of GraffitiXR. All additions are new API; nothing existing was removed or

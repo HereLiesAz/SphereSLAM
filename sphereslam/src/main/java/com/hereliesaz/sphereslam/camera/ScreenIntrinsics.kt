@@ -5,6 +5,7 @@ import kotlin.math.tan
 /**
  * Pinhole intrinsics in **screen (view) pixels** for a camera image shown `FIT_CENTER` in a view —
  * what screen-space overlays (e.g. [com.hereliesaz.sphereslam.gyro.GyroCompensationMath]) need.
+ * The `FILL_CENTER` counterpart is [fillCenter] ([CameraFillCenter] holds the rest of that crop's math).
  */
 object ScreenIntrinsics {
 
@@ -54,4 +55,25 @@ object ScreenIntrinsics {
         val f = (w / 2f) / tan(Math.toRadians(FALLBACK_LONG_SIDE_FOV_DEGREES / 2.0)).toFloat()
         return fitCenter(f, f, w, h, viewWidth, viewHeight)
     }
+
+    /**
+     * `[fx, fy, cx, cy]` for the same frame shown `FILL_CENTER` (covering scale instead of fitting);
+     * delegates to [CameraFillCenter.screenIntrinsics].
+     */
+    fun fillCenter(
+        imageFx: Float,
+        imageFy: Float,
+        imageWidth: Int,
+        imageHeight: Int,
+        viewWidth: Int,
+        viewHeight: Int,
+    ): FloatArray = CameraFillCenter.screenIntrinsics(imageFx, imageFy, imageWidth, imageHeight, viewWidth, viewHeight)
+
+    /** [fillCenter] for a [CameraIntrinsics]. */
+    fun fillCenter(intrinsics: CameraIntrinsics, viewWidth: Int, viewHeight: Int): FloatArray =
+        CameraFillCenter.screenIntrinsics(intrinsics, viewWidth, viewHeight)
+
+    /** [fillCenter] counterpart of [fallback]. */
+    fun fillCenterFallback(viewWidth: Int, viewHeight: Int): FloatArray =
+        CameraFillCenter.screenIntrinsicsFallback(viewWidth, viewHeight)
 }

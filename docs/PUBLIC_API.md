@@ -42,7 +42,8 @@ Supporting packages (all pure / Android-light, no ARCore types):
   `DeviceCameraRotation`, `AttitudeRotationBridge`.
 - `com.hereliesaz.sphereslam.camera` — `CameraIntrinsics`, `CameraIntrinsicsEstimator`,
   `CameraIntrinsicsTransforms`, `CaptureRotation`, `LumaFrameTransform`, `ProjectionMatrix`,
-  `ScreenIntrinsics`.
+  `ScreenIntrinsics` (`FIT_CENTER`), `CameraFillCenter` (`FILL_CENTER`: track the full frame, apply
+  the display crop only where the frame meets the screen).
 - `com.hereliesaz.sphereslam.sidecar` — `HybridPoseHistory`, `HybridPageFrame`,
   `HybridKpmCorrection`, `HybridAnchorFusion`, `HybridKpmOutcome`, `HybridKpmDiagnostics`,
   `MetricPageRectification`.
