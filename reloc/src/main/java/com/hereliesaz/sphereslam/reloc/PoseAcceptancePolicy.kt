@@ -1,5 +1,6 @@
 package com.hereliesaz.sphereslam.reloc
 
+import com.hereliesaz.sphereslam.math.RigidMath
 import kotlin.math.acos
 import kotlin.math.sqrt
 
@@ -131,14 +132,7 @@ class PoseAcceptancePolicy(
     }
 
     /** Camera centre `−Rᵀt` of a column-major view matrix. */
-    private fun cameraCenter(view: FloatArray): FloatArray {
-        val tx = view[12]; val ty = view[13]; val tz = view[14]
-        return floatArrayOf(
-            -(view[0] * tx + view[1] * ty + view[2] * tz),
-            -(view[4] * tx + view[5] * ty + view[6] * tz),
-            -(view[8] * tx + view[9] * ty + view[10] * tz),
-        )
-    }
+    private fun cameraCenter(view: FloatArray): FloatArray = RigidMath.cameraCentre(view)
 
     /** Geodesic angle (degrees) between the rotation parts of two column-major view matrices. */
     private fun rotationDeltaDegrees(a: FloatArray, b: FloatArray): Float {

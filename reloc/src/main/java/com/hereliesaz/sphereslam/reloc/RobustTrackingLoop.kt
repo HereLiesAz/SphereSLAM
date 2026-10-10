@@ -47,6 +47,8 @@ package com.hereliesaz.sphereslam.reloc
  * @property stateMachine tracking-state hysteresis.
  * @property bridgeRotatedPose optional: given the last rendered pose, return a gyro-bridged pose to
  *   render during an [TrackingState.IMU_BRIDGE] miss, or null to render nothing.
+ *   [com.hereliesaz.sphereslam.attitude.AttitudeRotationBridge.bridgeFunction] provides one from
+ *   device attitude (mark its reference after each accepted frame).
  * @property correctAcceptedPose optional: given the accepted raw pose (column-major length 16), return
  *   the pose to render for it (length 16) — a post-acceptance correction smoothed and drawn in place of
  *   the raw pose. Gating is unaffected; defaults to the identity (render the raw accepted pose).

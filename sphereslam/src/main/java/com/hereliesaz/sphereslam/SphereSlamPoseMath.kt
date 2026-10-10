@@ -1,5 +1,7 @@
 package com.hereliesaz.sphereslam
 
+import com.hereliesaz.sphereslam.math.RigidMath
+
 /**
  * Coordinate and scale conversions for calibrated artoolkitX KPM poses.
  *
@@ -145,12 +147,7 @@ object SphereSlamPoseMath {
         return multiply4(cameraFromPage, invertRigid4(canonicalFromPage))
     }
 
-    fun identity4(): FloatArray = floatArrayOf(
-        1f, 0f, 0f, 0f,
-        0f, 1f, 0f, 0f,
-        0f, 0f, 1f, 0f,
-        0f, 0f, 0f, 1f,
-    )
+    fun identity4(): FloatArray = RigidMath.identity()
 
     /**
      * Require a finite column-major 4x4 with an affine bottom row. With [requireOrthonormal], also
@@ -186,31 +183,7 @@ object SphereSlamPoseMath {
 
     private const val ROTATION_TOLERANCE = 1e-3f
 
-    private fun invertRigid4(m: FloatArray): FloatArray {
-        val out = identity4()
-        out[0] = m[0]; out[4] = m[1]; out[8] = m[2]
-        out[1] = m[4]; out[5] = m[5]; out[9] = m[6]
-        out[2] = m[8]; out[6] = m[9]; out[10] = m[10]
-        val tx = m[12]
-        val ty = m[13]
-        val tz = m[14]
-        out[12] = -(m[0] * tx + m[1] * ty + m[2] * tz)
-        out[13] = -(m[4] * tx + m[5] * ty + m[6] * tz)
-        out[14] = -(m[8] * tx + m[9] * ty + m[10] * tz)
-        return out
-    }
+    private fun invertRigid4(m: FloatArray): FloatArray = RigidMath.rigidInverse(m)
 
-    private fun multiply4(a: FloatArray, b: FloatArray): FloatArray {
-        val out = FloatArray(16)
-        for (col in 0..3) {
-            for (row in 0..3) {
-                var sum = 0f
-                for (k in 0..3) {
-                    sum += a[k * 4 + row] * b[col * 4 + k]
-                }
-                out[col * 4 + row] = sum
-            }
-        }
-        return out
-    }
+    private fun multiply4(a: FloatArray, b: FloatArray): FloatArray = RigidMath.multiply(a, b)
 }

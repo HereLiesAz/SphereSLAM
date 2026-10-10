@@ -61,6 +61,12 @@ data class RelocResult(
  * @param ransacIterations `solvePnPRansac` iteration count.
  * @param ransacReprojectionThresholdPx `solvePnPRansac` inlier threshold (px).
  * @param ransacConfidence `solvePnPRansac` confidence in `(0, 1)`.
+ * @param planarRefine after RANSAC, re-solve the inliers with `SOLVEPNP_IPPE` and adopt an IPPE
+ *   candidate only when its inlier reprojection error is strictly lower. A planar target admits a
+ *   two-fold "flip" ambiguity iterative PnP does not resolve on its own; IPPE enumerates both
+ *   candidates. Never makes the pose worse: a failed/degenerate IPPE solve (or a non-coplanar inlier
+ *   set) keeps the RANSAC pose. Mirrors GraffitiXR's native `MobileGS::runRelocPass` /
+ *   `HomographyTracker::track`.
  */
 @ExperimentalSphereSlamRelocApi
 class Relocalizer(
@@ -74,6 +80,7 @@ class Relocalizer(
     private val ransacIterations: Int = DEFAULT_RANSAC_ITERATIONS,
     private val ransacReprojectionThresholdPx: Float = DEFAULT_RANSAC_REPROJECTION_THRESHOLD_PX,
     private val ransacConfidence: Double = DEFAULT_RANSAC_CONFIDENCE,
+    private val planarRefine: Boolean = DEFAULT_PLANAR_REFINE,
 ) : AutoCloseable {
     init {
         // Validate before any native allocation below, so a bad argument never leaks a handle.
@@ -194,14 +201,15 @@ class Relocalizer(
             val inlierCount = if (inliersMat.empty()) 0 else inliersMat.rows()
             if (!ok || inlierCount < minInliers) return null
 
-            val pose = composePose(rvec, tvec)
             val inlierIdx = IntArray(inlierCount) { inliersMat.get(it, 0)[0].toInt() }
-            val residual = meanReprojectionErrorPx(
-                pose, fx, fy, cx, cy,
-                objPts.map { doubleArrayOf(it.x, it.y, it.z) },
-                imgPts.map { doubleArrayOf(it.x, it.y) },
-                inlierIdx,
-            )
+            val objD = objPts.map { doubleArrayOf(it.x, it.y, it.z) }
+            val imgD = imgPts.map { doubleArrayOf(it.x, it.y) }
+            val residualOf = { candidate: FloatArray ->
+                meanReprojectionErrorPx(candidate, fx, fy, cx, cy, objD, imgD, inlierIdx)
+            }
+            val ransacPose = composePose(rvec, tvec)
+            val candidates = if (planarRefine) ippeCandidates(objPts, imgPts, inlierIdx) else emptyList()
+            val (pose, residual) = lowestResidualPose(ransacPose, candidates, residualOf)
             return RelocResult(cameraFromObject = pose, inliers = inlierCount, reprojectionErrorPx = residual)
         } finally {
             for (m in knn) m.release()
@@ -210,6 +218,33 @@ class Relocalizer(
             rvec.release()
             tvec.release()
             inliersMat.release()
+        }
+    }
+
+    /**
+     * `SOLVEPNP_IPPE` candidate poses (row-major camera_from_object) for the inlier subset; empty when
+     * there are too few inliers or OpenCV rejects the set (e.g. non-coplanar points).
+     */
+    private fun ippeCandidates(objPts: List<Point3>, imgPts: List<Point>, inlierIdx: IntArray): List<FloatArray> {
+        if (inlierIdx.size < 4) return emptyList()
+        val inObj = MatOfPoint3f()
+        val inImg = MatOfPoint2f()
+        val rvecs = ArrayList<Mat>()
+        val tvecs = ArrayList<Mat>()
+        return try {
+            inObj.fromList(inlierIdx.filter { it in objPts.indices }.map { objPts[it] })
+            inImg.fromList(inlierIdx.filter { it in imgPts.indices }.map { imgPts[it] })
+            val n = Geometry.solvePnPGeneric(
+                inObj, inImg, cameraMatrix, distCoeffs, rvecs, tvecs, false, Geometry.SOLVEPNP_IPPE,
+            )
+            (0 until minOf(n, rvecs.size, tvecs.size)).map { composePose(rvecs[it], tvecs[it]) }
+        } catch (e: Exception) {
+            emptyList() // keep the RANSAC pose
+        } finally {
+            inObj.release()
+            inImg.release()
+            for (m in rvecs) m.release()
+            for (m in tvecs) m.release()
         }
     }
 
@@ -259,6 +294,32 @@ class Relocalizer(
 
         /** Default `solvePnPRansac` confidence. */
         const val DEFAULT_RANSAC_CONFIDENCE = 0.99
+
+        /** Default for the IPPE planar-flip refine after RANSAC. */
+        const val DEFAULT_PLANAR_REFINE = true
+
+        /**
+         * Pick between the RANSAC pose and refine candidates: a candidate is adopted only when its
+         * residual is finite and strictly lower than the best so far, so refinement never makes the
+         * pose worse. Returns the chosen pose and its residual. Pure; unit-tested.
+         */
+        internal fun lowestResidualPose(
+            ransacPose: FloatArray,
+            candidates: List<FloatArray>,
+            residualOf: (FloatArray) -> Float,
+        ): Pair<FloatArray, Float> {
+            var best = ransacPose
+            var bestErr = residualOf(ransacPose)
+            for (c in candidates) {
+                if (c.size != 16 || c.any { !it.isFinite() }) continue
+                val e = residualOf(c)
+                if (e.isFinite() && e < bestErr) {
+                    best = c
+                    bestErr = e
+                }
+            }
+            return best to bestErr
+        }
 
         /**
          * Mean pinhole reprojection error (px) of the [inlierIndices] subset of parallel

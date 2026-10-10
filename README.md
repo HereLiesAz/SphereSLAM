@@ -159,10 +159,41 @@ haze.update(map, headingDeg, elevationDeg, horizontalFovDeg, verticalFovDeg)
 // haze.renderer.hazeColor / hazeAlpha to retune (defaults: #FF69B4 at 0.2)
 ~~~
 
+To draw the coverage inside your own GL renderer (beneath your artwork), use
+`CoverageGlowRenderer.createGlResources()` / `drawEmbedded()`; `FillMode.COMPLEMENT` with
+`map.currentRegions()` draws a wash with holes over the up-to-date tiles.
+
+## Toolkit packages
+
+`:sphereslam` also ships the pure helpers hosts otherwise re-implement:
+
+| Package | Contents |
+| --- | --- |
+| `math` | `RotationMath`, `RigidMath` (quaternions, rigid/similarity 4×4, GL ↔ CV flips) |
+| `attitude` | `GameRotationAttitudeSource`, `DeviceCameraRotation`, `AttitudeRotationBridge` |
+| `camera` | `CameraIntrinsicsEstimator`, `CaptureRotation`, `LumaFrameTransform`, `ProjectionMatrix`, `ScreenIntrinsics` |
+| `sidecar` | ARCore + KPM sidecar fusion: `HybridPoseHistory`, `HybridKpmCorrection`, `HybridAnchorFusion`, `MetricPageRectification` |
+| `gyro` | `GyroCompensationMath` (gyro-stabilised screen overlays) |
+
+Photosphere capture: `PhotosphereKeyframeStore`, `PhotosphereMap.directionOfPixel` (roll-aware) and
+`PhotosphereFingerprintFrame`. The device → camera rotation convention is documented in
+[docs/PUBLIC_API.md](docs/PUBLIC_API.md#device--camera-rotation).
+
+~~~kotlin
+val attitude = GameRotationAttitudeSource(context).apply { start() }
+val bridge = AttitudeRotationBridge(
+    DeviceCameraRotation.cameraFromDevice(sensorOrientation, imageRotationAppliedDeg = rotationDegrees)
+)
+val loop = RobustTrackingLoop(bridgeRotatedPose = bridge.bridgeFunction { attitude.latestSample() })
+// after each accepted frame:
+bridge.markReference(attitude.latestSample())
+~~~
+
 ## Native availability
 
 The native engine ships for `arm64-v8a` and `armeabi-v7a` only. On any other ABI, or on any other
-load failure, `SphereSlam.isAvailable()` returns false instead of throwing.
+load failure, `SphereSlam.isAvailable()` returns false instead of throwing. `SphereSlam.isOperational()`
+additionally creates and closes a calibrated native engine (fail-closed, never throws).
 
 ## Experimental relocalization API
 

@@ -72,6 +72,27 @@ class SphereSlamTracker internal constructor(
         @Deprecated("Use cameraFromPage3x4", ReplaceWith("cameraFromPage3x4"))
         val pageToCamera3x4: FloatArray
             get() = cameraFromPage3x4
+
+        override fun toString(): String =
+            "Observation(timestampNs=$timestampNs, pageNo=$pageNo, error=$error, inliers=$inliers)"
+
+        companion object {
+            /**
+             * Build an observation outside the tracker — for host unit tests of code that consumes
+             * observations (fusion policy, gating) and for replaying recorded KPM results. Production
+             * observations come from [latestObservation]; the tracker never reads one built here.
+             *
+             * @param cameraFromPage3x4 row-major 3×4 camera-from-page, KPM page units (copied).
+             * @throws IllegalArgumentException when [cameraFromPage3x4] is not length 12.
+             */
+            fun forTesting(
+                timestampNs: Long,
+                pageNo: Int = 0,
+                error: Float,
+                inliers: Int,
+                cameraFromPage3x4: FloatArray,
+            ): Observation = Observation(timestampNs, pageNo, error, inliers, cameraFromPage3x4)
+        }
     }
 
     internal interface Native {

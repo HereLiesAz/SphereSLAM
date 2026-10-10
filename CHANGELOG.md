@@ -2,6 +2,77 @@
 
 ## Unreleased — audit fixes
 
+### App → library consolidation (additive)
+
+Generic code moved out of GraffitiXR. All additions are new API; nothing existing was removed or
+changed incompatibly.
+
+- New supported `com.hereliesaz.sphereslam.math.RotationMath` (quaternion / row-major 3×3 math,
+  `rotationAboutZ`, `cameraRotationDelta`, public `rotateAboutCameraCentre`, `conjugateMat3`,
+  `rotationAngleDegrees`). `:reloc` `RotationDeltaMath` delegates to it and gains `rotationAboutZ`
+  and a public `rotateAboutCameraCentre`.
+- New supported `com.hereliesaz.sphereslam.math.RigidMath` (column-major 4×4: `multiply`,
+  `rigidInverse`, `similarityInverse`, `scaleOf`, `translationNorm`, `cameraCentre`,
+  `rotationAngleDeg`, `rotationDeltaDeg`, quaternion helpers, and the OpenGL ↔ OpenCV flips
+  `glViewToCv` / `cvViewToGl` / `cvRowMajorToGlColumnMajor`). `:reloc` `PoseMath` delegates to it
+  and gains `scaleOf`, `similarityInverse`, `translationNorm`, `rotationAngleDeg`, `glViewToCv` and
+  `cvRowMajorToGlColumnMajor`. The private copies in `SphereSlamPoseMath`, `OverlayPlacement`,
+  `PoseBlend`, `PoseAcceptancePolicy` and `SphereSlamSession.openCvToOpenGlColumnMajor` now use it
+  (same results; `PoseBlend` still uses the camera centre).
+- New `com.hereliesaz.sphereslam.attitude` package: `GameRotationAttitudeSource`
+  (`TYPE_GAME_ROTATION_VECTOR` quaternion, accuracy, sensor timestamps), `AttitudeSample`,
+  `DeviceCameraRotation` (settles device→camera rotation: `R_z(sensorOrientation − appliedImageRotation)`;
+  display-upright frame = `bodyToDisplay(displayRotation)`; CameraX `rotationDegrees` itself is not
+  the device→camera angle), and `AttitudeRotationBridge` (incremental, camera-centre-holding rotation
+  bridge with a `bridgeFunction` for `RobustTrackingLoop.bridgeRotatedPose`). `AttitudePosePredictor`
+  gains `AttitudeSample` overloads. Tests pin `ROTATION_0/90/180/270` against a model of
+  `SensorManager.remapCoordinateSystem`.
+- `SphereSlam.isOperational(frameWidth = 640, frameHeight = 480)`: fail-closed probe that creates,
+  checks and closes a calibrated native engine; never throws (replaces GraffitiXR's
+  `SphereSlamRuntimeProbe`).
+- `SphereSlamTracker.Observation.forTesting(...)`: public factory for host tests and replay
+  (the constructor stays internal; the tracker never reads a built observation).
+- New `com.hereliesaz.sphereslam.camera` package: `CameraIntrinsics`, `CameraIntrinsicsEstimator`
+  (Camera2 characteristics → intrinsics, cached per camera id, `RawCalibration`; fix: an
+  aspect-changing stream such as 16:9 from a 4:3 sensor is now a centred crop plus uniform scale
+  instead of independent x/y scaling), `CameraIntrinsicsTransforms` (`crop`, `rescale`, `rotate`),
+  `CaptureRotation` (`rotateIntrinsics`, `unrotateIntrinsics`, `rotatePixel`; non-quarter-turn angles
+  now throw), `LumaFrameTransform` / `RotatedLuma` (strided Y-plane pack, crop, rotate),
+  `ProjectionMatrix.buildFrom`, and `ScreenIntrinsics` (`fitCenter`, `fallback`).
+- `PhotosphereMap.currentTiles()` / `currentRegions()` (the up-to-date complement of
+  `tilesNeedingUpdate()` / `regionsNeedingUpdate()`), and `ProjectionMatrix.horizontalFovDegrees` /
+  `verticalFovDegrees`.
+- `:overlay` `CoverageGlowRenderer` can be embedded in a host renderer: `createGlResources()`,
+  `drawEmbedded()` (non-clearing, premultiplied, draws into the currently bound framebuffer and
+  viewport and restores the GL state it touches) and `releaseGlResources()`. New
+  `FillMode.COMPLEMENT` draws a wash over everything except the supplied triangles (holes =
+  `projectRegions(map.currentRegions(), …)`), using a private offscreen mask, so no stencil/depth
+  buffer is needed; `FillMode.TRIANGLES` (default) keeps the haze behaviour. `CoverageGlowRenderer.WHITE`
+  added. GL objects are deleted only on the EGL context that created them.
+- New `com.hereliesaz.sphereslam.sidecar` package (matrices only, no ARCore types) for
+  primary-tracker + KPM sidecar fusion: `HybridPoseHistory`, `HybridPageFrame`,
+  `HybridKpmCorrection` (gates + solve, `Reject`, `Accepted`, `Decision`, public `solveRaw`),
+  `HybridKpmOutcome` / `HybridKpmDiagnostics`, `HybridAnchorFusion` (anchor-local correction with
+  repeated-observation agreement before a large move; `agrees`, `HYBRID_AGREEMENT_*`, `State`,
+  `Diagnostics`), and `MetricPageRectification` (metric fronto-parallel page from a wall plane;
+  luma arrays in, pure-Kotlin perspective resample instead of OpenCV/Bitmap).
+- Photosphere keyframes: `PhotosphereKeyframe`, `PhotosphereKeyframeStore` (feeds a
+  `PhotosphereMap`, anchors its wall heading, keeps the latest keyframe per tile, `view(...)`),
+  `PhotosphereView`, and `PhotosphereFingerprintFrame` (`mapFromFingerprint`, `cameraFromMap`,
+  `referencePixelToWall`, `kpmPageMillimetersToWall`, `placement`). New
+  `PhotosphereMap.directionOfPixel(...)` rotates the pixel ray through heading, elevation **and
+  roll** (fix: GraffitiXR added `atan` offsets to heading/elevation, wrong for a rolled camera and
+  off-axis). `CameraAttitudeProvider` gains `latestRollDegrees()`, `latestDeviceToWorldMatrix()` and
+  the pure `cameraRollDegrees(r, cameraFromDevice)`.
+- `com.hereliesaz.sphereslam.gyro.GyroCompensationMath`: gyro stabilisation of a screen-space
+  overlay (infinite homography `K·R·K⁻¹`, optional plane parallax term, body→display remap, release
+  threshold, MiDaS relative inverse depth helper), ported with its tests from GraffitiXR.
+- `:reloc` `Relocalizer` resolves the planar two-fold (flip) ambiguity: after RANSAC it re-solves the
+  inliers with `SOLVEPNP_IPPE` and adopts a candidate only when its inlier reprojection error is
+  strictly lower (as GraffitiXR's native `MobileGS::runRelocPass` and `HomographyTracker` do). New
+  trailing constructor parameter `planarRefine` (default `DEFAULT_PLANAR_REFINE = true`); set it to
+  false for the previous behaviour.
+
 ### Native, build, and packaging
 
 - A native-load failure now degrades to "unavailable": `SphereSlam.isAvailable()` and `KpmBridge`

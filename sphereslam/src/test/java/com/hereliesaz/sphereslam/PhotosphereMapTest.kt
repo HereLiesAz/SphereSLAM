@@ -360,4 +360,21 @@ class PhotosphereMapTest {
         // Tile extents line up with the tiles the map itself reports.
         assertEquals(m.tilesNeedingUpdate().size, regions.size)
     }
+
+    @Test
+    fun `currentTiles and currentRegions are the complement of the update set`() {
+        val m = fullRing()
+        assertTrue(m.currentTiles().isEmpty())
+        assertTrue(m.currentRegions().isEmpty()) // unanchored and nothing accepted
+        m.markUpdated(headingDeg = 0f, elevationDeg = 0f)
+        assertEquals(1, m.currentTiles().size)
+        val current = m.currentRegions()
+        assertEquals(listOf(SphereCoverage.TileRegion(0f, 90f, -20f, 20f)).size, current.size)
+        assertEquals(m.tileCount, current.size + m.regionsNeedingUpdate().size)
+        assertTrue(m.regionsNeedingUpdate().none { it in current })
+        assertEquals(m.tileCount, m.currentTiles().size + m.tilesNeedingUpdate().size)
+        // Holes come from the generic projection; no hard-coded tile size or field of view.
+        val holes = CoverageGlowProjection.projectRegions(current, 45f, 0f, 70f, 50f)
+        assertTrue(holes.isNotEmpty())
+    }
 }

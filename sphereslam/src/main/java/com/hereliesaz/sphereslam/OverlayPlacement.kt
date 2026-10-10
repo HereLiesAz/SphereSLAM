@@ -1,5 +1,6 @@
 package com.hereliesaz.sphereslam
 
+import com.hereliesaz.sphereslam.math.RigidMath
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -105,16 +106,6 @@ object OverlayPlacement {
     /** Column-major 4x4 product `a * b`. */
     internal fun multiplyColumnMajor(a: FloatArray, b: FloatArray): FloatArray {
         require(a.size == 16 && b.size == 16)
-        val out = FloatArray(16)
-        for (col in 0 until 4) {
-            for (row in 0 until 4) {
-                var sum = 0f
-                for (k in 0 until 4) {
-                    sum += a[k * 4 + row] * b[col * 4 + k]
-                }
-                out[col * 4 + row] = sum
-            }
-        }
-        return out
+        return RigidMath.multiply(a, b)
     }
 }
