@@ -218,6 +218,11 @@ fun useReloc() {
 }
 ~~~
 
+Wide-area relocalization: `WallFeatureMap` grows from every successful `RelocResult` and is matched
+frustum-gated (`visibleIndices` → `toFingerprint`); `RectifyHomography` pre-cancels oblique
+perspective; `MetricMarks` builds metric marks from a known plane or two views; `RadialDepthPlacement`
+places off-wall features from a calibrated relative depth map.
+
 For a phone without ARCore, `PhotosphereTrackingSession` is the whole frame-in / pose-out runtime
 (base photosphere from device attitude, planar KPM precision layer rebased into it, gyro bridge,
 self-growing page atlas):

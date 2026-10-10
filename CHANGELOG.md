@@ -29,6 +29,21 @@ The SLAM pieces deferred from the first consolidation. All additions are new API
   `TrackingFailureReason` / `TrackingFailureSeverity` / `TrackingFailureEvent` /
   `TrackingFailureClassifier` (no user-facing strings). Ported from GraffitiXR `StandaloneAtlasGrowth`,
   `StandaloneTargetQuality` and `StandaloneFailure`.
+- `:reloc` relocalizer convergence with GraffitiXR's native `MobileGS` (pure Kotlin, no new JNI):
+  `WallPlane` (PCA plane fit, `transformedBy`), `RectifyHomography` (plane-induced homography
+  between the fingerprint capture view and the live view, obliquity, `warpCurrentToReference`;
+  **fix:** the native `computeRectifyHomography` used `R − t·nᵀ/d` for a plane written `nᵀX = d`,
+  which is wrong whenever the cameras translate — the library uses `R + t·nᵀ/d`, pinned by a
+  synthetic test), `WallFeatureMap` (the self-growing wall feature map of `growMapFromReloc`:
+  confidence re-observation, capacity pruning, wall-plane back-projection, frustum gate
+  `visibleIndices`, `toFingerprint` for `Relocalizer` (optionally merged with the base fingerprint),
+  snapshot / native-blob round-trip with GraffitiXR's `WallFeatureMap` model and
+  `exportWallFeatureMap` layout), and `InverseDepthMap` / `RadialDepthPlacement` (the
+  `setLatestDepthMap` radial placement of off-wall features, now calibrated with the robust
+  `DepthScaleFit` instead of plain least squares). `MetricMarks` adds single-view plane
+  back-projection (`backProjectToPlane`, `backProjectToCameraPlane`), two-view triangulation through
+  `TileTriangulator` (`triangulateTwoView`) and the display-orientation view helpers, ported from
+  GraffitiXR `anchor.PlaneMarks` / `anchor.MetricMarks`.
 
 ### App → library consolidation (additive)
 

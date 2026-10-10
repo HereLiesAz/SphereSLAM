@@ -89,6 +89,14 @@ stay row-major in OpenCV's camera convention (y down, z forward).
 Depth-backed tiles (`TileTriangulator`, `TileGate`, `TileFingerprint`, `DepthScaleFit`) are building
 blocks: they are not yet wired into `SphereSlamSession`'s map growth.
 
+Wall-map relocalization helpers: `WallFeatureMap` grows a confidence-weighted feature map in the
+fingerprint frame from each `RelocResult` (`growFromReloc`, or the pure `grow` with your own matches)
+and hands the in-view subset back to `Relocalizer` (`visibleIndices` → `toFingerprint`).
+`RectifyHomography` and `MetricMarks` take **column-major** views (OpenGL for `RectifyHomography`,
+OpenCV for `MetricMarks`); `WallFeatureMap` takes the row-major OpenCV `RelocResult.cameraFromObject`.
+Fingerprint object points are in the capture camera's OpenCV frame. Only `WallFeatureMap`'s
+`descriptorMat` / `matchDescriptors` / `growFromReloc` / `toFingerprint` need OpenCV's native library.
+
 `PhotosphereTrackingSession` is the standalone photosphere runtime: feed `onFrame(Frame(luma,
 intrinsics, timestampNs, attitude, cameraFromDevice, headingDeg, elevationDeg, rollDeg))` from the
 camera-analysis worker and render `FrameResult.pose?.cameraFromMap` (column-major GL
