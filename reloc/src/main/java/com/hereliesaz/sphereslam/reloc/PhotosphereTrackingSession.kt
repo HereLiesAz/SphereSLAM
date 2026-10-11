@@ -8,6 +8,7 @@ import com.hereliesaz.sphereslam.SphereSlamStandaloneSession
 import com.hereliesaz.sphereslam.attitude.AttitudeRotationBridge
 import com.hereliesaz.sphereslam.attitude.AttitudeSample
 import com.hereliesaz.sphereslam.attitude.DeviceCameraRotation
+import com.hereliesaz.sphereslam.attitude.DisplayPosePredictor
 import com.hereliesaz.sphereslam.camera.CameraIntrinsics
 import com.hereliesaz.sphereslam.camera.ProjectionMatrix
 import com.hereliesaz.sphereslam.math.RigidMath
@@ -79,7 +80,7 @@ class PhotosphereTrackingSession internal constructor(
      * @property maxBridgeMs longest gyro bridge after the last accepted frame, ms.
      * @property keyframeIntervalMs photosphere keyframe cadence, ms.
      * @property atlasGrowth whether accepted poses may grow the KPM atlas.
-     * @property metricsIntervalMs cadence of the KPM match-metrics diagnostic, ms.
+     * @property metricsIntervalMs cadence of the KPM match-metrics + per-stage timing diagnostic, ms.
      */
     data class Config(
         val timestampSource: CameraTimestampSource = CameraTimestampSource.UNKNOWN,
@@ -121,6 +122,8 @@ class PhotosphereTrackingSession internal constructor(
      *   ([DeviceCameraRotation.cameraFromDevice] with the rotation applied to the buffer).
      * @param headingDeg / [elevationDeg] / [rollDeg] absolute camera attitude stamped on keyframes
      *   (`CameraAttitudeProvider`); no keyframes are emitted while heading or elevation is null.
+     * @param convertDurationNs optional host-measured time spent producing [luma] (Y-plane pack /
+     *   rotate), reported as `convertMs` in the periodic timing diagnostic; negative when unknown.
      */
     class Frame(
         val luma: ByteArray,
@@ -131,6 +134,7 @@ class PhotosphereTrackingSession internal constructor(
         val headingDeg: Float? = null,
         val elevationDeg: Float? = null,
         val rollDeg: Float? = null,
+        val convertDurationNs: Long = -1L,
     ) {
         val cameraFromDevice: FloatArray = cameraFromDevice.copyOf()
 
@@ -313,6 +317,9 @@ class PhotosphereTrackingSession internal constructor(
     private var lastFailureReason: TrackingFailureReason? = null
     private var lastReportedState: TrackingState? = null
     private var frameBuffer: ByteBuffer? = null
+    private val timing = StageTiming()
+    private var lastKpmMetrics: TrackedPose? = null
+    private var metricsWindowStartMs = Long.MIN_VALUE
     private var closed = false
     private var fatal = false
 
@@ -369,12 +376,26 @@ class PhotosphereTrackingSession internal constructor(
         }
     }
 
+    /**
+     * Optional display-rate pose hook. When set, every rendered pose is published to it together with
+     * its frame's attitude and `cameraFromDevice` ([DisplayPosePredictor.update]), and it is cleared
+     * whenever a frame yields no pose — so a GL thread can call
+     * `predictInto(attitudeExtrapolator, now, out)` every draw and get the latest vision pose rotated
+     * by the attitude change since its frame. Use the same attitude sensor as [Frame.attitude].
+     * Safe to set from any thread.
+     */
+    @Volatile
+    var displayPosePredictor: DisplayPosePredictor? = null
+
     /** Process one frame. After [close] or a fatal failure this returns an empty result. */
     @Synchronized
     fun onFrame(frame: Frame): FrameResult {
         if (closed || fatal) return FrameResult(null, stateMachine.state, null, false, null, null, null, null)
         return try {
-            process(frame)
+            process(frame).also { result ->
+                publishToPredictor(frame, result.pose)
+                emitMetricsIfDue()
+            }
         } catch (t: Throwable) {
             if (t is VirtualMachineError) throw t
             fatal = true
@@ -391,19 +412,26 @@ class PhotosphereTrackingSession internal constructor(
         val intrinsics = frame.intrinsics
         val frameStartMs = nowMs()
         val projection = ProjectionMatrix.buildFrom(intrinsics)
+        timing.frames++
+        if (frame.convertDurationNs >= 0L) timing.convert.add(frame.convertDurationNs)
 
         // Base runtime: the first usable attitude defines the map. Rotation-only until a geometric
         // layer supplies a baseline; zero translation is the fixed-standpoint model, not a guess.
         val cameraFromMap = photosphereCameraFromMap(frame.attitude, frame.cameraFromDevice)
+        val keyframeStartNs = elapsedRealtimeNanos()
         captureKeyframe(frame, cameraFromMap, frameStartMs)
+        timing.keyframe.add(elapsedRealtimeNanos() - keyframeStartNs)
         val reference = referenceImage
             ?: return FrameResult(null, stateMachine.state, cameraFromMap, false, null, null, null, projection)
 
+        val setupStartNs = elapsedRealtimeNanos()
         val active = ensureSession(intrinsics, reference)
         val direct = directFrame(frame.luma)
         val matchStartNs = elapsedRealtimeNanos()
+        timing.setup.add(matchStartNs - setupStartNs)
         val pose = active.match(direct, frame.timestampNs)
         val matchEndNs = elapsedRealtimeNanos()
+        timing.match.add(matchEndNs - matchStartNs)
         val matchDurationMs = (matchEndNs - matchStartNs).toFloat() / 1_000_000f
         val observationAge = agePolicy.evaluate(frame.timestampNs, matchEndNs, config.timestampSource)
 
@@ -435,7 +463,9 @@ class PhotosphereTrackingSession internal constructor(
                 PhotosphereFingerprintFrame.cameraFromMap(locked.cameraFromCanonical, it)
             }
             frame.attitude?.let { commitImuReference(it, frame.cameraFromDevice, frameStartMs) }
+            val growthStartNs = elapsedRealtimeNanos()
             maybeGrowAtlas(active, reference, frame, locked)
+            timing.growth.add(elapsedRealtimeNanos() - growthStartNs)
 
             val precisionRenderView = outcome.renderPose!!
             val renderView = mapFromFp?.let {
@@ -463,7 +493,7 @@ class PhotosphereTrackingSession internal constructor(
                 source = PoseSource.KPM,
             )
             lastGood = tracked
-            emitMetricsIfDue(tracked)
+            lastKpmMetrics = tracked
             return FrameResult(
                 tracked, outcome.state, cameraFromMap, true, locked.cameraFromCanonical, acceptedRawMapView, null, projection,
             )
@@ -731,15 +761,42 @@ class PhotosphereTrackingSession internal constructor(
         callbacks.onDiagnostic("SphereSLAM standalone state=$state")
     }
 
-    private fun emitMetricsIfDue(pose: TrackedPose) {
+    private fun publishToPredictor(frame: Frame, pose: TrackedPose?) {
+        val predictor = displayPosePredictor ?: return
+        val attitude = frame.attitude
+        if (pose == null || attitude == null) {
+            predictor.clear()
+            return
+        }
+        predictor.update(pose.cameraFromMap, attitude, frame.cameraFromDevice, pose.timestampNs)
+    }
+
+    /**
+     * Every [Config.metricsIntervalMs] (and on the first lock): the last accepted KPM match in the
+     * window, or `no-lock`, followed by per-stage timing — `mean/max` ms of convert (host-reported via
+     * [Frame.convertDurationNs]), setup (matcher (re)build + frame copy), match, keyframe (quality
+     * gate + callback) and inline atlas growth — over the frames since the previous line.
+     */
+    private fun emitMetricsIfDue() {
         val now = nowMs()
-        if (lastMetricsMs != Long.MIN_VALUE && now - lastMetricsMs < config.metricsIntervalMs) return
+        if (metricsWindowStartMs == Long.MIN_VALUE) metricsWindowStartMs = now
+        val due = if (lastMetricsMs == Long.MIN_VALUE) {
+            lastKpmMetrics != null || now - metricsWindowStartMs >= config.metricsIntervalMs
+        } else {
+            now - lastMetricsMs >= config.metricsIntervalMs
+        }
+        if (!due) return
         lastMetricsMs = now
-        val age = pose.observationAgeMs?.let { String.format(Locale.US, "%.1f", it) } ?: "unavailable"
-        callbacks.onDiagnostic(
+        val pose = lastKpmMetrics
+        lastKpmMetrics = null
+        val head = if (pose != null) {
+            val age = pose.observationAgeMs?.let { String.format(Locale.US, "%.1f", it) } ?: "unavailable"
             "SphereSLAM standalone KPM page=${pose.pageNo} inliers=${pose.inlierCount} " +
-                "error=${pose.reprojectionError} ageMs=$age matchMs=${String.format(Locale.US, "%.1f", pose.matchDurationMs)}",
-        )
+                "error=${pose.reprojectionError} ageMs=$age matchMs=${String.format(Locale.US, "%.1f", pose.matchDurationMs)}"
+        } else {
+            "SphereSLAM standalone KPM no-lock"
+        }
+        callbacks.onDiagnostic("$head ${timing.summaryAndReset()}")
     }
 
     private fun nowMs(): Long = elapsedRealtimeNanos() / 1_000_000L
@@ -872,5 +929,45 @@ internal fun interface PlanarFrontEndFactory {
                 override fun close() = session.close()
             }
         }
+    }
+}
+
+/** Per-stage timing accumulators for the periodic diagnostic. Not thread-safe (session lock). */
+internal class StageTiming {
+    class Stage(private val name: String) {
+        var count = 0
+            private set
+        private var totalNs = 0L
+        private var maxNs = 0L
+
+        fun add(ns: Long) {
+            if (ns < 0L) return
+            count++
+            totalNs += ns
+            if (ns > maxNs) maxNs = ns
+        }
+
+        fun describe(): String =
+            if (count == 0) "$name=-" else String.format(Locale.US, "%s=%.1f/%.1f", name, totalNs / 1e6 / count, maxNs / 1e6)
+
+        fun reset() {
+            count = 0; totalNs = 0L; maxNs = 0L
+        }
+    }
+
+    var frames = 0
+    val convert = Stage("convertMs")
+    val setup = Stage("setupMs")
+    val match = Stage("matchMs")
+    val keyframe = Stage("keyframeMs")
+    val growth = Stage("growthMs")
+    private val stages = listOf(convert, setup, match, keyframe, growth)
+
+    /** `timing{frames=N matched=M convertMs=mean/max setupMs=… matchMs=… keyframeMs=… growthMs=…}`; resets. */
+    fun summaryAndReset(): String {
+        val out = "timing{frames=$frames matched=${match.count} ${stages.joinToString(" ") { it.describe() }}}"
+        frames = 0
+        stages.forEach { it.reset() }
+        return out
     }
 }

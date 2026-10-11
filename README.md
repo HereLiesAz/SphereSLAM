@@ -194,7 +194,8 @@ frame. Style is live: `fillMode`, `hazeColor` / `setHazeColorArgb`, `hazeAlpha`,
 
 For the artwork pose, `attitude.DisplayPosePredictor` rotates the latest vision pose by the
 attitude change since its frame on every draw (`update(pose, frameAttitude, cameraFromDevice)` from
-the analyzer, `predictInto(extrapolator, now, out)` on the GL thread).
+the analyzer, `predictInto(extrapolator, now, out)` on the GL thread). With `:reloc`'s
+`PhotosphereTrackingSession`, set `session.displayPosePredictor = predictor` and it is fed for you.
 
 ## Toolkit packages
 

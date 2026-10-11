@@ -3,6 +3,7 @@ package com.hereliesaz.sphereslam.reloc
 import com.hereliesaz.sphereslam.PhotosphereKeyframe
 import com.hereliesaz.sphereslam.SphereSlamPoseMath
 import com.hereliesaz.sphereslam.attitude.AttitudeSample
+import com.hereliesaz.sphereslam.attitude.DisplayPosePredictor
 import com.hereliesaz.sphereslam.camera.CameraIntrinsics
 import com.hereliesaz.sphereslam.math.RigidMath
 import com.hereliesaz.sphereslam.math.RotationMath
@@ -74,6 +75,7 @@ class PhotosphereTrackingSessionTest {
         val failures = mutableListOf<TrackingFailureEvent>()
         val states = mutableListOf<TrackingState>()
         val fatal = mutableListOf<Throwable>()
+        val diagnostics = mutableListOf<String>()
         val callbacks = PhotosphereTrackingSession.Callbacks(
             onKeyframe = { keyframes += it },
             onMapFromFingerprintSolved = { solved += it },
@@ -82,6 +84,7 @@ class PhotosphereTrackingSessionTest {
             onFailure = { failures += it },
             onTrackingStateChanged = { states += it },
             onFatalError = { fatal += it },
+            onDiagnostic = { diagnostics += it },
         )
     }
 
@@ -312,6 +315,56 @@ class PhotosphereTrackingSessionTest {
         s.onFrame(frame())
         assertEquals(2, fronts.size)
         assertEquals(listOf(0), fronts[1].pages.map { it.first })
+    }
+
+    @Test
+    fun `the periodic diagnostic carries per-stage timing`() {
+        val s = session(PhotosphereTrackingSession.Config(metricsIntervalMs = 1_000L))
+        s.updatePrecisionLayer(reference)
+        s.onFrame(PhotosphereTrackingSession.Frame(textured, intrinsics, nowNs, yaw(0.0), convertDurationNs = 2_000_000L))
+        fronts.single().next = match(viewAt(0f, 0f, 2f))
+        repeat(2) { s.onFrame(frame()) } // confirm + lock; the first lock reports at once
+        val line = rec.diagnostics.last { it.startsWith("SphereSLAM standalone KPM") }
+        assertTrue(line, line.startsWith("SphereSLAM standalone KPM page=0 inliers=30"))
+        assertTrue(line, line.contains("timing{frames=3 matched=3 convertMs=2.0/2.0 setupMs="))
+        assertTrue(line, line.contains(" matchMs=") && line.contains(" keyframeMs=") && line.contains(" growthMs="))
+        fun kpmLines() = rec.diagnostics.count { it.startsWith("SphereSLAM standalone KPM") }
+        val before = kpmLines()
+        s.onFrame(frame())
+        assertEquals("nothing more inside the interval", before, kpmLines())
+        advance(1_100)
+        fronts.single().next = null
+        s.onFrame(frame()) // window: the locked frame above + this miss
+        val windowed = rec.diagnostics.last { it.startsWith("SphereSLAM standalone KPM") }
+        assertTrue(windowed, windowed.contains("page=0") && windowed.contains("timing{frames=2 matched=2 convertMs=-"))
+        advance(1_100)
+        s.onFrame(frame())
+        val idle = rec.diagnostics.last { it.startsWith("SphereSLAM standalone KPM") }
+        assertTrue(idle, idle.startsWith("SphereSLAM standalone KPM no-lock timing{frames=1 matched=1"))
+    }
+
+    @Test
+    fun `a display pose predictor receives every rendered pose and is cleared without one`() {
+        val s = session()
+        val predictor = DisplayPosePredictor()
+        s.displayPosePredictor = predictor
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame(yaw(0.0)))
+        assertFalse(predictor.hasPose)
+        fronts.single().next = match(viewAt(0f, 0f, 2f))
+        repeat(2) { s.onFrame(frame(yaw(10.0))) }
+        val rendered = s.onFrame(frame(yaw(10.0))).pose!!
+        assertEquals(rendered.timestampNs, predictor.poseTimestampNs)
+        // Unrotated: the rendered pose itself; rotated 5° further: the bridge's answer.
+        assertArrayEquals(rendered.cameraFromMap, predictor.predict(yaw(10.0).quaternion), 1e-5f)
+        val turned = predictor.predict(yaw(15.0).quaternion)!!
+        assertEquals(5f, RigidMath.rotationDeltaDeg(rendered.cameraFromMap, turned), 1e-2f)
+        assertArrayEquals(RigidMath.cameraCentre(rendered.cameraFromMap), RigidMath.cameraCentre(turned), 1e-5f)
+        // Lost past the bridge window: cleared.
+        fronts.single().next = null
+        advance(1_000)
+        s.onFrame(frame(yaw(10.0)))
+        assertFalse(predictor.hasPose)
     }
 
     @Test

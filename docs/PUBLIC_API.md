@@ -300,6 +300,7 @@ nor load OpenCV.
 - `PhotosphereKeyframeStore`, `HybridPoseHistory` and `HybridAnchorFusion` are not thread-safe.
 - `PlanarTracker` is not thread-safe; drive it from one camera worker.
 - `PhotosphereTrackingSession` synchronizes its methods; drive `onFrame` from one camera worker.
+  `displayPosePredictor` may be set from any thread; the predictor it feeds is read on the GL thread.
   Callbacks run synchronously on the caller's thread.
 
 ### Embedding the coverage overlay

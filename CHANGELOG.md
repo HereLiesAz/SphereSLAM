@@ -48,6 +48,13 @@ Additions:
   frame (same math as the IMU bridge, camera centre held, no re-referencing) for per-draw pose
   prediction between vision updates; `predictInto(currentAttitude, out)` /
   `predictInto(extrapolator, targetTimeNs, out)` are allocation-free and thread-safe.
+- `:reloc` `PhotosphereTrackingSession.displayPosePredictor`: when set, every rendered pose is
+  published to it with its frame's attitude and `cameraFromDevice` (cleared when a frame yields no
+  pose), so the GL thread can draw the artwork pose at display rate between analyzer updates.
+- `:reloc` `PhotosphereTrackingSession`: the periodic (`metricsIntervalMs`, 5 s) KPM diagnostic now
+  carries per-stage timing over the window — `timing{frames matched convertMs setupMs matchMs
+  keyframeMs growthMs}` as `mean/max` ms — and is also emitted without a lock (`KPM no-lock`).
+  `Frame(convertDurationNs = …)` lets the host report its Y-plane pack/rotate time.
 
 ### App → library consolidation, part 2 (additive)
 
