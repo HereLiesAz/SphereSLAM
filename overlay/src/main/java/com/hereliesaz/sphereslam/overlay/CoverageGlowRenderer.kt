@@ -1,8 +1,7 @@
 package com.hereliesaz.sphereslam.overlay
 
-import android.opengl.EGL14
-import android.opengl.EGLContext
 import android.opengl.GLES20
+import android.opengl.GLES30
 import android.opengl.GLSurfaceView
 import android.os.SystemClock
 import android.util.Log
@@ -49,10 +48,18 @@ import javax.microedition.khronos.opengles.GL10
  * renderer's framebuffer: call [createGlResources] from the host's `onSurfaceCreated`, then
  * [drawEmbedded] from its `onDrawFrame` (for example before drawing the artwork, so the wash sits
  * above the camera preview and beneath the design). [drawEmbedded] never clears the host's buffers,
- * blends premultiplied (`ONE, ONE_MINUS_SRC_ALPHA`) into the currently bound framebuffer and
- * viewport, and restores the GL state it touches. [FillMode.COMPLEMENT] renders the hole mask into a
- * private offscreen texture sized to the viewport, so it needs no stencil or depth buffer. Call
- * [releaseGlResources] on the GL thread when done.
+ * blends premultiplied (`ONE, ONE_MINUS_SRC_ALPHA`, `FUNC_ADD`) into the currently bound framebuffer
+ * and viewport, and restores the GL state it touches (listed on [drawEmbedded]). Vertex data lives in
+ * the renderer's own buffer objects; on an OpenGL ES 3 context it is also bound through the
+ * renderer's own vertex array object, so the host's vertex-attribute state (in any VAO, including
+ * VAO 0) is never touched. [FillMode.COMPLEMENT] renders the hole mask into a private offscreen
+ * texture sized to the viewport, so it needs no stencil or depth buffer. Call [releaseGlResources] on
+ * the GL thread when done.
+ *
+ * **Context loss.** GL object names belong to the context that created them. [createGlResources]
+ * starts a new generation: names from an earlier one are forgotten, never deleted (after a context
+ * loss they may already belong to the host). Call [onGlContextLost] when the host learns its context
+ * is gone, and [releaseGlResources] only while the creating context is current.
  */
 class CoverageGlowRenderer(
     hazeColor: FloatArray = HOT_PINK,
@@ -207,8 +214,15 @@ class CoverageGlowRenderer(
     private var maskWidth = 0
     private var maskHeight = 0
     private var vertexBuffer: FloatBuffer = allocate(0)
-    private var glContext: EGLContext? = null
     private val quadBuffer: FloatBuffer = allocate(FULL_SCREEN_QUAD.size).apply { put(FULL_SCREEN_QUAD); position(0) }
+    private var quadVbo = 0
+    private var dynamicVbo = 0
+    private var vao = 0
+    private var es3 = false
+
+    /** Incremented by [createGlResources]; names created in an older generation are never deleted. */
+    internal var glGeneration = 0
+        private set
 
     /**
      * Replace the haze geometry: `GL_TRIANGLES` NDC vertex data,
@@ -326,17 +340,33 @@ class CoverageGlowRenderer(
     }
 
     /**
-     * Compile the shader programs on the **current** GL context. Call from the GL thread — the
-     * host's `onSurfaceCreated` when embedding (this renderer's own [onSurfaceCreated] calls it).
-     * Re-creation on the same EGL context releases the previous objects; on a new context (after a
-     * context loss) the stale names are forgotten, never deleted, so a host object that reuses a name
-     * is never touched.
+     * Compile the shader programs and create the buffers on the **current** GL context, starting a
+     * new resource generation. Call from the GL thread — the host's `onSurfaceCreated` when embedding
+     * (this renderer's own [onSurfaceCreated] calls it), which runs exactly when a new context exists.
+     * Names from a previous generation are forgotten, never deleted: after a context loss they may
+     * already name the host's objects. To re-create on a context that is still alive, call
+     * [releaseGlResources] first.
      */
     fun createGlResources() {
-        // Same context: free the previous objects. A new context (after EGL context loss) never owned
-        // them, and its names may already belong to the host, so just forget them.
-        if (glContext == EGL14.eglGetCurrentContext()) releaseGlResources() else forgetGlResources()
-        glContext = EGL14.eglGetCurrentContext()
+        forgetGlResources()
+        glGeneration++
+        es3 = isEs3(GLES20.glGetString(GLES20.GL_VERSION))
+        val buffers = IntArray(2)
+        GLES20.glGenBuffers(2, buffers, 0)
+        quadVbo = buffers[0]
+        dynamicVbo = buffers[1]
+        if (quadVbo != 0) {
+            val previous = IntArray(1).also { GLES20.glGetIntegerv(GLES20.GL_ARRAY_BUFFER_BINDING, it, 0) }[0]
+            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, quadVbo)
+            quadBuffer.position(0)
+            GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, FULL_SCREEN_QUAD.size * BYTES_PER_FLOAT, quadBuffer, GLES20.GL_STATIC_DRAW)
+            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, previous)
+        }
+        if (es3) {
+            val v = IntArray(1)
+            GLES30.glGenVertexArrays(1, v, 0)
+            vao = v[0]
+        }
         program = buildProgram(VERTEX_SHADER, FRAGMENT_SHADER)
         aPosition = GLES20.glGetAttribLocation(program, "aPosition")
         uColor = GLES20.glGetUniformLocation(program, "uColor")
@@ -357,33 +387,50 @@ class CoverageGlowRenderer(
         edgeMask = GLES20.glGetUniformLocation(edgeProgram, "uMask")
     }
 
-    /** Delete every GL object this renderer owns. Call on the GL thread with the context current. */
+    /**
+     * Delete every GL object of the current generation. Call on the GL thread while the context that
+     * ran [createGlResources] is still current (e.g. the host's teardown before the surface goes); if
+     * that context may be gone, call [onGlContextLost] instead.
+     */
     fun releaseGlResources() {
-        if (glContext != EGL14.eglGetCurrentContext()) {
-            forgetGlResources()
-            return
-        }
         for (p in intArrayOf(program, maskProgram, washProgram, edgeProgram)) {
-            if (p != 0 && GLES20.glIsProgram(p)) GLES20.glDeleteProgram(p)
+            if (p != 0) GLES20.glDeleteProgram(p)
         }
-        program = 0; maskProgram = 0; washProgram = 0; edgeProgram = 0
-        if (maskFbo != 0 && GLES20.glIsFramebuffer(maskFbo)) GLES20.glDeleteFramebuffers(1, intArrayOf(maskFbo), 0)
-        if (maskTexture != 0 && GLES20.glIsTexture(maskTexture)) GLES20.glDeleteTextures(1, intArrayOf(maskTexture), 0)
+        if (maskFbo != 0) GLES20.glDeleteFramebuffers(1, intArrayOf(maskFbo), 0)
+        if (maskTexture != 0) GLES20.glDeleteTextures(1, intArrayOf(maskTexture), 0)
+        val buffers = intArrayOf(quadVbo, dynamicVbo).filter { it != 0 }
+        if (buffers.isNotEmpty()) GLES20.glDeleteBuffers(buffers.size, buffers.toIntArray(), 0)
+        if (vao != 0) GLES30.glDeleteVertexArrays(1, intArrayOf(vao), 0)
         forgetGlResources()
     }
+
+    /**
+     * The GL context these resources lived in is gone (or about to be replaced): forget every name
+     * without deleting anything. The renderer draws nothing until [createGlResources] runs again.
+     * Safe on any thread that owns the renderer's GL work.
+     */
+    fun onGlContextLost() = forgetGlResources()
 
     private fun forgetGlResources() {
         program = 0; maskProgram = 0; washProgram = 0; edgeProgram = 0
         maskFbo = 0; maskTexture = 0; maskWidth = 0; maskHeight = 0
+        quadVbo = 0; dynamicVbo = 0; vao = 0
     }
 
     /**
      * Draw the current geometry in the current [fillMode] into the **currently bound** framebuffer
      * and viewport, without clearing it, blending premultiplied color `ONE, ONE_MINUS_SRC_ALPHA`.
      * Live [setRegions] geometry is re-projected for "now" (`SystemClock.elapsedRealtimeNanos()`).
-     * Restores the GL state it changes (program, framebuffer, viewport, blend, depth/stencil/scissor/
-     * cull enables, array buffer, active texture and its 2D binding, clear color). Call on the GL
-     * thread after [createGlResources]; a no-op when resources are missing.
+     * Restores the GL state it changes: program, framebuffer, viewport, blend enable, blend function
+     * and blend equation, depth/stencil/scissor/cull enables, colour mask, clear colour, array-buffer
+     * binding, active texture and unit 0's 2D binding, and vertex-attribute state. On an ES 3 context
+     * the draw runs in the renderer's own VAO and the host's VAO binding is restored, so no host
+     * vertex-attribute state changes at all. On an ES 2 context (no VAOs) the enable flag and
+     * buffer/size/type/stride of the attribute locations the glow uses are restored, but Android's
+     * GLES20 bindings cannot read back an attribute's pointer/offset (`glGetVertexAttribPointerv`), so
+     * a host that keeps a pointer on one of those locations (normally location 0) must re-specify it
+     * after this call. Call on the GL thread after [createGlResources]; a no-op when resources are
+     * missing.
      */
     fun drawEmbedded() = drawEmbedded(SystemClock.elapsedRealtimeNanos())
 
@@ -392,14 +439,20 @@ class CoverageGlowRenderer(
      * base), passed to [RotationSource.worldFromCamera].
      */
     fun drawEmbedded(frameTimeNanos: Long) {
+        draw(frameTimeNanos)
+    }
+
+    /** [drawEmbedded]; returns whether anything was issued to GL (false = the no-op paths). */
+    internal fun draw(frameTimeNanos: Long): Boolean {
         val count = refreshGeometry(frameTimeNanos)
         val data = drawData
         val mode = fillMode
         val rgb = color
+        if (quadVbo == 0 || dynamicVbo == 0) return false
         when (mode) {
             FillMode.TRIANGLES -> {
-                if (count == 0 || program == 0) return
-                val saved = GlState.capture()
+                if (count == 0 || program == 0) return false
+                val saved = capture()
                 try {
                     prepareBlend()
                     drawTriangles(program, aPosition, data, count) {
@@ -411,10 +464,10 @@ class CoverageGlowRenderer(
                 }
             }
             FillMode.COMPLEMENT -> {
-                if (maskProgram == 0 || washProgram == 0) return
-                val saved = GlState.capture()
+                if (maskProgram == 0 || washProgram == 0) return false
+                val saved = capture()
                 try {
-                    if (!renderMask(data, count, saved.viewport[2], saved.viewport[3], saved.framebuffer)) return
+                    if (!renderMask(data, count, saved.viewport[2], saved.viewport[3], saved.framebuffer)) return false
                     GLES20.glViewport(saved.viewport[0], saved.viewport[1], saved.viewport[2], saved.viewport[3])
                     prepareBlend()
                     GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
@@ -429,13 +482,13 @@ class CoverageGlowRenderer(
                 }
             }
             FillMode.OUTLINE, FillMode.COMPLEMENT_OUTLINED -> {
-                if (maskProgram == 0 || edgeProgram == 0) return
-                if (mode == FillMode.OUTLINE && count == 0) return // no boundary to glow along
-                val saved = GlState.capture()
+                if (maskProgram == 0 || edgeProgram == 0) return false
+                if (mode == FillMode.OUTLINE && count == 0) return false // no boundary to glow along
+                val saved = capture()
                 try {
                     val w = saved.viewport[2]
                     val h = saved.viewport[3]
-                    if (!renderMask(data, count, w, h, saved.framebuffer)) return
+                    if (!renderMask(data, count, w, h, saved.framebuffer)) return false
                     GLES20.glViewport(saved.viewport[0], saved.viewport[1], w, h)
                     prepareBlend()
                     GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
@@ -453,18 +506,26 @@ class CoverageGlowRenderer(
                 }
             }
         }
+        return true
+    }
+
+    /** Capture host state and, on ES 3, switch to the renderer's own VAO for the whole draw. */
+    private fun capture(): GlState {
+        val attribs = intArrayOf(aPosition, maskPosition, washPosition, edgePosition).filter { it >= 0 }.distinct()
+        val saved = GlState.capture(es3, attribs)
+        if (es3 && vao != 0) GLES30.glBindVertexArray(vao)
+        return saved
     }
 
     private fun drawFullScreen(attr: Int) {
-        quadBuffer.position(0)
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, quadVbo)
         GLES20.glEnableVertexAttribArray(attr)
-        GLES20.glVertexAttribPointer(attr, 2, GLES20.GL_FLOAT, false, 2 * BYTES_PER_FLOAT, quadBuffer)
+        GLES20.glVertexAttribPointer(attr, 2, GLES20.GL_FLOAT, false, 2 * BYTES_PER_FLOAT, 0)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
         GLES20.glDisableVertexAttribArray(attr)
     }
 
     private fun prepareBlend() {
-        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0) // client-side vertex arrays
         GLES20.glDisable(GLES20.GL_DEPTH_TEST)
         GLES20.glDisable(GLES20.GL_STENCIL_TEST)
         GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
@@ -474,6 +535,7 @@ class CoverageGlowRenderer(
         // Premultiplied source: over a cleared (0,0,0,0) target each pixel holds (rgb * a, a), and
         // over existing premultiplied content it composites correctly.
         GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+        GLES20.glBlendEquation(GLES20.GL_FUNC_ADD)
     }
 
     private inline fun drawTriangles(prog: Int, attr: Int, data: FloatArray, count: Int, uniforms: () -> Unit) {
@@ -485,8 +547,10 @@ class CoverageGlowRenderer(
             position(0)
         }
         val perVertex = CoverageGlowProjection.FLOATS_PER_REGION_VERTEX
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, dynamicVbo)
+        GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, count * BYTES_PER_FLOAT, buffer, GLES20.GL_STREAM_DRAW)
         GLES20.glEnableVertexAttribArray(attr)
-        GLES20.glVertexAttribPointer(attr, perVertex, GLES20.GL_FLOAT, false, perVertex * BYTES_PER_FLOAT, buffer)
+        GLES20.glVertexAttribPointer(attr, perVertex, GLES20.GL_FLOAT, false, perVertex * BYTES_PER_FLOAT, 0)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, count / perVertex)
         GLES20.glDisableVertexAttribArray(attr)
     }
@@ -506,7 +570,6 @@ class CoverageGlowRenderer(
         GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
         GLES20.glDisable(GLES20.GL_CULL_FACE)
         GLES20.glColorMask(true, true, true, true)
-        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
         GLES20.glClearColor(0f, 0f, 0f, 0f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT) // the private mask only; never the host buffer
         if (count > 0) drawTriangles(maskProgram, maskPosition, holes, count) {}
@@ -523,7 +586,9 @@ class CoverageGlowRenderer(
         }
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, maskTexture)
-        // LINEAR: the edge glow samples between texels; the wash samples texel centres, where it is exact.
+        // LINEAR: the edge glow samples between texels. The wash samples texel centres (the mask is the
+        // viewport's size, so pixel centre = texel centre) and is exact there given highp texture
+        // coordinates; a GPU without highp fragment precision may blur the hole edge by about a texel.
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
@@ -560,6 +625,11 @@ class CoverageGlowRenderer(
         val viewport: IntArray,
         val blend: Boolean,
         val blendFunc: IntArray,
+        val blendEquation: IntArray,
+        val es3: Boolean,
+        val vertexArray: Int,
+        /** ES 2 only: per used attribute location `[index, enabled, size, type, normalized, stride, buffer]`. */
+        val attribs: List<IntArray>,
         val depthTest: Boolean,
         val stencilTest: Boolean,
         val scissorTest: Boolean,
@@ -570,12 +640,27 @@ class CoverageGlowRenderer(
         val colorMask: BooleanArray,
     ) {
         fun restore() {
+            if (es3) {
+                GLES30.glBindVertexArray(vertexArray)
+            } else {
+                for (a in attribs) {
+                    val index = a[0]
+                    if (a[6] != 0) {
+                        // Re-attach the host's buffer and format; the offset itself is not readable
+                        // through GLES20 (see drawEmbedded), so offset 0 is the best available.
+                        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, a[6])
+                        GLES20.glVertexAttribPointer(index, a[2], a[3], a[4] != 0, a[5], 0)
+                    }
+                    if (a[1] != 0) GLES20.glEnableVertexAttribArray(index) else GLES20.glDisableVertexAttribArray(index)
+                }
+            }
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, framebuffer)
             GLES20.glViewport(viewport[0], viewport[1], viewport[2], viewport[3])
             GLES20.glUseProgram(program)
             GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, arrayBuffer)
             setEnabled(GLES20.GL_BLEND, blend)
             GLES20.glBlendFuncSeparate(blendFunc[0], blendFunc[1], blendFunc[2], blendFunc[3])
+            GLES20.glBlendEquationSeparate(blendEquation[0], blendEquation[1])
             setEnabled(GLES20.GL_DEPTH_TEST, depthTest)
             setEnabled(GLES20.GL_STENCIL_TEST, stencilTest)
             setEnabled(GLES20.GL_SCISSOR_TEST, scissorTest)
@@ -594,7 +679,10 @@ class CoverageGlowRenderer(
                 if (on) GLES20.glEnable(cap) else GLES20.glDisable(cap)
             }
 
-            fun capture(): GlState {
+            private fun attrib(index: Int, name: Int): Int =
+                IntArray(1).also { GLES20.glGetVertexAttribiv(index, name, it, 0) }[0]
+
+            fun capture(es3: Boolean, usedAttribs: List<Int>): GlState {
                 val viewport = IntArray(4).also { GLES20.glGetIntegerv(GLES20.GL_VIEWPORT, it, 0) }
                 val activeTexture = int(GLES20.GL_ACTIVE_TEXTURE)
                 GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
@@ -612,6 +700,20 @@ class CoverageGlowRenderer(
                         int(GLES20.GL_BLEND_SRC_RGB), int(GLES20.GL_BLEND_DST_RGB),
                         int(GLES20.GL_BLEND_SRC_ALPHA), int(GLES20.GL_BLEND_DST_ALPHA),
                     ),
+                    blendEquation = intArrayOf(int(GLES20.GL_BLEND_EQUATION_RGB), int(GLES20.GL_BLEND_EQUATION_ALPHA)),
+                    es3 = es3,
+                    vertexArray = if (es3) int(GLES30.GL_VERTEX_ARRAY_BINDING) else 0,
+                    attribs = if (es3) emptyList() else usedAttribs.map { i ->
+                        intArrayOf(
+                            i,
+                            attrib(i, GLES20.GL_VERTEX_ATTRIB_ARRAY_ENABLED),
+                            attrib(i, GLES20.GL_VERTEX_ATTRIB_ARRAY_SIZE),
+                            attrib(i, GLES20.GL_VERTEX_ATTRIB_ARRAY_TYPE),
+                            attrib(i, GLES20.GL_VERTEX_ATTRIB_ARRAY_NORMALIZED),
+                            attrib(i, GLES20.GL_VERTEX_ATTRIB_ARRAY_STRIDE),
+                            attrib(i, GLES20.GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING),
+                        )
+                    },
                     depthTest = GLES20.glIsEnabled(GLES20.GL_DEPTH_TEST),
                     stencilTest = GLES20.glIsEnabled(GLES20.GL_STENCIL_TEST),
                     scissorTest = GLES20.glIsEnabled(GLES20.GL_SCISSOR_TEST),
@@ -707,6 +809,26 @@ class CoverageGlowRenderer(
 
         private fun validColor(c: FloatArray) = c.size == 3 && c.all { it.isFinite() && it in 0f..1f }
 
+        /** Whether a `GL_VERSION` string is OpenGL ES 3.0 or newer (VAOs available). */
+        internal fun isEs3(version: String?): Boolean {
+            val m = Regex("""OpenGL ES (\d+)\.""").find(version ?: return false) ?: return false
+            return (m.groupValues[1].toIntOrNull() ?: 0) >= 3
+        }
+
+        /** The wash shader's alpha for a mask sample (1 inside a current region, 0 outside). */
+        internal fun washAlpha(mask: Float, alpha: Float): Float = alpha * (1f - mask)
+
+        /**
+         * The edge shader's alpha (the GLSL in [EDGE_FRAGMENT_SHADER], mirrored for tests): [mask] at
+         * the pixel, [tapSum] the 16 ring taps summed, so `tapSum / 8` is twice the inside fraction.
+         */
+        internal fun edgeAlpha(mask: Float, tapSum: Float, washAlpha: Float, edgeAlpha: Float): Float {
+            val outside = 1f - mask
+            val x = (tapSum / 8f).coerceIn(0f, 1f)
+            val edge = outside * x * x * (3f - 2f * x) // smoothstep(0, 1, x)
+            return maxOf(washAlpha * outside, edgeAlpha * edge)
+        }
+
         /** Two NDC triangles covering the viewport, as a triangle strip. */
         private val FULL_SCREEN_QUAD = floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f)
 
@@ -740,8 +862,14 @@ class CoverageGlowRenderer(
                 gl_Position = vec4(aPosition, 0.0, 1.0);
             }
         """
+        // Texture coordinates need highp: at mediump (≈ 11-bit) a 2000-px viewport's texel centres
+        // are not representable, so the hole mask would be sampled between texels.
         private const val WASH_FRAGMENT_SHADER = """
+            #ifdef GL_FRAGMENT_PRECISION_HIGH
+            precision highp float;
+            #else
             precision mediump float;
+            #endif
             uniform vec3 uColor;
             uniform float uAlpha;
             uniform sampler2D uMask;
@@ -760,7 +888,11 @@ class CoverageGlowRenderer(
          * never reads as a boundary. Optional wash below it ([uWashAlpha], 0 for OUTLINE).
          */
         private const val EDGE_FRAGMENT_SHADER = """
+            #ifdef GL_FRAGMENT_PRECISION_HIGH
+            precision highp float;
+            #else
             precision mediump float;
+            #endif
             uniform vec3 uColor;
             uniform float uWashAlpha;
             uniform float uEdgeAlpha;

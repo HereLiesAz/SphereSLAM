@@ -62,9 +62,10 @@ class DepthEstimatorOptionsTest {
 
     @Test
     fun `gpu cache token is filename safe and content specific`() {
-        assertEquals("midas_v21_small_256_fp16.tflite-33248432-ff", DepthEstimator.gpuModelToken("midas_v21_small_256_fp16.tflite", 33248432L, 255L))
-        assertEquals("a_b_c.tflite-1-0", DepthEstimator.gpuModelToken("a b/c.tflite", 1L, 0L))
-        assertTrue(DepthEstimator.gpuModelToken("m", 1L, 1L) != DepthEstimator.gpuModelToken("m", 1L, 2L))
+        val sha = "0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef"
+        assertEquals("midas_v21_small_256_fp16.tflite-33248432-0123456789abcdef", DepthEstimator.gpuModelToken("midas_v21_small_256_fp16.tflite", 33248432L, sha))
+        assertEquals("a_b_c.tflite-1-0123456789abcdef", DepthEstimator.gpuModelToken("a b/c.tflite", 1L, sha))
+        assertTrue(DepthEstimator.gpuModelToken("m", 1L, "aa") != DepthEstimator.gpuModelToken("m", 1L, "ab"))
     }
 
     @Test
@@ -113,12 +114,17 @@ class DepthEstimatorOptionsTest {
         val r = (0x33 / 255f - 0.1f) / 0.5f
         val g = (0x66 / 255f - 0.2f) / 0.25f
         val bl = (0x99 / 255f - 0.3f) / 2f
-        val nhwc = FloatArray(3)
-        DepthEstimator.argbToInput(pixels, 1, mean, std, InputLayout.NHWC, nhwc)
-        assertArrayEquals(floatArrayOf(r, g, bl), nhwc, 1e-6f)
-        val nchw = FloatArray(3)
-        DepthEstimator.argbToInput(pixels, 1, mean, std, InputLayout.NCHW, nchw)
-        assertArrayEquals(floatArrayOf(r, g, bl), nchw, 1e-6f)
+        // A 2x2 input (n is the side), so the interleaved (NHWC) and planar (NCHW) layouts differ.
+        val quad = intArrayOf(pixels[0], pixels[1], pixels[1], pixels[0])
+        val r1 = (0f - 0.1f) / 0.5f
+        val g1 = (0f - 0.2f) / 0.25f
+        val b1 = (0f - 0.3f) / 2f
+        val nhwc = FloatArray(12)
+        DepthEstimator.argbToInput(quad, 2, mean, std, InputLayout.NHWC, nhwc)
+        assertArrayEquals(floatArrayOf(r, g, bl, r1, g1, b1, r1, g1, b1, r, g, bl), nhwc, 1e-6f)
+        val nchw = FloatArray(12)
+        DepthEstimator.argbToInput(quad, 2, mean, std, InputLayout.NCHW, nchw)
+        assertArrayEquals(floatArrayOf(r, r1, r1, r, g, g1, g1, g, bl, b1, b1, bl), nchw, 1e-6f)
     }
 
     @Test

@@ -4,6 +4,7 @@ import com.hereliesaz.sphereslam.CoverageGlowProjection
 import com.hereliesaz.sphereslam.SphereCoverage
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -35,11 +36,70 @@ class CoverageGlowRendererTest {
     @Test
     fun `embedded draw without GL resources is a no-op in every mode`() {
         val r = CoverageGlowRenderer(CoverageGlowRenderer.WHITE, 0.5f)
-        r.setTriangles(floatArrayOf(-1f, -1f, 1f, -1f, 0f, 1f))
+        val tri = floatArrayOf(-1f, -1f, 1f, -1f, 0f, 1f)
+        r.setTriangles(tri)
         for (mode in CoverageGlowRenderer.FillMode.entries) {
             r.fillMode = mode
-            r.drawEmbedded()
-            r.drawEmbedded(123L)
+            assertFalse("$mode drew without resources", r.draw(123L))
+            r.drawEmbedded() // the public entry point is the same no-op and never throws
+            // The geometry was still resolved for the frame.
+            assertArrayEquals(tri, r.resolvedGeometry(), 0f)
+        }
+        // Context loss forgets names without touching GL; a new generation is counted per create.
+        r.onGlContextLost()
+        assertFalse(r.draw(0L))
+        val before = r.glGeneration
+        r.createGlResources() // against the stub GL: every name comes back 0
+        assertEquals(before + 1, r.glGeneration)
+        assertFalse(r.draw(0L))
+    }
+
+    @Test
+    fun `GL version parsing decides whether the glow uses its own VAO`() {
+        assertTrue(CoverageGlowRenderer.isEs3("OpenGL ES 3.2 V@0502.0"))
+        assertTrue(CoverageGlowRenderer.isEs3("OpenGL ES 3.0 build 1.13"))
+        assertFalse(CoverageGlowRenderer.isEs3("OpenGL ES 2.0 build 1.9"))
+        assertFalse(CoverageGlowRenderer.isEs3("OpenGL ES-CM 1.1"))
+        assertFalse(CoverageGlowRenderer.isEs3(null))
+    }
+
+    @Test
+    fun `wash and edge alpha follow the shader math`() {
+        // Wash: full alpha outside the current regions, none inside.
+        assertEquals(0.3f, CoverageGlowRenderer.washAlpha(0f, 0.3f), 0f)
+        assertEquals(0f, CoverageGlowRenderer.washAlpha(1f, 0.3f), 0f)
+        // Edge: inside a region nothing is drawn, however strong the ring.
+        assertEquals(0f, CoverageGlowRenderer.edgeAlpha(1f, 16f, 0f, 0.5f), 0f)
+        // At the boundary (half the taps inside, tapSum = 8) the glow peaks …
+        assertEquals(0.5f, CoverageGlowRenderer.edgeAlpha(0f, 8f, 0f, 0.5f), 1e-6f)
+        // … fades with distance (fewer taps inside) …
+        val mid = CoverageGlowRenderer.edgeAlpha(0f, 2f, 0f, 0.5f)
+        assertTrue(mid > 0f && mid < 0.5f)
+        assertEquals(0.5f * (0.25f * 0.25f * (3f - 0.5f)), mid, 1e-6f)
+        // … and is gone a full radius away.
+        assertEquals(0f, CoverageGlowRenderer.edgeAlpha(0f, 0f, 0f, 0.5f), 0f)
+        // COMPLEMENT_OUTLINED: never below the wash.
+        assertEquals(0.2f, CoverageGlowRenderer.edgeAlpha(0f, 0f, 0.2f, 0.5f), 0f)
+        assertEquals(0.5f, CoverageGlowRenderer.edgeAlpha(0f, 8f, 0.2f, 0.5f), 1e-6f)
+    }
+
+    @Test
+    fun `the view feeds each fill mode the regions it draws from`() {
+        val map = com.hereliesaz.sphereslam.PhotosphereMap(
+            sectorCount = 4, viewableHalfAngleDeg = 90f, elevationBandCount = 1, viewableElevationHalfAngleDeg = 30f,
+        )
+        map.markUpdated(0f, 0f, nowMs = 1L) // anchors and makes one tile current
+        val current = map.currentRegions()
+        val needing = map.regionsNeedingUpdate()
+        assertEquals(1, current.size)
+        assertEquals(3, needing.size)
+        assertEquals(needing, CoverageGlowView.regionsFor(map, CoverageGlowRenderer.FillMode.TRIANGLES))
+        for (mode in listOf(
+            CoverageGlowRenderer.FillMode.COMPLEMENT,
+            CoverageGlowRenderer.FillMode.OUTLINE,
+            CoverageGlowRenderer.FillMode.COMPLEMENT_OUTLINED,
+        )) {
+            assertEquals(current, CoverageGlowView.regionsFor(map, mode))
         }
     }
 
