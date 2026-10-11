@@ -9,7 +9,7 @@ import com.hereliesaz.sphereslam.PhotosphereMap
 /**
  * Drop-in transparent [GLSurfaceView] that hazes the photosphere's unscanned tiles above a camera
  * preview. Add it over your `PreviewView` in the same parent (it requests an alpha channel and draws
- * on top), then push the map with [update]. Tiles the [PhotosphereMap] has accepted are left clear,
+ * on top), then push the map with [updateRegions]. Tiles the [PhotosphereMap] has accepted are left clear,
  * so the edge of the pink is the edge of what has been scanned.
  *
  * ~~~

@@ -61,6 +61,12 @@ Optional rendering helper:
 - `CoverageGlowView`
 - `CoverageGlowRenderer`
 
+The renderer re-projects pre-sampled coverage tiles (`setRegions`) through a lens (`setLens`) with
+the camera rotation it reads on the GL thread every draw (`rotationSource`, or the pushed
+`setWorldFromCamera`), in one of four live styles (`FillMode.TRIANGLES`, `COMPLEMENT`, `OUTLINE`,
+`COMPLEMENT_OUTLINED`). See [Coverage glow rotation](#coverage-glow-rotation) and
+[Embedding the coverage overlay](#embedding-the-coverage-overlay).
+
 Because public overlay methods use `:sphereslam` types, the Gradle dependency is published with
 `api(project(":sphereslam"))`.
 
@@ -106,15 +112,18 @@ camera-from-plane view in the half-extent units passed to `setReference` (plane 
 (isotropic, metric page geometry) instead.
 
 `PhotosphereTrackingSession` is the standalone photosphere runtime: feed `onFrame(Frame(luma,
-intrinsics, timestampNs, attitude, cameraFromDevice, headingDeg, elevationDeg, rollDeg))` from the
-camera-analysis worker and render `FrameResult.pose?.cameraFromMap` (column-major GL
+intrinsics, timestampNs, attitude, cameraFromDevice, headingDeg, elevationDeg, rollDeg,
+convertDurationNs))` from the camera-analysis worker and render `FrameResult.pose?.cameraFromMap` (column-major GL
 camera-from-base-map) with `pose.projection`. The base map is defined by the first attitude sample and
 is rotation-only; the planar KPM pose (camera-from-fingerprint) is rebased through
 `map_from_fingerprint`, solved once per reference on the first lock
 (`Callbacks.onMapFromFingerprintSolved`) or supplied to `updatePrecisionLayer`. Hand the solved
 transform back on the next `updatePrecisionLayer` call (a different transform rebuilds the planar
 layer). Any exception while processing a frame is terminal (`TrackingState.FATAL`,
-`Callbacks.onFatalError`). `PhotosphereAtlasGrowth`, `TargetQuality` and `TrackingFailureClassifier`
+`Callbacks.onFatalError`); a failed matcher build (for example `ReferenceTooWeakException`) surfaces
+on the first frame after the background build finishes. An exception inside a background
+atlas-growth attempt is **not** fatal: it is reported as an `atlas growth failed` diagnostic and the
+live matcher is kept. `PhotosphereAtlasGrowth`, `TargetQuality` and `TrackingFailureClassifier`
 are usable on their own.
 
 Per-frame matching cost is set by `Config.matchSpeed` (`KpmMatchSpeedConfig`): KPM matches a
@@ -122,7 +131,8 @@ half-resolution luma by default (intrinsics scaled to match, same pose conventio
 solves come from Lucas–Kanade flow + PnP against the KPM inlier correspondences (full solve on loss
 and at least every 10 frames / 500 ms), and a multi-page atlas is matched predicted-page-first.
 `TrackedPose.matchMethod` (`VisualMatchMethod`) says which path produced a pose. Flow tracking needs
-OpenCV's native library loaded (as for `Relocalizer`); without it every frame is a full KPM solve.
+OpenCV's native library (`opencv_java5`) loaded, as for `Relocalizer`; without it flow switches itself
+off and every frame is a full KPM solve. Flow poses never grow the atlas.
 `KpmMatchSpeedConfig.FULL_KPM_EVERY_FRAME` restores the previous every-frame full-resolution solve.
 `SphereSlamStandaloneSession.match(luma, timestampNs, PlanarMatchRequest(pageNo, maxCorrespondences))`
 exposes the underlying single-page match and inlier correspondences, and
@@ -132,19 +142,35 @@ solved page pose with the same conversion as `match`.
 Matcher builds and atlas growth run on the session's own background thread: growth forks the live
 matcher (`SphereSlamStandaloneSession.fork()`), adds the page to the fork and swaps it in on a later
 frame; `onFrame` never blocks on page feature extraction or index rebuilds. Until the first build
-lands a frame carries only the base pose. `Frame.luma` is not retained after `onFrame`.
+lands (and briefly after an intrinsics change) a frame carries only the base pose
+(`FrameResult.pose == null`). `Frame.luma` is not retained after `onFrame`, so a pooled buffer
+(`LumaFrameBufferPool`) may be reused for the next frame.
+
+`displayPosePredictor` (a `:sphereslam` `DisplayPosePredictor`), when set, receives every rendered
+pose with its frame's `attitude` and `cameraFromDevice` and is cleared when a frame yields no pose;
+the GL thread then calls `predictInto(extrapolator, now, out)` per draw. Use the same attitude sensor
+for `Frame.attitude` and the extrapolator.
+
+Every `Config.metricsIntervalMs` (5 s) `Callbacks.onDiagnostic` receives the last accepted KPM match
+(`page inliers error ageMs matchMs method=`) or `KPM no-lock`, followed by
+`timing{frames matched convertMs setupMs matchMs keyframeMs growthMs}` (`mean/max` ms over the
+window; `convertMs` comes from `Frame.convertDurationNs`, `growthMs` is only the analyzer-side cost of
+starting a growth attempt). The line is a diagnostic, not a stable format.
 
 #### `:models`
 
 Optional on-device model wrappers are marked with `ExperimentalSphereSlamModelsApi`. They are not
 part of the compatibility-guaranteed planar API.
+
 `DepthEstimator` runs MiDaS v2.1 Small (fp16 TFLite) on **LiteRT with the GPU delegate**;
 `DepthEstimatorOptions(backend = GPU | CPU, cpuThreads = 2, allowFp16Precision = true,
 gpuProgramCache = true)` selects the backend, and a GPU that fails to initialise falls back to the
 XNNPACK CPU path (logged as an error; `activeBackend` reports which). All model work runs on the
-estimator's own `SphereSLAM-depth` thread, so its methods may be called from any thread (they block).
-It accepts a luma plane directly via `estimateLuma`. `SuperPointDetector` and `LowLightEnhancer` stay
-on ONNX Runtime (CPU). Model provenance and sizes: [MODELS.md](MODELS.md).
+estimator's own `SphereSLAM-depth` thread, so its methods may be called from any thread (they block;
+do not call from the camera analyzer, GL or UI thread). It accepts a luma plane directly via
+`estimateLuma`. `DepthMap` is MiDaS relative inverse depth, row-major, at most `outMaxDim` on the long
+side, in the model's squashed square grid. `SuperPointDetector` and `LowLightEnhancer` stay on ONNX
+Runtime (CPU). Model provenance and sizes: [MODELS.md](MODELS.md).
 
 ### Internal modules
 
@@ -215,6 +241,33 @@ answer only at `ROTATION_0`). `AttitudePosePredictor(cameraFromDevice)` and
 `AttitudeRotationBridge(cameraFromDevice)` take this matrix; the bridge's `bridgeFunction` plugs into
 `RobustTrackingLoop(bridgeRotatedPose = …)`.
 
+### Coverage glow rotation
+
+`worldFromCamera` (coverage glow, `CoverageGlowProjection`, `CoverageGlowRenderer.RotationSource`,
+`AttitudeExtrapolator.worldFromCameraAt`) is a **row-major 3×3 whose columns are the OpenGL camera
+axes** — x right, y up, z backward (the camera looks down −z) — **in East-North-Up world**, the frame
+of `TYPE_ROTATION_VECTOR`. It equals `deviceToWorld · cameraFromDeviceᵀ`
+(`CoverageGlowProjection.worldFromCamera(deviceToWorld, cameraFromDevice)`); for a display-upright
+preview `cameraFromDevice = DeviceCameraRotation.cameraFromDeviceForDisplayFrame(displayRotationDeg)`.
+`worldFromCamera(heading, elevation, roll)` gives the same matrix from the `CameraAttitudeProvider`
+angles.
+
+Times passed to `RotationSource.worldFromCamera(frameTimeNanos, out)`, `drawEmbedded(frameTimeNanos)`,
+`AttitudeExtrapolator` and `DisplayPosePredictor.predictInto(extrapolator, targetTimeNs, out)` are in
+the `SystemClock.elapsedRealtimeNanos()` base, the `SensorEvent.timestamp` base.
+
+`CoverageGlowProjection.Lens` is the drawn surface's pinhole: `fromIntrinsics` (any principal point;
+for a `FILL_CENTER` preview use `CameraFillCenter.intrinsics(frame, viewW, viewH)`) or
+`fromFieldOfView` (centred).
+
+### Display pose prediction
+
+`DisplayPosePredictor.update(cameraFromWorld, frameAttitude, cameraFromDevice, frameTimestampNs)`
+takes a column-major camera-from-world GL pose, the body→world quaternion `[x, y, z, w]` at that
+frame, and the row-major GL-camera-from-device of the image the pose was solved in. `predictInto`
+writes `[ΔR·R | ΔR·t]` with `ΔR = C · R(q_now)ᵀ · R(q_frame) · Cᵀ` (camera centre held). Any fixed
+world frame works, but the frame and current attitude must come from the same sensor.
+
 ### Pixel directions
 
 `PhotosphereMap.directionOfPixel` rotates a pinhole ray through heading, elevation and roll
@@ -231,6 +284,8 @@ The following aliases remain temporarily for migration:
 | `AnchoredPose.viewFromContent` | `AnchoredPose.cameraFromContent` |
 | `Observation.pageToCamera3x4` | `Observation.cameraFromPage3x4` |
 | `OverlayPlacement.viewFromContent(...)` | `OverlayPlacement.cameraFromContent(...)` |
+| `CoverageGlowProjection.projectRegions(regions, heading, elevation, hFov, vFov)` | `projectRegions(regions, worldFromCamera, lens)` or `prepareRegions` + `projectInto` |
+| `CoverageGlowView.update(map, heading, elevation, hFov, vFov)` | `CoverageGlowView.updateRegions(map)` + `trackAtDisplayRate(source)`, or `update(map, worldFromCamera, lens)` |
 
 The replacement names are not cosmetic: they make transform direction and coordinate frame explicit.
 
@@ -254,6 +309,17 @@ The library defensively copies:
   `PhotosphereFingerprintFrame.Placement.mapFromFingerprint`, `GyroCompensationMath.Result.Within.homography`
 
 Mutating an array supplied to or returned from these APIs does not mutate library state.
+
+Deliberate exceptions, for allocation-free camera and render loops:
+
+- `LumaFrameBufferPool` returns **pooled** arrays: the array in a returned `RotatedLuma` is overwritten
+  `slots` calls later. Keep at most `slots − 1` frames; copy anything retained longer.
+- `LumaFrameTransform.packCropAndRotateInto` / `packAndRotateInto` write into, and return, the
+  caller's `destination` array.
+- `*Into` / `*At` methods (`AttitudeExtrapolator`, `DisplayPosePredictor`,
+  `PreparedRegions.projectInto`) write into caller-supplied `out` arrays.
+- `PhotosphereTrackingSession.Frame.luma` is read during `onFrame` without a copy (do not mutate it
+  until `onFrame` returns) and never retained afterwards.
 
 ## 4. Construction and lifecycle
 
@@ -294,7 +360,10 @@ checks and closes a calibrated native engine. It never throws.
 
 The native engine ships for `arm64-v8a` and `armeabi-v7a` only. On any other ABI (for example
 x86/x86_64 emulators), or on any other native load failure, `SphereSlam.isAvailable()` reports
-false; neither it nor `KpmBridge` throws. `:core:common` and `:core:nativebridge` neither depend on
+false; neither it nor `KpmBridge` throws. The real KPM engine is compiled only when the pinned
+artoolkitX submodule (`third_party/artoolkitx`) is checked out; a build without it ships stub entry
+points and reports KPM unavailable. Building the native code requires CMake 4.4.4, and JitPack builds
+must check the submodule out (see `jitpack.yml` and the README's *Building from source*). `:core:common` and `:core:nativebridge` neither depend on
 nor load OpenCV.
 
 ### Input validation
@@ -322,12 +391,19 @@ nor load OpenCV.
   the GL thread, and `RotationSource.worldFromCamera` is invoked there.
 - `AttitudeExtrapolator` and `DisplayPosePredictor` are thread-safe; their `*Into` / `*At` reads
   allocate nothing.
+- `CameraAttitudeProvider` reads, `start` and `stop` are safe from any thread; its
+  `attitudeExtrapolator` is written on the sensor thread and read from any thread.
+- `LumaFrameBufferPool` is synchronized; use one pool per analysis stream.
 - `GameRotationAttitudeSource` reads and `AttitudeRotationBridge` are thread-safe.
 - `PhotosphereKeyframeStore`, `HybridPoseHistory` and `HybridAnchorFusion` are not thread-safe.
 - `PlanarTracker` is not thread-safe; drive it from one camera worker.
 - `PhotosphereTrackingSession` synchronizes its methods; drive `onFrame` from one camera worker.
   `displayPosePredictor` may be set from any thread; the predictor it feeds is read on the GL thread.
-  Callbacks run synchronously on the caller's thread.
+  Callbacks run synchronously on the `onFrame` thread, including outcomes of its background matcher
+  builds and atlas growth.
+- `SphereSlamStandaloneSession.fork()` may run on another thread while the session matches, but not
+  concurrently with `addReference`, `reset` or `close` on it. Native KPM sessions each have their own
+  lock, so different sessions run in parallel.
 
 ### Embedding the coverage overlay
 
