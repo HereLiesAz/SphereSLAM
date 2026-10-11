@@ -156,4 +156,70 @@ class PhotosphereKeyframeTest {
         assertFalse(p.physicallyMetric)
         assertEquals(90f, p.direction.azimuthDeg, 1e-3f)
     }
+
+    /** A 480×640 portrait frame, fx = fy = 500: ~51° × 65°, the app's display-upright analysis frame. */
+    private fun portraitKeyframe(heading: Float, elevation: Float, roll: Float = 0f) = PhotosphereKeyframe(
+        timestampNs = 1L,
+        luma = ByteArray(480 * 640),
+        width = 480,
+        height = 640,
+        intrinsics = floatArrayOf(500f, 500f, 240f, 320f),
+        headingDeg = heading,
+        elevationDeg = elevation,
+        rollDeg = roll,
+    )
+
+    @Test
+    fun `a keyframe marks every tile its frame covers, not only the one under the axis`() {
+        // The app's lattice: 12 sectors over ±85° (~14.2° each), 3 bands over ±60° (40° each).
+        val map = PhotosphereMap(elevationBandCount = 3)
+        val store = PhotosphereKeyframeStore(map)
+        val r = store.record(portraitKeyframe(0f, 0f), nowMs = 1L)!!
+        val axis = r.tile
+        assertEquals(TileId(6, 1), axis)
+        // ±25.5° horizontally: the axis tile's two azimuth neighbours are wholly in frame.
+        assertTrue(TileId(5, 1) in r.coveredTiles)
+        assertTrue(TileId(7, 1) in r.coveredTiles)
+        assertEquals(r.coveredTiles, r.firstCoveredTiles)
+        for (id in r.coveredTiles + axis) assertFalse("$id current", map.needsUpdate(id))
+        // Only the axis tile keeps the keyframe.
+        assertEquals(1, store.keyframes().size)
+        // Far outside the frame and the upper/lower bands (only ~31 % in frame) stay unscanned.
+        assertTrue(map.needsUpdate(TileId(0, 1)))
+        assertTrue(map.needsUpdate(TileId(6, 0)))
+        assertTrue(map.needsUpdate(TileId(6, 2)))
+        // A tile already covered is not a first capture when the axis reaches it.
+        val next = store.record(portraitKeyframe(map.tile(TileId(7, 1))!!.center.azimuthDeg, 0f), nowMs = 2L)!!
+        assertEquals(TileId(7, 1), next.tile)
+        assertFalse(next.firstCaptureForTile)
+    }
+
+    @Test
+    fun `a level pan with keyframes wider apart than a sector leaves no gap in its band`() {
+        val map = PhotosphereMap(elevationBandCount = 3)
+        val store = PhotosphereKeyframeStore(map)
+        store.record(portraitKeyframe(0f, 0f), nowMs = 0L) // anchors the lattice at 0°
+        // 20° per keyframe (fast pan, 250 ms keyframes at 80°/s) from -40° to +40°.
+        for ((i, h) in (-40..40 step 20).withIndex()) store.record(portraitKeyframe(h.toFloat(), 0f), nowMs = i + 1L)
+        val anchor = map.snapshot().wallHeadingDeg!!
+        for (s in 0 until 12) {
+            val c = SphereGrid.signedDelta(map.tile(TileId(s, 1))!!.center.azimuthDeg, anchor)
+            if (c in -40f..40f) assertFalse("sector $s (centre $c°) current", map.needsUpdate(TileId(s, 1)))
+        }
+    }
+
+    @Test
+    fun `tilting up covers the upper band and roll is honoured`() {
+        val map = PhotosphereMap(elevationBandCount = 3)
+        val store = PhotosphereKeyframeStore(map)
+        store.record(portraitKeyframe(0f, 0f), nowMs = 0L) // anchor
+        store.record(portraitKeyframe(0f, 40f), nowMs = 1L)
+        assertFalse(map.needsUpdate(TileId(6, 2)))
+        // Roll turns the frame: a landscape 640×480 frame (~65° × 51°) aimed at sector 6's centre
+        // covers sector 8 (80 % in frame) upright, but only ~31 % of it when rolled 90°.
+        val lens = CoverageGlowProjection.Lens.fromIntrinsics(500f, 500f, 320f, 240f, 640, 480)
+        val centre = map.tile(TileId(6, 1))!!.center.azimuthDeg
+        assertTrue(TileId(8, 1) in map.tilesCovered(centre, 0f, 0f, lens))
+        assertFalse(TileId(8, 1) in map.tilesCovered(centre, 0f, 90f, lens))
+    }
 }

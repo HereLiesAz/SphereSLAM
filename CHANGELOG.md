@@ -2,7 +2,26 @@
 
 ## Unreleased
 
-Fixes from a full audit of 0.24.3. No version bump yet.
+Seen tiles persist: the glow no longer returns over scanned areas, and tracking re-acquires after
+the wall leaves the screen.
+
+- **Fix — a keyframe cleared only the tile under its view axis.** Tiles are ~14° × 40° against a
+  ~50° × 65° frame, so everything else in view was never recorded and glowed again once it left the
+  screen; a fast pan skipped whole sectors. New `PhotosphereMap.tilesCovered(heading, elevation,
+  roll, lens)` returns every tile at least `DEFAULT_MIN_COVERED_FRACTION` (0.6) in frame (sampled
+  every 5°, area-weighted); `PhotosphereKeyframeStore.record` marks them current too (the axis tile
+  alone keeps the keyframe). `Recorded.coveredTiles` / `firstCoveredTiles` report them; a tile already
+  covered is no longer a first capture when the axis reaches it.
+- **Fix — regression in 0.24.4: KPM gates 4× stricter at the default 2× downscale.** 0.24.4 reported
+  KPM's reprojection error in full-frame px² (×`factor²`) without rescaling
+  `PoseAcceptanceConfig.maxReprojectionError` (10) or `PhotosphereAtlasGrowth.MAX_GROW_REPROJECTION_ERROR`
+  (4), both tuned on the matcher's pixels: the atlas almost never grew (nothing beyond the reference
+  page to relock on) and oblique re-entries were rejected as `EXCESSIVE_REPROJECTION_ERROR`. KPM's
+  error is again reported in the pixels it was solved in (as through 0.24.3); flow's stays full-frame.
+
+## 0.24.4
+
+Fixes from a full audit of 0.24.3.
 
 ### `:reloc` `PhotosphereTrackingSession`
 

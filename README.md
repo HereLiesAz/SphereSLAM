@@ -409,8 +409,8 @@ SphereSLAM standalone KPM page=0 inliers=87 error=3.1 ageMs=41.2 matchMs=18.4 me
 ~~~
 
 `attempts` frames ran the matcher and `matched` of them got a pose back (before gating). `error` is
-the mean squared reprojection error in **full-frame** pixels² for every match method (a downscaled
-KPM solve's error is multiplied by `factor²`), the unit `PoseAcceptanceConfig.maxReprojectionError`
+the mean squared reprojection error in pixels² of the image the pose was solved in (KPM: the
+matcher's downscaled image; flow: the full frame), the unit `PoseAcceptanceConfig.maxReprojectionError`
 gates. `convertMs` is whatever the host reports through `Frame(convertDurationNs = …)` (its Y-plane
 pack/rotate); `setupMs` is matcher adoption plus the frame copy; `growthMs` is the analyzer-side
 cost of starting a growth attempt (the work itself runs on the worker).

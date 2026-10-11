@@ -91,15 +91,24 @@ class PhotosphereKeyframeStore(
 
     /** Result of [record]. */
     data class Recorded(
-        /** The tile the keyframe updated. */
+        /** The tile under the keyframe's view axis (the one that keeps the keyframe). */
         val tile: TileId,
         /** True when this was the tile's first ever capture. */
         val firstCaptureForTile: Boolean,
+        /**
+         * Every other tile the frame covered ([PhotosphereMap.tilesCovered]) and marked current. They
+         * keep no keyframe of their own; [view] for them pairs [latest]'s intrinsics with the live
+         * attitude, as for a fresh tile.
+         */
+        val coveredTiles: List<TileId> = emptyList(),
+        /** The subset of [coveredTiles] scanned for the first time by this keyframe. */
+        val firstCoveredTiles: List<TileId> = emptyList(),
     )
 
     /**
      * Fold [keyframe] into the map and keep it for its tile. An in-band keyframe anchors the wall
-     * heading when the map has none.
+     * heading when the map has none. Besides the tile under the view axis, every tile the frame covers
+     * ([PhotosphereMap.tilesCovered], through the keyframe's intrinsics and roll) is marked current.
      *
      * @return the updated tile (with [Recorded.firstCaptureForTile]), or null when the keyframe's
      *   direction lies outside the map's viewable lattice — then nothing is stored and the map is left
@@ -117,8 +126,26 @@ class PhotosphereKeyframeStore(
         ) ?: return null
         frames[tile] = keyframe
         latest = keyframe
+        // The axis tile alone undercounts badly: a tile is ~14° × 40° against a ~50° × 65° frame, so
+        // everything else the frame saw would glow again once it left the screen. Mark every tile the
+        // frame covered (no keyframe stored for them: the axis tile's frame stays the best view).
+        val k = keyframe.intrinsics
+        val lens = CoverageGlowProjection.Lens.fromIntrinsics(k[0], k[1], k[2], k[3], keyframe.width, keyframe.height)
+        val covered = ArrayList<TileId>()
+        val firstCovered = ArrayList<TileId>()
+        for (id in map.tilesCovered(keyframe.headingDeg, keyframe.elevationDeg, keyframe.rollDeg, lens)) {
+            if (id == tile) continue
+            if (!map.hasBeenScanned(id)) firstCovered.add(id)
+            map.markUpdated(id, nowMs)
+            covered.add(id)
+        }
         // The anchoring keyframe had no tile address before it anchored the map: its tile is new.
-        return Recorded(tile, firstCaptureForTile = if (anchored) !scannedBefore else true)
+        return Recorded(
+            tile,
+            firstCaptureForTile = if (anchored) !scannedBefore else true,
+            coveredTiles = covered,
+            firstCoveredTiles = firstCovered,
+        )
     }
 
     /** The keyframe stored for [tile], or null. */

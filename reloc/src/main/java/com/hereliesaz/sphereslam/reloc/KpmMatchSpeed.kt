@@ -17,11 +17,12 @@ import kotlin.math.sqrt
  * 1. **Downscaled matching** ([matchDownscale]): KPM runs on a box-filtered `1/matchDownscale` luma
  *    with intrinsics scaled to match ([KpmMatchScale.scaleIntrinsics]). The 3-D pose a calibrated
  *    PnP/ICP recovers does not depend on image resolution, so the result is the same
- *    camera-from-wall transform. Reported reprojection errors are mean squared errors in
- *    **full-frame** pixels² whichever path solved the pose (a downscaled KPM solve's error is scaled
- *    by `factor²`), so one [PoseAcceptanceConfig.maxReprojectionError] gates KPM and flow poses alike.
- *    KPM's own internal ≤ 10 px² gate still applies in the image it solved, i.e. ≤ `10·factor²`
- *    full-frame px², so at a downscale the session's acceptance gate is the binding one.
+ *    camera-from-wall transform. Reprojection errors stay in the pixels of the image each solve ran
+ *    on (KPM: the downscaled image, as KPM's own ≤ 10 px² gate assumes; flow: the full frame), and
+ *    [PoseAcceptanceConfig.maxReprojectionError] / `PhotosphereAtlasGrowth.MAX_GROW_REPROJECTION_ERROR`
+ *    are tuned on that scale. Reporting KPM's error in full-frame px² (×`factor²`) against unchanged
+ *    gates made them 4× stricter at the default 2× downscale (0.24.4): the atlas stopped growing and
+ *    relocks were rejected.
  * 2. **Frame-to-frame flow tracking** ([flowTracking]): after a full solve, the KPM inlier
  *    correspondences (frame pixel ↔ page millimetre) are tracked with pyramidal Lucas–Kanade at full
  *    resolution and the pose is re-solved by PnP against the page's own reference coordinates
