@@ -3,6 +3,7 @@ package com.hereliesaz.sphereslam.reloc
 import com.hereliesaz.sphereslam.PhotosphereKeyframe
 import com.hereliesaz.sphereslam.SphereSlamPoseMath
 import com.hereliesaz.sphereslam.attitude.AttitudeSample
+import com.hereliesaz.sphereslam.attitude.DisplayPosePredictor
 import com.hereliesaz.sphereslam.camera.CameraIntrinsics
 import com.hereliesaz.sphereslam.math.RigidMath
 import com.hereliesaz.sphereslam.math.RotationMath
@@ -39,7 +40,10 @@ class PhotosphereTrackingSessionTest {
         it[12] = -x; it[13] = -y; it[14] = -d
     }
 
-    private class FakeFrontEnd(private val featuresFor: (Int) -> Int) : PlanarFrontEnd {
+    private class FakeFrontEnd(
+        private val featuresFor: (Int) -> Int,
+        private val forkInto: ((FakeFrontEnd) -> Unit)? = null,
+    ) : PlanarFrontEnd {
         val pages = mutableListOf<Pair<Int, FloatArray>>()
         var next: PlanarMatchResult? = null
         var closed = false
@@ -61,8 +65,42 @@ class PhotosphereTrackingSessionTest {
             return next
         }
 
+        val inputs = mutableListOf<PlanarFrameInput>()
+        val verdicts = mutableListOf<Boolean>()
+
+        override fun match(input: PlanarFrameInput): PlanarMatchResult? {
+            inputs += input
+            return match(input.luma, input.timestampNs)
+        }
+
+        override fun onVerdict(accepted: Boolean) {
+            verdicts += accepted
+        }
+
+        override fun fork(): PlanarFrontEnd? {
+            val register = forkInto ?: return null
+            check(!closed) { "forked a closed matcher" }
+            return FakeFrontEnd(featuresFor, forkInto).also {
+                it.pages += pages
+                it.next = next
+                register(it)
+            }
+        }
+
         override fun close() {
             closed = true
+        }
+    }
+
+    /** Runs submitted tasks only when told to, like a background thread that has not got there yet. */
+    private class QueueExecutor : java.util.concurrent.Executor {
+        val queue = ArrayDeque<Runnable>()
+        override fun execute(command: Runnable) {
+            queue.addLast(command)
+        }
+
+        fun runAll() {
+            while (queue.isNotEmpty()) queue.removeFirst().run()
         }
     }
 
@@ -74,6 +112,7 @@ class PhotosphereTrackingSessionTest {
         val failures = mutableListOf<TrackingFailureEvent>()
         val states = mutableListOf<TrackingState>()
         val fatal = mutableListOf<Throwable>()
+        val diagnostics = mutableListOf<String>()
         val callbacks = PhotosphereTrackingSession.Callbacks(
             onKeyframe = { keyframes += it },
             onMapFromFingerprintSolved = { solved += it },
@@ -82,6 +121,7 @@ class PhotosphereTrackingSessionTest {
             onFailure = { failures += it },
             onTrackingStateChanged = { states += it },
             onFatalError = { fatal += it },
+            onDiagnostic = { diagnostics += it },
         )
     }
 
@@ -89,11 +129,18 @@ class PhotosphereTrackingSessionTest {
     private var featuresFor: (Int) -> Int = { 100 }
     private val rec = Recorder()
 
-    private fun session(config: PhotosphereTrackingSession.Config = PhotosphereTrackingSession.Config()) =
-        PhotosphereTrackingSession(
-            config, rec.callbacks, null, { nowNs },
-            PlanarFrontEndFactory { FakeFrontEnd(featuresFor).also { fronts += it } },
-        )
+    private var forkable = false
+
+    private fun session(
+        config: PhotosphereTrackingSession.Config = PhotosphereTrackingSession.Config(),
+        executor: java.util.concurrent.Executor = java.util.concurrent.Executor(Runnable::run),
+    ) = PhotosphereTrackingSession(
+        config, rec.callbacks, null, { nowNs },
+        PlanarFrontEndFactory {
+            FakeFrontEnd(featuresFor, if (forkable) { f -> fronts += f } else null).also { fronts += it }
+        },
+        executor,
+    )
 
     private fun frame(
         attitude: AttitudeSample? = yaw(0.0),
@@ -277,7 +324,7 @@ class PhotosphereTrackingSessionTest {
     }
 
     @Test
-    fun `an accepted off-centre pose grows a rectified atlas page`() {
+    fun `an accepted off-centre pose grows a rectified atlas page by rebuilding when the matcher cannot fork`() {
         val s = session()
         s.updatePrecisionLayer(reference)
         s.onFrame(frame())
@@ -289,9 +336,14 @@ class PhotosphereTrackingSessionTest {
         assertEquals(1f, grown.referenceWidthUnits, 1e-4f)
         assertEquals(500, grown.width)
         assertEquals(375, grown.height)
-        assertEquals(listOf(0, 1), fronts.single().pages.map { it.first })
+        assertEquals(2, fronts.size)
+        assertTrue(fronts[0].closed) // the replaced matcher is retired
+        assertFalse(fronts[1].closed)
+        assertEquals(listOf(0, 1), fronts[1].pages.map { it.first })
         assertEquals(listOf(1), s.atlasPages.map { it.pageNo })
+        fronts[1].next = match(viewAt(0.6f, 0f, 1f))
         s.onFrame(frame())
+        assertEquals(1, fronts[1].matches) // the swapped-in matcher is the live one
         assertEquals(1, rec.grown.size) // growth interval
         // A rebuild re-registers the grown page.
         s.onFrame(frame(k = CameraIntrinsics(500f, 500f, 320f, 240f, 640, 480).copy(fx = 501f)))
@@ -299,19 +351,218 @@ class PhotosphereTrackingSessionTest {
     }
 
     @Test
-    fun `a weak grown page is discarded and the matcher rebuilt`() {
+    fun `the front end gets frame context, gate verdicts and a gyro-predicted pose`() {
+        val s = session()
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame(yaw(0.0)))
+        val fe = fronts.single()
+        assertNull(fe.inputs.single().predictedCameraFromCanonical) // nothing accepted yet
+        assertTrue(fe.verdicts.isEmpty()) // no pose, no verdict
+        assertEquals(nowNs / 1_000_000L, fe.inputs.single().nowMs)
+
+        val wall = viewAt(0f, 0f, 2f)
+        fe.next = match(wall)
+        repeat(2) { s.onFrame(frame(yaw(0.0))) }
+        assertEquals(listOf(true, true), fe.verdicts)
+
+        // The next frame's prediction is the accepted pose rotated by the gyro change since.
+        fe.next = null
+        s.onFrame(frame(yaw(10.0)))
+        val predicted = fe.inputs.last().predictedCameraFromCanonical!!
+        assertEquals(10f, RigidMath.rotationAngleDeg(RigidMath.multiply(predicted, RigidMath.rigidInverse(wall))), 1e-2f)
+        assertTrue(fe.inputs.last().lumaBytes.contentEquals(textured))
+
+        // A gated-out pose is reported back as rejected.
+        fe.next = match(wall, inliers = 1)
+        s.onFrame(frame(yaw(10.0)))
+        assertEquals(false, fe.verdicts.last())
+    }
+
+    @Test
+    fun `flow-tracked poses carry their method and never grow the atlas`() {
+        val s = session()
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame())
+        fronts.single().next = PlanarMatchResult(0, viewAt(0.6f, 0f, 1f), 1f, 30, VisualMatchMethod.FLOW)
+        val r = run {
+            s.onFrame(frame())
+            s.onFrame(frame())
+        }
+        assertEquals(VisualMatchMethod.FLOW, r.pose!!.matchMethod)
+        assertEquals(PhotosphereTrackingSession.PoseSource.KPM, r.pose!!.source)
+        assertTrue(rec.grown.isEmpty())
+        // The same pose from a KPM solve does grow it.
+        fronts.single().next = PlanarMatchResult(0, viewAt(0.6f, 0f, 1f), 1f, 30, VisualMatchMethod.KPM_FOCUSED)
+        assertEquals(VisualMatchMethod.KPM_FOCUSED, s.onFrame(frame()).pose!!.matchMethod)
+        assertEquals(1, rec.grown.size)
+    }
+
+
+    @Test
+    fun `growth forks the live matcher and swaps the fork in`() {
+        forkable = true
+        val s = session()
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame())
+        val live = fronts.single()
+        live.next = match(viewAt(0.6f, 0f, 1f))
+        repeat(2) { s.onFrame(frame()) }
+        assertEquals(1, rec.grown.single().pageNo)
+        assertEquals(2, fronts.size)
+        val fork = fronts[1]
+        assertEquals(listOf(0), live.pages.map { it.first }) // the live matcher is never added to
+        assertEquals(listOf(0, 1), fork.pages.map { it.first })
+        assertTrue(live.closed)
+        assertFalse(fork.closed)
+    }
+
+    @Test
+    fun `a weak grown page is dropped without touching or rebuilding the live matcher`() {
+        forkable = true
         featuresFor = { if (it == 0) 100 else 5 }
         val s = session()
         s.updatePrecisionLayer(reference)
         s.onFrame(frame())
-        fronts.single().next = match(viewAt(0.6f, 0f, 1f))
+        val live = fronts.single()
+        live.next = match(viewAt(0.6f, 0f, 1f))
         repeat(2) { s.onFrame(frame()) }
         assertTrue(rec.grown.isEmpty())
-        assertTrue(fronts.single().closed)
         assertTrue(s.atlasPages.isEmpty())
-        s.onFrame(frame())
         assertEquals(2, fronts.size)
-        assertEquals(listOf(0), fronts[1].pages.map { it.first })
+        assertTrue(fronts[1].closed) // the rejected fork
+        assertFalse(live.closed)
+        assertEquals(listOf(0), live.pages.map { it.first })
+        assertTrue(rec.diagnostics.any { it.startsWith("SphereSLAM atlas growth rejected page=1 features=5") })
+        val before = live.matches
+        val r = s.onFrame(frame())
+        assertEquals(2, fronts.size) // no full rebuild
+        assertEquals(before + 1, live.matches)
+        assertNotNull(r.pose)
+    }
+
+    @Test
+    fun `builds and growth run off the frame thread and swap in when ready`() {
+        forkable = true
+        val worker = QueueExecutor()
+        val s = session(executor = worker)
+        s.updatePrecisionLayer(reference)
+        // The first build is in flight: frames still get the base pose, but no planar pose.
+        val waiting = s.onFrame(frame())
+        assertNull(waiting.pose)
+        assertNotNull(waiting.baseCameraFromMap)
+        assertTrue(fronts.isEmpty())
+        s.onFrame(frame())
+        assertEquals(1, worker.queue.size) // not re-submitted while building
+        worker.runAll()
+        assertTrue(rec.ready.isEmpty()) // adopted on the frame thread, not the worker
+        s.onFrame(frame())
+        assertEquals(1, rec.ready.size)
+        val live = fronts.single()
+        live.next = match(viewAt(0.6f, 0f, 1f))
+        repeat(2) { s.onFrame(frame()) } // confirm + lock: growth submitted
+        assertEquals(1, worker.queue.size)
+        assertEquals(1, fronts.size) // nothing built on the frame thread
+        val matchesBefore = live.matches
+        s.onFrame(frame()) // the analyzer keeps matching on the live matcher meanwhile
+        assertEquals(matchesBefore + 1, live.matches)
+        worker.runAll()
+        assertEquals(2, fronts.size)
+        assertTrue(rec.grown.isEmpty())
+        s.onFrame(frame()) // the swap
+        assertEquals(1, rec.grown.single().pageNo)
+        assertTrue(worker.queue.isNotEmpty()) // the old matcher's close is queued on the worker...
+        assertFalse(live.closed)
+        worker.runAll()
+        assertTrue(live.closed) // ...and runs there
+    }
+
+    @Test
+    fun `a growth finished for a dropped matcher is discarded`() {
+        forkable = true
+        val worker = QueueExecutor()
+        val s = session(executor = worker)
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame())
+        worker.runAll()
+        s.onFrame(frame())
+        fronts.single().next = match(viewAt(0.6f, 0f, 1f))
+        repeat(2) { s.onFrame(frame()) }
+        assertEquals(1, worker.queue.size) // growth pending
+        s.updatePrecisionLayer(reference, forceRebuild = true) // invalidates it
+        worker.runAll() // growth job (forks the old matcher before its queued close) + the close
+        val fork = fronts[1]
+        assertTrue(fork.closed)
+        s.onFrame(frame())
+        worker.runAll()
+        s.onFrame(frame())
+        assertTrue(rec.grown.isEmpty())
+        assertTrue(s.atlasPages.isEmpty())
+        assertEquals(listOf(0), fronts.last().pages.map { it.first })
+        assertFalse(fronts.last().closed)
+    }
+
+    @Test
+    fun `close retires matchers through the worker`() {
+        val worker = QueueExecutor()
+        val s = session(executor = worker)
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame())
+        worker.runAll()
+        s.onFrame(frame())
+        s.close()
+        assertFalse(fronts.single().closed)
+        worker.runAll()
+        assertTrue(fronts.single().closed)
+    }
+
+    @Test
+    fun `the periodic diagnostic carries per-stage timing`() {
+        val s = session(PhotosphereTrackingSession.Config(metricsIntervalMs = 1_000L))
+        s.updatePrecisionLayer(reference)
+        s.onFrame(PhotosphereTrackingSession.Frame(textured, intrinsics, nowNs, yaw(0.0), convertDurationNs = 2_000_000L))
+        fronts.single().next = match(viewAt(0f, 0f, 2f))
+        repeat(2) { s.onFrame(frame()) } // confirm + lock; the first lock reports at once
+        val line = rec.diagnostics.last { it.startsWith("SphereSLAM standalone KPM") }
+        assertTrue(line, line.startsWith("SphereSLAM standalone KPM page=0 inliers=30"))
+        assertTrue(line, line.contains("timing{frames=3 matched=3 convertMs=2.0/2.0 setupMs="))
+        assertTrue(line, line.contains(" matchMs=") && line.contains(" keyframeMs=") && line.contains(" growthMs="))
+        fun kpmLines() = rec.diagnostics.count { it.startsWith("SphereSLAM standalone KPM") }
+        val before = kpmLines()
+        s.onFrame(frame())
+        assertEquals("nothing more inside the interval", before, kpmLines())
+        advance(1_100)
+        fronts.single().next = null
+        s.onFrame(frame()) // window: the locked frame above + this miss
+        val windowed = rec.diagnostics.last { it.startsWith("SphereSLAM standalone KPM") }
+        assertTrue(windowed, windowed.contains("page=0") && windowed.contains("timing{frames=2 matched=2 convertMs=-"))
+        advance(1_100)
+        s.onFrame(frame())
+        val idle = rec.diagnostics.last { it.startsWith("SphereSLAM standalone KPM") }
+        assertTrue(idle, idle.startsWith("SphereSLAM standalone KPM no-lock timing{frames=1 matched=1"))
+    }
+
+    @Test
+    fun `a display pose predictor receives every rendered pose and is cleared without one`() {
+        val s = session()
+        val predictor = DisplayPosePredictor()
+        s.displayPosePredictor = predictor
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame(yaw(0.0)))
+        assertFalse(predictor.hasPose)
+        fronts.single().next = match(viewAt(0f, 0f, 2f))
+        repeat(2) { s.onFrame(frame(yaw(10.0))) }
+        val rendered = s.onFrame(frame(yaw(10.0))).pose!!
+        assertEquals(rendered.timestampNs, predictor.poseTimestampNs)
+        // Unrotated: the rendered pose itself; rotated 5° further: the bridge's answer.
+        assertArrayEquals(rendered.cameraFromMap, predictor.predict(yaw(10.0).quaternion), 1e-5f)
+        val turned = predictor.predict(yaw(15.0).quaternion)!!
+        assertEquals(5f, RigidMath.rotationDeltaDeg(rendered.cameraFromMap, turned), 1e-2f)
+        assertArrayEquals(RigidMath.cameraCentre(rendered.cameraFromMap), RigidMath.cameraCentre(turned), 1e-5f)
+        // Lost past the bridge window: cleared.
+        fronts.single().next = null
+        advance(1_000)
+        s.onFrame(frame(yaw(10.0)))
+        assertFalse(predictor.hasPose)
     }
 
     @Test

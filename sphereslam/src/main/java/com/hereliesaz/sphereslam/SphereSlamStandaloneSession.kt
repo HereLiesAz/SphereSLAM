@@ -79,8 +79,23 @@ class SphereSlamStandaloneSession internal constructor(
         val reprojectionError: Float,
         val inlierCount: Int,
         val reference: Reference,
+        cameraFromPage3x4: FloatArray = FloatArray(0),
+        correspondences: FloatArray = FloatArray(0),
     ) {
         private val cameraFromCanonicalValue = cameraFromCanonical.copyOf()
+        private val cameraFromPage3x4Value = cameraFromPage3x4.copyOf()
+        private val correspondencesValue = correspondences.copyOf()
+
+        /**
+         * The raw KPM row-major camera-from-page 3x4 (page millimetres, image-convention camera:
+         * x right, y down, z forward) this pose was converted from; empty when unknown.
+         */
+        val cameraFromPage3x4: FloatArray
+            get() = cameraFromPage3x4Value.copyOf()
+
+        /** [PlanarMatch.correspondences] of the match (rows of frame x, y, page x, y mm), or empty. */
+        val correspondences: FloatArray
+            get() = correspondencesValue.copyOf()
 
         init {
             require(cameraFromCanonicalValue.size == 16)
@@ -164,28 +179,90 @@ class SphereSlamStandaloneSession internal constructor(
      *
      * @return a canonical camera pose for this exact frame, or null when no registered page matched.
      */
-    fun match(luma: ByteBuffer, timestampNs: Long): Pose? {
+    fun match(luma: ByteBuffer, timestampNs: Long): Pose? = match(luma, timestampNs, PlanarMatchRequest())
+
+    /**
+     * [match] with a [PlanarMatchRequest]: optionally restricted to one registered page and/or
+     * returning inlier correspondences ([Pose.correspondences]). The pose convention is identical.
+     */
+    fun match(luma: ByteBuffer, timestampNs: Long, request: PlanarMatchRequest): Pose? {
         requireOpen()
         if (references.isEmpty()) return null
-        val match = engine.match(luma) ?: return null
+        if (request.pageNo != PlanarMatchRequest.ALL_PAGES && !references.containsKey(request.pageNo)) return null
+        val match = engine.match(luma, request) ?: return null
         val reference = references[match.pageNo] ?: return null
-        val g = reference.geometry
-        val cameraFromPage = SphereSlamPoseMath.pageToOpenGlViewMeters(
-            match.cameraFromPage3x4,
-            pageCenterXmm = g.centerXmm,
-            pageCenterYmm = g.centerYmm,
-        )
+        val cameraFromPage3x4 = match.cameraFromPage3x4
         return Pose(
             timestampNs = timestampNs,
             pageNo = match.pageNo,
-            cameraFromCanonical = SphereSlamPoseMath.pageViewToCanonicalView(
-                cameraFromPage,
-                reference.canonicalFromPage,
-            ),
+            cameraFromCanonical = canonicalView(reference, cameraFromPage3x4),
             reprojectionError = match.reprojectionError,
             inlierCount = match.inlierCount,
             reference = reference,
+            cameraFromPage3x4 = cameraFromPage3x4,
+            correspondences = match.correspondences,
         )
+    }
+
+    /**
+     * An independent session holding every page registered here (same frame size and calibration),
+     * for growing the atlas off the matching thread: add pages to the fork with [addReference] (its
+     * first add indexes the copied pages plus the new one), then swap it in and close this session.
+     * A fork that is never added to matches nothing.
+     *
+     * May be called from another thread while this session's [match] runs (the native copy is
+     * serialized against matching per session; nothing else here is mutated), but not concurrently
+     * with [addReference], [reset] or [close] on this session. Returns null when this session is
+     * closed or its engine cannot be cloned (e.g. a non-KPM engine); callers then rebuild from pages.
+     */
+    fun fork(): SphereSlamStandaloneSession? {
+        if (closed) return null
+        val engine = this.engine as? KpmSphereSlamEngine ?: return null
+        val forked = engine.fork() ?: return null
+        return SphereSlamStandaloneSession(
+            frameWidth, frameHeight, calibration, forkedEngineFactory(forked, engineFactory), references.values.toList(),
+        )
+    }
+
+    private constructor(
+        frameWidth: Int,
+        frameHeight: Int,
+        calibration: SphereSlamCalibration,
+        engineFactory: EngineFactory,
+        pages: List<Reference>,
+    ) : this(frameWidth, frameHeight, calibration, engineFactory) {
+        pages.forEach { references[it.pageNo] = it }
+    }
+
+    private companion object {
+        /** Hands out [forked] once (this fork's first engine), then defers to [fallback] (e.g. [reset]). */
+        fun forkedEngineFactory(forked: SphereSlamEngine, fallback: EngineFactory): EngineFactory {
+            var first: SphereSlamEngine? = forked
+            return EngineFactory { w, h, c -> first?.also { first = null } ?: fallback.create(w, h, c) }
+        }
+    }
+
+    /**
+     * The column-major GL camera-from-canonical for a raw KPM-convention camera-from-page 3x4 of
+     * registered page [pageNo] — the exact conversion [match] applies. Lets a caller that solved the
+     * page pose itself (e.g. frame-to-frame tracking against [Pose.correspondences]) report it in the
+     * same convention. Null when [pageNo] is not registered or the pose is not finite.
+     */
+    fun cameraFromCanonical(pageNo: Int, cameraFromPage3x4: FloatArray): FloatArray? {
+        require(cameraFromPage3x4.size == 12) { "KPM pose must contain 12 floats" }
+        val reference = references[pageNo] ?: return null
+        if (cameraFromPage3x4.any { !it.isFinite() }) return null
+        return canonicalView(reference, cameraFromPage3x4)
+    }
+
+    private fun canonicalView(reference: Reference, cameraFromPage3x4: FloatArray): FloatArray {
+        val g = reference.geometry
+        val cameraFromPage = SphereSlamPoseMath.pageToOpenGlViewMeters(
+            cameraFromPage3x4,
+            pageCenterXmm = g.centerXmm,
+            pageCenterYmm = g.centerYmm,
+        )
+        return SphereSlamPoseMath.pageViewToCanonicalView(cameraFromPage, reference.canonicalFromPage)
     }
 
     /** Drop the atlas and create a fresh native matcher with the same live-camera calibration. */

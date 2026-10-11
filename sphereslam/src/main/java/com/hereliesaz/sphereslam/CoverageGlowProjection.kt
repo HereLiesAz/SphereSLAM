@@ -21,6 +21,11 @@ import kotlin.math.tan
  * the camera looks). A pinhole model then gives normalized device coordinates in `[-1, 1]`, with a
  * flag for whether the direction is actually within the frustum or only off-screen (so the renderer
  * can draw an in-scene glow vs. an edge arrow).
+ *
+ * Prefer the **full-rotation** API — [worldFromCamera] + [Lens] + [projectRegions] /
+ * [prepareRegions] — over the heading/elevation overloads: it honours camera roll, works looking
+ * straight up or down, supports an off-centre principal point, and (prepared once) re-projects every
+ * display frame without allocation, which is what makes the glow feel attached to the scene.
  */
 object CoverageGlowProjection {
 
@@ -123,6 +128,12 @@ object CoverageGlowProjection {
      * @return `GL_TRIANGLES` vertex data, [FLOATS_PER_REGION_VERTEX] floats per vertex; empty when
      *   [regions] is empty or the camera looks straight up/down (no stable screen basis).
      */
+    @Deprecated(
+        "Heading/elevation only: ignores camera roll, vanishes when the camera looks straight up or " +
+            "down, and assumes a centred principal point. Use projectRegions(regions, worldFromCamera, " +
+            "lens) — or prepareRegions + PreparedRegions.projectInto for per-frame use — with " +
+            "worldFromCamera(heading, elevation, roll) or a sensor rotation.",
+    )
     fun projectRegions(
         regions: List<SphereCoverage.TileRegion>,
         cameraHeadingDeg: Float,
@@ -172,6 +183,342 @@ object CoverageGlowProjection {
             }
         }
         return out.toArray()
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Full-rotation projection
+    // ---------------------------------------------------------------------------------------------
+
+    /** Default longest tile-edge segment, degrees, for [prepareRegions] / [projectRegions]. */
+    const val DEFAULT_MAX_SEGMENT_DEG: Float = 5f
+
+    /** Upper bound on segments per tile side, whatever the tile size. */
+    const val MAX_SEGMENTS_PER_SIDE: Int = 64
+
+    /**
+     * How camera-frame directions land on the drawn surface: a pinhole whose normalized device
+     * coordinates are `ndcX = scaleX · x/d + offsetX` and `ndcY = scaleY · y/d + offsetY`, where
+     * `(x, y)` are GL camera coordinates (x right, y up) and `d` the depth along the view axis.
+     *
+     * Describe **what the surface shows** — for a `FILL_CENTER` preview, the cropped view
+     * ([fromIntrinsics] of `CameraFillCenter.intrinsics(frame, viewW, viewH)`), not the full frame.
+     *
+     * @property scaleX `1 / tan(hFov/2)` for a centred lens; finite and > 0.
+     * @property scaleY `1 / tan(vFov/2)` for a centred lens; finite and > 0.
+     * @property offsetX NDC shift of the principal point (0 when centred); finite.
+     * @property offsetY NDC shift of the principal point (0 when centred); finite.
+     */
+    data class Lens(
+        val scaleX: Float,
+        val scaleY: Float,
+        val offsetX: Float = 0f,
+        val offsetY: Float = 0f,
+    ) {
+        init {
+            require(scaleX.isFinite() && scaleX > 0f && scaleY.isFinite() && scaleY > 0f) {
+                "Lens scales must be finite and > 0, were ($scaleX, $scaleY)"
+            }
+            require(offsetX.isFinite() && offsetY.isFinite()) { "Lens offsets must be finite" }
+        }
+
+        companion object {
+            /**
+             * A centred lens with the given full fields of view, degrees, each strictly inside `(0, 180)`.
+             * @throws IllegalArgumentException for a field of view outside `(0, 180)`.
+             */
+            fun fromFieldOfView(horizontalFovDeg: Float, verticalFovDeg: Float): Lens {
+                requireFov(horizontalFovDeg, verticalFovDeg)
+                return Lens(
+                    scaleX = (1.0 / tan(Math.toRadians(horizontalFovDeg / 2.0))).toFloat(),
+                    scaleY = (1.0 / tan(Math.toRadians(verticalFovDeg / 2.0))).toFloat(),
+                )
+            }
+
+            /**
+             * Pixel intrinsics of the drawn surface (OpenCV convention: u right, v down, origin at the
+             * top-left corner) → [Lens]; honours an off-centre principal point.
+             * @throws IllegalArgumentException for non-positive focal lengths or size, or non-finite input.
+             */
+            fun fromIntrinsics(fx: Float, fy: Float, cx: Float, cy: Float, width: Int, height: Int): Lens {
+                require(fx.isFinite() && fy.isFinite() && fx > 0f && fy > 0f) { "focal lengths must be finite and > 0" }
+                require(cx.isFinite() && cy.isFinite()) { "principal point must be finite" }
+                require(width > 0 && height > 0) { "size must be positive" }
+                return Lens(
+                    scaleX = 2f * fx / width,
+                    scaleY = 2f * fy / height,
+                    offsetX = 2f * cx / width - 1f,
+                    offsetY = 1f - 2f * cy / height,
+                )
+            }
+
+            /** [fromIntrinsics] for a [com.hereliesaz.sphereslam.camera.CameraIntrinsics]. */
+            fun fromIntrinsics(intrinsics: com.hereliesaz.sphereslam.camera.CameraIntrinsics): Lens =
+                fromIntrinsics(intrinsics.fx, intrinsics.fy, intrinsics.cx, intrinsics.cy, intrinsics.width, intrinsics.height)
+        }
+    }
+
+    /**
+     * World-from-camera rotation for an absolute camera attitude, in the convention of
+     * [PhotosphereMap.directionOfPixel] and `CameraAttitudeProvider`: [cameraHeadingDeg] is the
+     * view axis's compass heading (0 = north, clockwise), [cameraElevationDeg] its angle above the
+     * horizon, and [cameraRollDeg] the image-right axis's angle above the horizon (positive = the
+     * image's right edge points up).
+     *
+     * The result is row-major 3×3 whose **columns** are the GL camera axes — x right, y up, z backward
+     * (the camera looks down −z) — in East-North-Up world coordinates, so `v_world = M · v_camera`.
+     *
+     * @return the rotation, or null for non-finite input or a view axis within ~0.006° of vertical
+     *   (heading and roll are undefined there — use a sensor rotation, [worldFromCamera] of a
+     *   device→world matrix, to look straight up or down).
+     */
+    fun worldFromCamera(cameraHeadingDeg: Float, cameraElevationDeg: Float, cameraRollDeg: Float = 0f): FloatArray? {
+        if (!(cameraHeadingDeg.isFinite() && cameraElevationDeg.isFinite() && cameraRollDeg.isFinite())) return null
+        val h = Math.toRadians(cameraHeadingDeg.toDouble())
+        val e = Math.toRadians(cameraElevationDeg.toDouble())
+        val fx = cos(e) * sin(h); val fy = cos(e) * cos(h); val fz = sin(e)
+        val rx0 = fy; val ry0 = -fx
+        val rn = kotlin.math.sqrt(rx0 * rx0 + ry0 * ry0)
+        if (rn < 1e-4) return null
+        val r0x = rx0 / rn; val r0y = ry0 / rn
+        // u0 = r0 × f (r0.z = 0)
+        val u0x = r0y * fz; val u0y = -r0x * fz; val u0z = r0x * fy - r0y * fx
+        val roll = Math.toRadians(cameraRollDeg.toDouble())
+        val cr = cos(roll); val sr = sin(roll)
+        val rx = cr * r0x + sr * u0x; val ry = cr * r0y + sr * u0y; val rz = sr * u0z
+        val ux = -sr * r0x + cr * u0x; val uy = -sr * r0y + cr * u0y; val uz = cr * u0z
+        return floatArrayOf(
+            rx.toFloat(), ux.toFloat(), (-fx).toFloat(),
+            ry.toFloat(), uy.toFloat(), (-fy).toFloat(),
+            rz.toFloat(), uz.toFloat(), (-fz).toFloat(),
+        )
+    }
+
+    /**
+     * World-from-camera rotation from a sensor attitude: `deviceToWorld · cameraFromDeviceᵀ`.
+     *
+     * @param deviceToWorld row-major 3×3 device→world East-North-Up rotation
+     *   (`SensorManager.getRotationMatrixFromVector` of `TYPE_ROTATION_VECTOR`,
+     *   `CameraAttitudeProvider.latestDeviceToWorldMatrix`).
+     * @param cameraFromDevice row-major 3×3 GL-camera-from-device of the **drawn** image
+     *   (`DeviceCameraRotation`): for an overlay over a display-upright preview,
+     *   `DeviceCameraRotation.cameraFromDeviceForDisplayFrame(displayRotationDeg)`.
+     * @throws IllegalArgumentException when either matrix is not a finite length-9 array.
+     */
+    @JvmOverloads
+    fun worldFromCamera(deviceToWorld: FloatArray, cameraFromDevice: FloatArray = IDENTITY_3X3): FloatArray {
+        requireMat3(deviceToWorld, "deviceToWorld")
+        requireMat3(cameraFromDevice, "cameraFromDevice")
+        val out = FloatArray(9)
+        for (i in 0..2) for (j in 0..2) {
+            out[i * 3 + j] = deviceToWorld[i * 3] * cameraFromDevice[j * 3] +
+                deviceToWorld[i * 3 + 1] * cameraFromDevice[j * 3 + 1] +
+                deviceToWorld[i * 3 + 2] * cameraFromDevice[j * 3 + 2]
+        }
+        return out
+    }
+
+    /**
+     * [project] for a full camera rotation: place each of [directions] on the surface described by
+     * [lens], camera attitude [worldFromCamera] (see [worldFromCamera] for the convention). Works at
+     * any roll and when looking straight up or down.
+     *
+     * @return one [GlowMark] per direction in front of the camera (at or behind the view plane are
+     *   dropped); off-screen marks are clamped to the edge with `onScreen = false`.
+     * @throws IllegalArgumentException when [worldFromCamera] is not a finite length-9 array.
+     */
+    fun project(
+        directions: List<SphereCoverage.Direction>,
+        worldFromCamera: FloatArray,
+        lens: Lens,
+    ): List<GlowMark> {
+        requireMat3(worldFromCamera, "worldFromCamera")
+        if (directions.isEmpty()) return emptyList()
+        val m = worldFromCamera
+        val out = ArrayList<GlowMark>(directions.size)
+        for (idx in directions.indices) {
+            val d = directions[idx]
+            val v = enu(d.azimuthDeg, d.elevationDeg)
+            val x = m[0] * v[0] + m[3] * v[1] + m[6] * v[2]
+            val y = m[1] * v[0] + m[4] * v[1] + m[7] * v[2]
+            val depth = -(m[2] * v[0] + m[5] * v[1] + m[8] * v[2])
+            if (depth <= 1e-4f) continue
+            val ndcX = lens.scaleX * x / depth + lens.offsetX
+            val ndcY = lens.scaleY * y / depth + lens.offsetY
+            out.add(GlowMark(d, ndcX.coerceIn(-1f, 1f), ndcY.coerceIn(-1f, 1f), abs(ndcX) <= 1f && abs(ndcY) <= 1f))
+        }
+        return out
+    }
+
+    /**
+     * Tile regions pre-sampled on the sphere, ready to be re-projected every display frame without
+     * trigonometry or allocation ([projectInto]). Immutable and safe to share between threads.
+     *
+     * Each tile is cut into cells no wider than the `maxSegmentDeg` it was prepared with along either
+     * side, and every cell becomes two triangles. Meridian edges project to straight lines under a
+     * pinhole, but parallels (constant elevation) are curves, so the per-cell sampling is what keeps a
+     * tile's top and bottom edges on their true curve at any roll and field of view. Adjacent tiles of
+     * one [PhotosphereMap] grid share their edge samples exactly, so fills have no seams or overlaps.
+     */
+    class PreparedRegions internal constructor(
+        /** Number of regions. */
+        val regionCount: Int,
+        private val dirs: FloatArray,
+        private val dims: IntArray,
+        private val dirOffsets: IntArray,
+    ) {
+        /** Floats [projectInto] may write at most (every cell in front of the camera). */
+        val maxVertexFloats: Int = run {
+            var total = 0
+            for (r in 0 until regionCount) total += dims[2 * r] * dims[2 * r + 1] * 6 * FLOATS_PER_REGION_VERTEX
+            total
+        }
+
+        /**
+         * Project into [out] as `GL_TRIANGLES` NDC data ([FLOATS_PER_REGION_VERTEX] floats per vertex),
+         * for camera attitude [worldFromCamera] (row-major 3×3, columns = GL camera axes in ENU world)
+         * and [lens]. Allocation-free.
+         *
+         * A cell with any corner at or behind the camera plane is dropped; with the default
+         * [DEFAULT_MAX_SEGMENT_DEG] such a cell lies more than 85° off the view axis. Coordinates are
+         * not clamped — the GPU clips — so off-screen cells cost a few floats and draw nothing.
+         *
+         * @param out destination, at least [maxVertexFloats] long.
+         * @return the number of floats written (a multiple of 6).
+         * @throws IllegalArgumentException when [out] is too short or [worldFromCamera] is not a
+         *   length-9 array.
+         */
+        fun projectInto(worldFromCamera: FloatArray, lens: Lens, out: FloatArray): Int {
+            require(worldFromCamera.size == 9) { "worldFromCamera must be a row-major 3x3" }
+            require(out.size >= maxVertexFloats) { "out must hold $maxVertexFloats floats, was ${out.size}" }
+            val m = worldFromCamera
+            var p = 0
+            for (r in 0 until regionCount) {
+                val nAz = dims[2 * r]
+                val nEl = dims[2 * r + 1]
+                val base = dirOffsets[r]
+                for (i in 0 until nAz) {
+                    for (j in 0 until nEl) {
+                        val a = base + i * (nEl + 1) + j      // (i, j)
+                        val b = a + (nEl + 1)                 // (i + 1, j)
+                        // Triangles (a, b, b+1) and (a, b+1, a+1): slots 0,1,2 and 3,4,5.
+                        if (!vertex(a, m, lens, out, p) ||
+                            !vertex(b, m, lens, out, p + 2) ||
+                            !vertex(b + 1, m, lens, out, p + 4) ||
+                            !vertex(a + 1, m, lens, out, p + 10)
+                        ) {
+                            continue
+                        }
+                        out[p + 6] = out[p]; out[p + 7] = out[p + 1]
+                        out[p + 8] = out[p + 4]; out[p + 9] = out[p + 5]
+                        p += 12
+                    }
+                }
+            }
+            return p
+        }
+
+        private fun vertex(k: Int, m: FloatArray, lens: Lens, out: FloatArray, at: Int): Boolean {
+            val o = 3 * k
+            val vx = dirs[o]; val vy = dirs[o + 1]; val vz = dirs[o + 2]
+            val depth = -(m[2] * vx + m[5] * vy + m[8] * vz)
+            if (depth <= 1e-4f) return false
+            out[at] = lens.scaleX * (m[0] * vx + m[3] * vy + m[6] * vz) / depth + lens.offsetX
+            out[at + 1] = lens.scaleY * (m[1] * vx + m[4] * vy + m[7] * vz) / depth + lens.offsetY
+            return true
+        }
+
+        companion object {
+            /** No regions. */
+            @JvmField
+            val EMPTY: PreparedRegions = PreparedRegions(0, FloatArray(0), IntArray(0), IntArray(0))
+        }
+    }
+
+    /**
+     * Pre-sample [regions] for repeated projection ([PreparedRegions.projectInto]). Call when the
+     * regions change (per keyframe), not per frame.
+     *
+     * @param maxSegmentDeg longest cell side, degrees, finite and > 0; each tile side gets
+     *   `ceil(span / maxSegmentDeg)` segments, capped at [MAX_SEGMENTS_PER_SIDE].
+     * @throws IllegalArgumentException for a non-positive [maxSegmentDeg] or a region with
+     *   non-finite bounds.
+     */
+    @JvmOverloads
+    fun prepareRegions(
+        regions: List<SphereCoverage.TileRegion>,
+        maxSegmentDeg: Float = DEFAULT_MAX_SEGMENT_DEG,
+    ): PreparedRegions {
+        require(maxSegmentDeg.isFinite() && maxSegmentDeg > 0f) { "maxSegmentDeg must be finite and > 0, was $maxSegmentDeg" }
+        if (regions.isEmpty()) return PreparedRegions.EMPTY
+        val dims = IntArray(regions.size * 2)
+        val offsets = IntArray(regions.size)
+        var vertices = 0
+        for ((r, region) in regions.withIndex()) {
+            require(
+                region.azimuthStartDeg.isFinite() && region.azimuthEndDeg.isFinite() &&
+                    region.elevationBottomDeg.isFinite() && region.elevationTopDeg.isFinite(),
+            ) { "region bounds must be finite: $region" }
+            dims[2 * r] = segments(region.azimuthEndDeg - region.azimuthStartDeg, maxSegmentDeg)
+            dims[2 * r + 1] = segments(region.elevationTopDeg - region.elevationBottomDeg, maxSegmentDeg)
+            offsets[r] = vertices
+            vertices += (dims[2 * r] + 1) * (dims[2 * r + 1] + 1)
+        }
+        val dirs = FloatArray(vertices * 3)
+        for ((r, region) in regions.withIndex()) {
+            val nAz = dims[2 * r]
+            val nEl = dims[2 * r + 1]
+            for (i in 0..nAz) {
+                // Normalized so a shared edge given as 370° by one tile and 10° by its neighbour
+                // samples bit-identical directions.
+                val az = norm360(region.azimuthStartDeg + (region.azimuthEndDeg - region.azimuthStartDeg) * i / nAz)
+                for (j in 0..nEl) {
+                    val el = region.elevationBottomDeg + (region.elevationTopDeg - region.elevationBottomDeg) * j / nEl
+                    val v = enu(az, el.coerceIn(-90f, 90f))
+                    val k = 3 * (offsets[r] + i * (nEl + 1) + j)
+                    dirs[k] = v[0]; dirs[k + 1] = v[1]; dirs[k + 2] = v[2]
+                }
+            }
+        }
+        return PreparedRegions(regions.size, dirs, dims, offsets)
+    }
+
+    /**
+     * Triangulate [regions] for a full camera rotation — the replacement for the heading/elevation
+     * [projectRegions]: correct at any roll, straight up/down, and for an off-centre principal point.
+     * One-shot convenience over [prepareRegions] + [PreparedRegions.projectInto]; for per-frame use,
+     * prepare once and project into a reused buffer (as `CoverageGlowRenderer.setRegions` does).
+     *
+     * @param worldFromCamera row-major 3×3, columns = GL camera axes (x right, y up, z backward) in
+     *   East-North-Up world ([worldFromCamera] builds it from heading/elevation/roll or a sensor matrix).
+     * @param lens the drawn surface's projection.
+     * @return `GL_TRIANGLES` NDC vertex data, [FLOATS_PER_REGION_VERTEX] floats per vertex.
+     */
+    @JvmOverloads
+    fun projectRegions(
+        regions: List<SphereCoverage.TileRegion>,
+        worldFromCamera: FloatArray,
+        lens: Lens,
+        maxSegmentDeg: Float = DEFAULT_MAX_SEGMENT_DEG,
+    ): FloatArray {
+        requireMat3(worldFromCamera, "worldFromCamera")
+        val prepared = prepareRegions(regions, maxSegmentDeg)
+        val out = FloatArray(prepared.maxVertexFloats)
+        val n = prepared.projectInto(worldFromCamera, lens, out)
+        return if (n == out.size) out else out.copyOf(n)
+    }
+
+    private fun segments(spanDeg: Float, maxSegmentDeg: Float): Int =
+        kotlin.math.ceil(abs(spanDeg) / maxSegmentDeg).toInt().coerceIn(1, MAX_SEGMENTS_PER_SIDE)
+
+    private fun norm360(deg: Float): Float {
+        val r = deg % 360f
+        return if (r < 0f) r + 360f else r
+    }
+
+    private val IDENTITY_3X3: FloatArray get() = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
+
+    private fun requireMat3(m: FloatArray, name: String) {
+        require(m.size == 9 && m.all { it.isFinite() }) { "$name must be a finite row-major 3x3" }
     }
 
     private fun requireFov(horizontalFovDeg: Float, verticalFovDeg: Float) {

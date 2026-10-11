@@ -5,6 +5,9 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import com.hereliesaz.sphereslam.attitude.AttitudeExtrapolator
+import com.hereliesaz.sphereslam.attitude.AttitudeSample
+import com.hereliesaz.sphereslam.attitude.AttitudeSampleBuffer
 
 /**
  * Absolute attitude of the rear camera's optical axis — compass heading and elevation — for the
@@ -30,6 +33,13 @@ import android.hardware.SensorManager
  * coverage.observe(h, e)
  * ```
  *
+ * **Display-rate overlays.** Every sample is also pushed, with its sensor timestamp, into
+ * [attitudeExtrapolator], so a render thread can ask for the camera rotation at its own frame time
+ * (`attitudeExtrapolator.worldFromCameraAt(SystemClock.elapsedRealtimeNanos(), cameraFromDisplay, out)`)
+ * — what `CoverageGlowRenderer.RotationSource` wants. Start with a faster rate for that
+ * (`start(SensorManager.SENSOR_DELAY_GAME)` or `SENSOR_DELAY_FASTEST`); the default UI rate (~16 Hz)
+ * is enough for keyframe stamping only.
+ *
  * @param context any Context; used only to obtain the system [SensorManager] (no reference retained
  *   beyond the sensor registration).
  */
@@ -45,6 +55,14 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
     @Volatile private var latestElevationDeg: Float? = null
     @Volatile private var latestRollDeg: Float? = null
     @Volatile private var latestDeviceToWorld: FloatArray? = null
+    private val samples = AttitudeSampleBuffer()
+
+    /**
+     * Timestamped history of this sensor's samples (`TYPE_ROTATION_VECTOR`, body→East-North-Up
+     * quaternions), for per-frame rotation queries with interpolation / short extrapolation. Cleared
+     * on [start] and [stop]. Thread-safe.
+     */
+    val attitudeExtrapolator: AttitudeExtrapolator = AttitudeExtrapolator()
     @Volatile private var reliable: Boolean = true
     // Guarded by `lock`; volatile so unsynchronized readers see the latest registration state.
     @Volatile private var registered = false
@@ -73,15 +91,25 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
     /** Latest device→world East-North-Up rotation (row-major 3×3, a fresh copy), or null. */
     fun latestDeviceToWorldMatrix(): FloatArray? = latestDeviceToWorld?.copyOf()
 
+    /**
+     * Latest sample as a body→world (East-North-Up) quaternion with its `SensorEvent.timestamp`
+     * (`elapsedRealtimeNanos` base), or null in the same cases as [latestHeadingDegrees]. Unlike the
+     * heading, this is defined when looking straight up or down.
+     */
+    fun latestSample(): AttitudeSample? = samples.latest()
+
     /** False once the system reports the magnetometer unreliable (needs a figure-8 recalibration). */
     val isReliable: Boolean get() = reliable
 
     /**
-     * Begin sampling. Safe to call repeatedly and from any thread. UI rate suffices for
-     * keyframe-cadence coverage. A fresh start resets [isReliable] to true (the system re-reports
-     * accuracy on registration) and discards any previous sample.
+     * Begin sampling at [samplingPeriodUs] (default `SENSOR_DELAY_UI`, ~16 Hz, enough for
+     * keyframe-cadence coverage; use `SENSOR_DELAY_GAME` or faster to drive a display-rate overlay).
+     * Safe to call repeatedly and from any thread; a call while already sampling keeps the current
+     * rate. A fresh start resets [isReliable] to true (the system re-reports accuracy on
+     * registration) and discards any previous sample.
      */
-    fun start() {
+    @JvmOverloads
+    fun start(samplingPeriodUs: Int = SensorManager.SENSOR_DELAY_UI) {
         val sm = sensorManager ?: return
         val sensor = rotationSensor ?: return
         synchronized(lock) {
@@ -91,7 +119,9 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
             latestElevationDeg = null
             latestRollDeg = null
             latestDeviceToWorld = null
-            registered = sm.registerListener(this, sensor, SensorManager.SENSOR_DELAY_UI)
+            samples.clear()
+            attitudeExtrapolator.clear()
+            registered = sm.registerListener(this, sensor, samplingPeriodUs)
         }
     }
 
@@ -108,6 +138,8 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
             latestElevationDeg = null
             latestRollDeg = null
             latestDeviceToWorld = null
+            samples.clear()
+            attitudeExtrapolator.clear()
         }
     }
 
@@ -122,6 +154,8 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
         } catch (_: IllegalArgumentException) {
             return
         }
+        samples.ingestRotationVector(event.values, event.timestamp)
+        samples.latest()?.let { attitudeExtrapolator.push(it) }
         cameraAxisHeadingElevation(r)?.let { (h, e) ->
             latestHeadingDeg = h
             latestElevationDeg = e

@@ -5,6 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+@Suppress("DEPRECATION")
 class CoverageGlowProjectionTest {
 
     private fun dir(az: Float, el: Float) = SphereCoverage.Direction(az, el)

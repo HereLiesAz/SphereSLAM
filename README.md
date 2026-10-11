@@ -22,7 +22,7 @@ SphereSLAM is **pre-1.0**. There is no fictitious “frozen since 1.0” contrac
 | `:sphereslam` | **Supported pre-1.0 API** | Planar tracking, standalone tracking, ARCore sidecar tracking, coverage, placement |
 | `:overlay` | **Supported pre-1.0 API** | Optional coverage-haze UI |
 | `:reloc` | **Experimental** | OpenCV-backed photosphere/relocalization primitives |
-| `:models` | **Experimental** | Optional ONNX model helpers |
+| `:models` | **Experimental** | Optional model helpers: MiDaS depth on LiteRT GPU, SuperPoint / Zero-DCE on ONNX Runtime ([models](docs/MODELS.md)) |
 | `:core:common` | **Internal** | Native loading/implementation support |
 | `:core:nativebridge` | **Internal** | JNI/KPM bridge |
 
@@ -163,6 +163,40 @@ To draw the coverage inside your own GL renderer (beneath your artwork), use
 `CoverageGlowRenderer.createGlResources()` / `drawEmbedded()`; `FillMode.COMPLEMENT` with
 `map.currentRegions()` draws a wash with holes over the up-to-date tiles.
 
+### Display-rate tracking (recommended)
+
+The heading/elevation projection above ignores roll and only moves when you call it. For a glow that
+sticks to the scene like a photosphere app, give the renderer the tiles once per change and a
+rotation it reads on every GL frame:
+
+~~~kotlin
+val attitude = CameraAttitudeProvider(context).apply { start(SensorManager.SENSOR_DELAY_GAME) }
+val glow = CoverageGlowRenderer(CoverageGlowRenderer.WHITE, 0.14f).apply {
+    fillMode = CoverageGlowRenderer.FillMode.COMPLEMENT // or OUTLINE / COMPLEMENT_OUTLINED / TRIANGLES
+}
+// Layout / camera changes: what the surface shows (FILL_CENTER crop of the frame).
+glow.setLens(CoverageGlowProjection.Lens.fromIntrinsics(CameraFillCenter.intrinsics(frame, viewW, viewH)!!))
+// Every draw: rotation at the frame time (elapsedRealtimeNanos base), camera = the display frame.
+glow.rotationSource = CoverageGlowRenderer.RotationSource { t, out ->
+    attitude.attitudeExtrapolator.worldFromCameraAt(
+        t + leadNs, DeviceCameraRotation.cameraFromDeviceForDisplayFrame(displayRotationDeg), out,
+    )
+}
+// Whenever the map changes (per keyframe):
+glow.setRegions(map.currentRegions())
+~~~
+
+`leadNs = 0` is a good start; a small negative lead (e.g. −30 ms) times the glow to the preview frame
+actually on screen if it visibly leads the camera image during fast pans. Use the same sensor
+(`TYPE_ROTATION_VECTOR`, East-North-Up) that stamps keyframe headings, so tiles and glow share one
+frame. Style is live: `fillMode`, `hazeColor` / `setHazeColorArgb`, `hazeAlpha`, `outlineAlpha`,
+`outlineWidthPx` can be set from any thread.
+
+For the artwork pose, `attitude.DisplayPosePredictor` rotates the latest vision pose by the
+attitude change since its frame on every draw (`update(pose, frameAttitude, cameraFromDevice)` from
+the analyzer, `predictInto(extrapolator, now, out)` on the GL thread). With `:reloc`'s
+`PhotosphereTrackingSession`, set `session.displayPosePredictor = predictor` and it is fed for you.
+
 ## Toolkit packages
 
 `:sphereslam` also ships the pure helpers hosts otherwise re-implement:
@@ -170,7 +204,7 @@ To draw the coverage inside your own GL renderer (beneath your artwork), use
 | Package | Contents |
 | --- | --- |
 | `math` | `RotationMath`, `RigidMath` (quaternions, rigid/similarity 4×4, GL ↔ CV flips) |
-| `attitude` | `GameRotationAttitudeSource`, `DeviceCameraRotation`, `AttitudeRotationBridge` |
+| `attitude` | `GameRotationAttitudeSource`, `DeviceCameraRotation`, `AttitudeRotationBridge`, `AttitudeExtrapolator`, `DisplayPosePredictor` |
 | `camera` | `CameraIntrinsicsEstimator`, `CaptureRotation`, `LumaFrameTransform`, `ProjectionMatrix`, `ScreenIntrinsics` (`FIT_CENTER`), `CameraFillCenter` (`FILL_CENTER` projection, tap mapping, FOV) |
 | `sidecar` | ARCore + KPM sidecar fusion: `HybridPoseHistory`, `HybridKpmCorrection`, `HybridAnchorFusion`, `MetricPageRectification` |
 | `gyro` | `GyroCompensationMath` (gyro-stabilised screen overlays) |

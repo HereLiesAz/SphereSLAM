@@ -4,6 +4,9 @@
 agp = "9.4.1"
 coreKtx = "1.19.1"
 onnxruntime = "1.30.0"
+# LiteRT classic Interpreter + GPU delegate line (litert-gpu has no 2.x release older than 2 weeks;
+# 2.x litert drops org.tensorflow.lite.Delegate). Do not mix with litert 2.x in the same app.
+litert = "1.4.2"
 opencv = "5.0.0.1"
 junit = "4.13.2"
 ndk = "30.0.16248370"
@@ -15,6 +18,9 @@ androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = 
 # OpenCV from Maven Central (Java + native libopencv_java5.so); used by :reloc only.
 opencv = { group = "org.opencv", name = "opencv", version.ref = "opencv" }
 onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
+litert = { group = "com.google.ai.edge.litert", name = "litert", version.ref = "litert" }
+litert-gpu = { group = "com.google.ai.edge.litert", name = "litert-gpu", version.ref = "litert" }
+litert-gpu-api = { group = "com.google.ai.edge.litert", name = "litert-gpu-api", version.ref = "litert" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]

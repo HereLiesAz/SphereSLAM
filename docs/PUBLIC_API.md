@@ -20,6 +20,7 @@ Recommended entry points:
 - `SphereSlamEngine`
 - `PlanarPage`
 - `PlanarMatch`
+- `PlanarMatchRequest`
 - `SphereSlamStandaloneSession`
 - `AnchoredStandaloneSession`
 - `SphereSlamTracker`
@@ -39,9 +40,10 @@ Supporting packages (all pure / Android-light, no ARCore types):
   `rotateAboutCameraCentre`) and `RigidMath` (column-major 4×4 rigid/similarity math, OpenGL ↔ OpenCV
   flips). `:reloc`'s `RotationDeltaMath` / `PoseMath` delegate to these.
 - `com.hereliesaz.sphereslam.attitude` — `GameRotationAttitudeSource`, `AttitudeSample`,
-  `DeviceCameraRotation`, `AttitudeRotationBridge`.
+  `DeviceCameraRotation`, `AttitudeRotationBridge`, `AttitudeExtrapolator`, `DisplayPosePredictor`.
 - `com.hereliesaz.sphereslam.camera` — `CameraIntrinsics`, `CameraIntrinsicsEstimator`,
-  `CameraIntrinsicsTransforms`, `CaptureRotation`, `LumaFrameTransform`, `ProjectionMatrix`,
+  `CameraIntrinsicsTransforms`, `CaptureRotation`, `LumaFrameTransform` (plus
+  `LumaFrameBufferPool` / `packCropAndRotateInto` for allocation-free camera loops), `ProjectionMatrix`,
   `ScreenIntrinsics` (`FIT_CENTER`), `CameraFillCenter` (`FILL_CENTER`: track the full frame, apply
   the display crop only where the frame meets the screen).
 - `com.hereliesaz.sphereslam.sidecar` — `HybridPoseHistory`, `HybridPageFrame`,
@@ -115,10 +117,34 @@ layer). Any exception while processing a frame is terminal (`TrackingState.FATAL
 `Callbacks.onFatalError`). `PhotosphereAtlasGrowth`, `TargetQuality` and `TrackingFailureClassifier`
 are usable on their own.
 
+Per-frame matching cost is set by `Config.matchSpeed` (`KpmMatchSpeedConfig`): KPM matches a
+half-resolution luma by default (intrinsics scaled to match, same pose convention), poses between full
+solves come from Lucas–Kanade flow + PnP against the KPM inlier correspondences (full solve on loss
+and at least every 10 frames / 500 ms), and a multi-page atlas is matched predicted-page-first.
+`TrackedPose.matchMethod` (`VisualMatchMethod`) says which path produced a pose. Flow tracking needs
+OpenCV's native library loaded (as for `Relocalizer`); without it every frame is a full KPM solve.
+`KpmMatchSpeedConfig.FULL_KPM_EVERY_FRAME` restores the previous every-frame full-resolution solve.
+`SphereSlamStandaloneSession.match(luma, timestampNs, PlanarMatchRequest(pageNo, maxCorrespondences))`
+exposes the underlying single-page match and inlier correspondences, and
+`SphereSlamStandaloneSession.cameraFromCanonical(pageNo, cameraFromPage3x4)` converts an externally
+solved page pose with the same conversion as `match`.
+
+Matcher builds and atlas growth run on the session's own background thread: growth forks the live
+matcher (`SphereSlamStandaloneSession.fork()`), adds the page to the fork and swaps it in on a later
+frame; `onFrame` never blocks on page feature extraction or index rebuilds. Until the first build
+lands a frame carries only the base pose. `Frame.luma` is not retained after `onFrame`.
+
 #### `:models`
 
-Optional ONNX model wrappers are marked with `ExperimentalSphereSlamModelsApi`. They are not part
-of the compatibility-guaranteed planar API.
+Optional on-device model wrappers are marked with `ExperimentalSphereSlamModelsApi`. They are not
+part of the compatibility-guaranteed planar API.
+`DepthEstimator` runs MiDaS v2.1 Small (fp16 TFLite) on **LiteRT with the GPU delegate**;
+`DepthEstimatorOptions(backend = GPU | CPU, cpuThreads = 2, allowFp16Precision = true,
+gpuProgramCache = true)` selects the backend, and a GPU that fails to initialise falls back to the
+XNNPACK CPU path (logged as an error; `activeBackend` reports which). All model work runs on the
+estimator's own `SphereSLAM-depth` thread, so its methods may be called from any thread (they block).
+It accepts a luma plane directly via `estimateLuma`. `SuperPointDetector` and `LowLightEnhancer` stay
+on ONNX Runtime (CPU). Model provenance and sizes: [MODELS.md](MODELS.md).
 
 ### Internal modules
 
@@ -222,7 +248,7 @@ The library defensively copies:
 - `AnchoredStandaloneSession.AnchoredPose.cameraFromContent`
 - `PanoramaTile.representativeOrientation`
 - all array fields in `PhotosphereMapSnapshot`
-- `CoverageGlowRenderer.hazeColor`
+- `CoverageGlowRenderer.hazeColor`, `CoverageGlowRenderer.setWorldFromCamera`
 - `AttitudeSample.quaternion`, `PhotosphereKeyframe` arrays, `HybridPoseHistory.Sample` matrices,
   `HybridKpmCorrection.Accepted` matrices, `MetricPageRectification.Geometry` arrays,
   `PhotosphereFingerprintFrame.Placement.mapFromFingerprint`, `GyroCompensationMath.Result.Within.homography`
@@ -276,6 +302,9 @@ nor load OpenCV.
 - `SphereSlamStandaloneSession.addReference` throws `IllegalArgumentException` when
   `canonicalFromPage` is not a rigid transform.
 - `CoverageGlowProjection.project` and `projectRegions` throw when a field of view is outside `(0, 180)` degrees.
+  The full-rotation overloads throw for a non-finite or wrongly sized `worldFromCamera`;
+  `CoverageGlowProjection.Lens` rejects non-positive scales; `prepareRegions` rejects a non-positive
+  `maxSegmentDeg` or non-finite region bounds.
 - `PhotosphereMap.fromSnapshot` rejects a non-finite `wallHeadingDeg` and normalizes a finite one.
 - `SphereCoverage` and `PhotosphereMap` auto-anchor their wall heading only from an in-band sample.
 
@@ -287,12 +316,17 @@ nor load OpenCV.
   pending frame.
 - `PhotosphereMap`, `PhotosphereReviewLoop`, and experimental `:reloc` state machines are not
   generally thread-safe unless explicitly documented otherwise.
-- `CoverageGlowRenderer.setTriangles` and `fillMode` are safe to call from any thread;
-  `createGlResources`, `drawEmbedded` and `releaseGlResources` must run on the GL thread.
+- `CoverageGlowRenderer.setTriangles`, `setRegions`, `setLens`, `setWorldFromCamera`,
+  `rotationSource`, `fillMode`, `hazeColor`, `hazeAlpha`, `outlineAlpha` and `outlineWidthPx` are safe
+  to call from any thread; `createGlResources`, `drawEmbedded` and `releaseGlResources` must run on
+  the GL thread, and `RotationSource.worldFromCamera` is invoked there.
+- `AttitudeExtrapolator` and `DisplayPosePredictor` are thread-safe; their `*Into` / `*At` reads
+  allocate nothing.
 - `GameRotationAttitudeSource` reads and `AttitudeRotationBridge` are thread-safe.
 - `PhotosphereKeyframeStore`, `HybridPoseHistory` and `HybridAnchorFusion` are not thread-safe.
 - `PlanarTracker` is not thread-safe; drive it from one camera worker.
 - `PhotosphereTrackingSession` synchronizes its methods; drive `onFrame` from one camera worker.
+  `displayPosePredictor` may be set from any thread; the predictor it feeds is read on the GL thread.
   Callbacks run synchronously on the caller's thread.
 
 ### Embedding the coverage overlay
@@ -305,10 +339,16 @@ restores the GL state it touches. `FillMode.COMPLEMENT` draws a wash with holes:
 ~~~kotlin
 renderer.fillMode = CoverageGlowRenderer.FillMode.COMPLEMENT
 renderer.hazeColor = CoverageGlowRenderer.WHITE
-renderer.setTriangles(
-    CoverageGlowProjection.projectRegions(map.currentRegions(), heading, elevation, hFov, vFov)
-)
+renderer.setLens(CoverageGlowProjection.Lens.fromIntrinsics(shownIntrinsics))
+renderer.rotationSource = CoverageGlowRenderer.RotationSource { t, out ->
+    attitude.attitudeExtrapolator.worldFromCameraAt(t, cameraFromDisplay, out)
+}
+renderer.setRegions(map.currentRegions()) // per keyframe; re-projected every draw
 ~~~
+
+Rotation convention: `worldFromCamera` is row-major 3×3 whose columns are the GL camera axes (x right,
+y up, z backward) in East-North-Up world (`CoverageGlowProjection.worldFromCamera`). The
+heading/elevation `projectRegions` and `CoverageGlowView.update(map, heading, ...)` are deprecated.
 
 ## 6. Experimental opt-in
 
