@@ -29,8 +29,8 @@ MiDaS v2.1 Small — bundled model (:models, midas_v21_small_256_fp16.tflite, fp
 SuperPoint (rpautrat/SuperPoint) — bundled model weights (:models, superpoint.onnx)
 -------------------------------------------------------------------------------
   License: MIT. Copyright (c) 2018 Paul-Edouard Sarlin & Rémi Pautrat.
-  Source: https://github.com/rpautrat/SuperPoint, weights superpoint_v6_from_tf.pth (BatchNorm
-  folded on export). Not the Magic Leap SuperPoint release. See third_party_licenses/superpoint-MIT.txt.
+  Source: https://github.com/rpautrat/SuperPoint, weights superpoint_v6_from_tf.pth (exported by
+  models/tools/export_superpoint_rpautrat.py). Not the Magic Leap SuperPoint release. See third_party_licenses/superpoint-MIT.txt.
 
 -------------------------------------------------------------------------------
 Zero-DCE network — bundled model (:models, zerodce.onnx)
