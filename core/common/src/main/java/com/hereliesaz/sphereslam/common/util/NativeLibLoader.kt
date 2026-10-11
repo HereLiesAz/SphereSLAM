@@ -19,10 +19,12 @@ object NativeLibLoader {
     private const val TAG = "NativeLibLoader"
 
     @Volatile private var loaded = false
+    private var failureLogged = false
 
     /**
      * Load libsphereslam once. Returns true when it is loaded (now or previously); false when the
-     * load failed. A failed load may be retried by calling again.
+     * load failed. Every call after a failure tries `System.loadLibrary` again (callers such as
+     * `KpmBridge.isAvailable` do not cache the result); the failure is logged only the first time.
      */
     @Synchronized
     fun loadAll(): Boolean {
@@ -35,7 +37,10 @@ object NativeLibLoader {
         } catch (t: Throwable) {
             // UnsatisfiedLinkError (missing ABI / library), SecurityException, or anything else:
             // never propagate out of a class initializer.
-            Log.e(TAG, "libsphereslam.so could not be loaded; SphereSLAM native is unavailable.", t)
+            if (!failureLogged) {
+                failureLogged = true
+                Log.e(TAG, "libsphereslam.so could not be loaded; SphereSLAM native is unavailable.", t)
+            }
             false
         }
     }

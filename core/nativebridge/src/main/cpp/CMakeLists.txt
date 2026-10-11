@@ -23,8 +23,11 @@ target_link_options(sphereslam PRIVATE
 # SphereSLAM / artoolkitX KPM.
 #
 # This is a SIDE-BY-SIDE native tracker; ARCore, when the host app uses it, stays independent.
-# KPM is compiled only when the pinned artoolkitX submodule is checked out. Without it, KpmBridge
-# builds safe unavailable stubs that report KPM as unavailable.
+# KPM is compiled from the pinned artoolkitX submodule (third_party/artoolkitx). A missing submodule
+# is a configuration error: it would otherwise silently ship a library whose KPM always reports
+# unavailable. Builds that genuinely do not need KPM (host/JVM-only work) may opt in to stubs with
+# -DSPHERESLAM_ALLOW_KPM_STUBS=ON (Gradle property sphereslam.allowKpmStubs=true).
+option(SPHERESLAM_ALLOW_KPM_STUBS "Build unavailable KPM stubs when the artoolkitX submodule is missing" OFF)
 set(ARX_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/artoolkitx/Source/ARX)
 set(ARX_SOURCE_ROOT ${ARX_ROOT}/..)
 
@@ -230,8 +233,13 @@ if(EXISTS ${ARX_ROOT}/KPM/include/ARX/KPM/kpm.h)
         ${ARX_ROOT}/AR/include
         ${ARX_ROOT}/ARUtil/include
     )
+elseif(SPHERESLAM_ALLOW_KPM_STUBS)
+    message(WARNING "sphereslam: artoolkitX submodule not present; building KPM stubs (KpmBridge.isAvailable() == false)")
 else()
-    message(STATUS "sphereslam: artoolkitX submodule not present; SphereSLAM KPM disabled")
+    message(FATAL_ERROR
+        "sphereslam: artoolkitX submodule missing at ${ARX_ROOT}. Run "
+        "`git submodule update --init third_party/artoolkitx`, or pass "
+        "-Psphereslam.allowKpmStubs=true to build a library without KPM.")
 endif()
 
 find_library(log-lib log)
