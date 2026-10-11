@@ -41,7 +41,12 @@ import kotlin.math.abs
  *   [TrackingStateConfig.confirmationFrames] before a pose is rendered or the map bridge is solved.
  *
  * A brief visual miss after a lock is held for at most [Config.maxBridgeMs] by a gyro rotation bridge
- * (camera centre held); the next visual pose blends from the bridged pose that was shown. An accepted pose may grow a multi-page KPM atlas ([PhotosphereAtlasGrowth]):
+ * (camera centre held); the next visual pose blends from the bridged pose that was shown. Past that
+ * window, with [Config.holdOffWall] (default), the last lock stays rendered through the same gyro
+ * rotation ([PoseSource.HELD]) while the wall is out of view or re-confirming, until a visual relock
+ * replaces it or the precision layer changes — the artwork stays put on the wall instead of
+ * vanishing. A held pose keeps the camera centre where it was locked, so walking (rather than
+ * turning) drifts it until the relock corrects it. An accepted pose may grow a multi-page KPM atlas ([PhotosphereAtlasGrowth]):
  * a perspective-rectified wall patch next to the existing pages, kept only when it passes
  * [TargetQuality] and the KPM feature floor ([Callbacks.onAtlasPageAdded]). The planar session is
  * rebuilt whenever the frame intrinsics change.
@@ -97,7 +102,9 @@ class PhotosphereTrackingSession internal constructor(
      *   frame age is only checked for [CameraTimestampSource.REALTIME].
      * @property maxBridgeMs longest gyro bridge, measured from the last accepted frame, ms. This is
      *   the session's only bridge limit: it overrides [TrackingStateConfig.maxBridgeMs] in
-     *   [trackingState].
+     *   [trackingState]. Within it the tracking state is `IMU_BRIDGE` and a quick return blends.
+     * @property holdOffWall past [maxBridgeMs], keep rendering the last lock through the gyro rotation
+     *   ([PoseSource.HELD]) until a visual relock or a precision-layer change, instead of no pose.
      * @property keyframeIntervalMs photosphere keyframe cadence, ms.
      * @property atlasGrowth whether accepted poses may grow the KPM atlas.
      * @property metricsIntervalMs cadence of the KPM match-metrics + per-stage timing diagnostic, ms.
@@ -112,6 +119,7 @@ class PhotosphereTrackingSession internal constructor(
         val trackingState: TrackingStateConfig = TrackingStateConfig(),
         val targetQuality: TargetQualityConfig = TargetQualityConfig(),
         val maxBridgeMs: Long = 400L,
+        val holdOffWall: Boolean = true,
         val keyframeIntervalMs: Long = 250L,
         val atlasGrowth: Boolean = true,
         val metricsIntervalMs: Long = 5_000L,
@@ -242,8 +250,14 @@ class PhotosphereTrackingSession internal constructor(
         /** Planar KPM match of this frame. */
         KPM,
 
-        /** Gyro-bridged hold of the last KPM pose. */
+        /** Gyro-bridged hold of the last KPM pose within [Config.maxBridgeMs]. */
         IMU_BRIDGE,
+
+        /**
+         * The last KPM lock carried through the gyro rotation past the bridge window
+         * ([Config.holdOffWall]): the wall is out of view or the relock is still confirming.
+         */
+        HELD,
     }
 
     /**
@@ -278,10 +292,16 @@ class PhotosphereTrackingSession internal constructor(
         val cameraFromMap: FloatArray get() = view.copyOf()
         val projection: FloatArray get() = proj.copyOf()
 
-        internal fun bridged(delta: FloatArray, projection: FloatArray, intrinsics: CameraIntrinsics, timestampNs: Long) =
+        internal fun bridged(
+            delta: FloatArray,
+            projection: FloatArray,
+            intrinsics: CameraIntrinsics,
+            timestampNs: Long,
+            source: PoseSource = PoseSource.IMU_BRIDGE,
+        ) =
             TrackedPose(
                 RotationMath.rotateAboutCameraCentre(view, delta), projection, intrinsics, timestampNs, pageNo,
-                reprojectionError, inlierCount, unitsPerPixel, observationAgeMs, matchDurationMs, PoseSource.IMU_BRIDGE,
+                reprojectionError, inlierCount, unitsPerPixel, observationAgeMs, matchDurationMs, source,
                 matchMethod,
             )
     }
@@ -548,7 +568,8 @@ class PhotosphereTrackingSession internal constructor(
             lastFailureReason = null
             reportState(outcome.state)
             if (outcome.state != TrackingState.LOCKED) {
-                return FrameResult(null, outcome.state, cameraFromMap, true, null, null, null, projection)
+                // Re-confirming a lock: keep the held pose on screen until it is confirmed.
+                return FrameResult(holdLastGood(frame, projection), outcome.state, cameraFromMap, true, null, null, null, projection)
             }
 
             lastAcceptedCameraFromCanonical = locked.cameraFromCanonical.copyOf()
@@ -615,12 +636,14 @@ class PhotosphereTrackingSession internal constructor(
         }
         reportFailure(failure)
         reportState(outcome.state)
-        val bridged = if (outcome.state == TrackingState.IMU_BRIDGE) {
-            bridgeLastGood(frame, projection, loop)
-        } else {
-            lastGood = null
-            lastGoodCanonical = null
-            null
+        val bridged = when {
+            outcome.state == TrackingState.IMU_BRIDGE -> bridgeLastGood(frame, projection, loop)
+            config.holdOffWall -> holdLastGood(frame, projection)
+            else -> {
+                lastGood = null
+                lastGoodCanonical = null
+                null
+            }
         }
         return FrameResult(bridged, outcome.state, cameraFromMap, false, null, null, failure, projection)
     }
@@ -852,6 +875,20 @@ class PhotosphereTrackingSession internal constructor(
         val delta = imuBridge?.cameraRotationDelta(frame.attitude?.quaternion) ?: return null
         lastGoodCanonical?.let { loop.synchronizeRendered(RotationMath.rotateAboutCameraCentre(it, delta)) }
         return held.bridged(delta, projection, frame.intrinsics, frame.timestampNs)
+    }
+
+    /**
+     * [Config.holdOffWall]: the last good pose carried through the gyro rotation since its lock, past
+     * the bridge window. Unlike the bridge it does not re-seed the smoothing baseline: a relock after a
+     * real loss is a genuine correction and must not be gated by the held (possibly drifted) pose.
+     * Null when holding is off, nothing was locked since the last precision-layer change, or there is
+     * no attitude.
+     */
+    private fun holdLastGood(frame: Frame, projection: FloatArray): TrackedPose? {
+        if (!config.holdOffWall) return null
+        val held = lastGood ?: return null
+        val delta = imuBridge?.cameraRotationDelta(frame.attitude?.quaternion) ?: return null
+        return held.bridged(delta, projection, frame.intrinsics, frame.timestampNs, PoseSource.HELD)
     }
 
     private fun commitImuReference(sample: AttitudeSample, cameraFromDevice: FloatArray, atMs: Long) {
