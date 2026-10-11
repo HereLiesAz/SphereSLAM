@@ -46,6 +46,21 @@ class PoseBlendTest {
         assertFalse(PoseBlend.diverged(identity(), translated(0.05f, 0f, 0f)))
         assertTrue(PoseBlend.diverged(identity(), translated(0.5f, 0f, 0f)))
     }
+
+    @Test
+    fun `the snap distance follows the pose units`() {
+        assertEquals(PoseBlend.SNAP_DISTANCE_METERS, PoseBlend.snapDistanceFor(3f, physicallyMetric = true), 0f)
+        assertEquals(0.2f, PoseBlend.snapDistanceFor(1f, physicallyMetric = false), 1e-6f)
+        assertEquals(200f, PoseBlend.snapDistanceFor(1000f, physicallyMetric = false), 1e-3f)
+        // A 0.5-unit move on a 1000-unit-wide (e.g. pixel-scaled) reference is jitter, not a jump.
+        assertFalse(PoseBlend.diverged(identity(), translated(0.5f, 0f, 0f), PoseBlend.snapDistanceFor(1000f, false)))
+        val stabilizer = PoseStabilizer(snapDistance = PoseBlend.snapDistanceFor(1000f, false))
+        stabilizer.stabilize(identity())
+        assertEquals(0.25f, stabilizer.stabilize(translated(0.5f, 0f, 0f))[12], 1e-5f) // blended, not snapped
+        val metric = PoseStabilizer()
+        metric.stabilize(identity())
+        assertEquals(0.5f, metric.stabilize(translated(0.5f, 0f, 0f))[12], 1e-5f) // 0.5 m snaps
+    }
 }
 
 class PoseStabilizerTest {

@@ -49,7 +49,7 @@ internal class AtlasMatcherWorker(executor: Executor?) : AutoCloseable {
             override fun release() = frontEnd.close()
         }
 
-        /** A full build failed (e.g. [ReferenceTooWeakException]); terminal for the session. */
+        /** A full build failed: terminal for a FATAL-severity error, recoverable for [ReferenceTooWeakException]. */
         class BuildFailed(val error: Throwable) : Outcome()
 
         /** A grown matcher: the live one's pages plus [page]. Valid only if the kept pages still match. */

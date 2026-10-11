@@ -27,7 +27,10 @@ object PhotosphereAtlasGrowth {
     /** Inliers the accepted pose must have before it may grow the atlas. */
     const val MIN_GROW_INLIERS = 18
 
-    /** Largest reprojection error of a pose that may grow the atlas. */
+    /**
+     * Largest reprojection error of a pose that may grow the atlas: mean squared, full-frame pixels²
+     * (the unit of [PhotosphereTrackingSession.TrackedPose.reprojectionError]).
+     */
     const val MAX_GROW_REPROJECTION_ERROR = 4.0f
 
     /** Minimum interval between growth attempts, milliseconds. */

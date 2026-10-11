@@ -48,11 +48,13 @@ class PhotosphereTrackingSessionTest {
         var next: PlanarMatchResult? = null
         var closed = false
         var matches = 0
+        var throwOnMatch: RuntimeException? = null
 
         override fun addPage(
             luma: ByteBuffer, width: Int, height: Int, referenceWidthUnits: Float,
             physicallyMetric: Boolean, pageNo: Int, canonicalFromPage: FloatArray,
         ): PhotosphereTrackingSession.RegisteredPage {
+            check(pages.none { it.first == pageNo }) { "page $pageNo is already registered" }
             pages += pageNo to canonicalFromPage.copyOf()
             val dpi = SphereSlamPoseMath.dpiForReferenceWidth(width, referenceWidthUnits)
             return PhotosphereTrackingSession.RegisteredPage(
@@ -62,6 +64,7 @@ class PhotosphereTrackingSessionTest {
 
         override fun match(luma: ByteBuffer, timestampNs: Long): PlanarMatchResult? {
             matches++
+            throwOnMatch?.let { throw it }
             return next
         }
 
@@ -289,18 +292,259 @@ class PhotosphereTrackingSessionTest {
     }
 
     @Test
-    fun `a weak reference is fatal`() {
+    fun `a weak reference is a recoverable failure that a new reference clears`() {
         featuresFor = { 3 }
         val s = session()
+        s.onFrame(frame(yaw(0.0))) // defines the base map
         s.updatePrecisionLayer(reference)
-        val r = s.onFrame(frame())
+        val r = s.onFrame(frame(yaw(10.0)))
         assertEquals(TrackingState.FATAL, r.state)
         assertEquals(TrackingFailureReason.REFERENCE_TOO_WEAK, r.failure!!.reason)
+        assertEquals(TrackingFailureSeverity.RECOVERABLE, r.failure!!.severity)
         assertTrue(rec.fatal.single() is ReferenceTooWeakException)
         assertTrue(s.isFatal)
+        assertTrue(s.isRecoverable)
         assertTrue(fronts.single().closed)
-        assertNull(s.onFrame(frame()).pose)
-        assertEquals(1, fronts.size)
+        // The base map keeps running (same orientation), the precision layer stays off.
+        val held = s.onFrame(frame(yaw(20.0)))
+        assertNull(held.pose)
+        assertEquals(TrackingState.FATAL, held.state)
+        assertEquals(20f, RigidMath.rotationAngleDeg(held.baseCameraFromMap!!), 1e-2f)
+        assertEquals(1, fronts.size) // no rebuild of the same weak reference
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame())
+        assertEquals(1, fronts.size) // same reference, nothing changed: still halted
+
+        // A different reference recovers: state resets, the matcher is rebuilt and can lock.
+        featuresFor = { 100 }
+        val other = PhotosphereTrackingSession.ReferenceImage(noise(400 * 300, 9), 400, 300)
+        s.updatePrecisionLayer(other)
+        assertFalse(s.isFatal)
+        assertEquals(TrackingState.INITIALIZING, s.trackingState)
+        assertEquals(TrackingState.INITIALIZING, rec.states.last())
+        s.onFrame(frame(yaw(20.0)))
+        assertEquals(2, fronts.size)
+        fronts.last().next = match(viewAt(0f, 0f, 2f))
+        s.onFrame(frame(yaw(20.0)))
+        val locked = s.onFrame(frame(yaw(20.0)))
+        assertEquals(TrackingState.LOCKED, locked.state)
+        assertNotNull(locked.pose)
+        assertEquals(20f, RigidMath.rotationAngleDeg(locked.baseCameraFromMap!!), 1e-2f) // base map preserved
+    }
+
+    @Test
+    fun `an internal failure is terminal and clears the display predictor`() {
+        val s = session()
+        val predictor = DisplayPosePredictor()
+        s.displayPosePredictor = predictor
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame())
+        fronts.single().next = match(viewAt(0f, 0f, 2f))
+        repeat(2) { s.onFrame(frame()) }
+        assertTrue(predictor.hasPose)
+        fronts.single().throwOnMatch = IllegalStateException("boom")
+        val r = s.onFrame(frame())
+        assertEquals(TrackingState.FATAL, r.state)
+        assertEquals(TrackingFailureSeverity.FATAL, r.failure!!.severity)
+        assertFalse(predictor.hasPose)
+        assertFalse(s.isRecoverable)
+        // Not recoverable: a new reference does not revive it.
+        s.updatePrecisionLayer(PhotosphereTrackingSession.ReferenceImage(noise(400 * 300, 9), 400, 300))
+        assertTrue(s.isFatal)
+        assertEquals(TrackingState.FATAL, s.trackingState)
+        assertNull(s.onFrame(frame()).baseCameraFromMap)
+    }
+
+    @Test
+    fun `close clears the display predictor`() {
+        val s = session()
+        val predictor = DisplayPosePredictor()
+        s.displayPosePredictor = predictor
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame())
+        fronts.single().next = match(viewAt(0f, 0f, 2f))
+        repeat(2) { s.onFrame(frame()) }
+        assertTrue(predictor.hasPose)
+        s.close()
+        assertFalse(predictor.hasPose)
+    }
+
+    @Test
+    fun `a null map with the same reference keeps the solved map, a new reference re-solves`() {
+        val s = session()
+        s.onFrame(frame(yaw(0.0)))
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame(yaw(15.0)))
+        val wall = viewAt(0.2f, 0.1f, 2f)
+        fronts.single().next = match(wall)
+        repeat(2) { s.onFrame(frame(yaw(15.0))) }
+        val solved = rec.solved.single()
+
+        s.updatePrecisionLayer(reference) // e.g. a host re-applying settings without a persisted map
+        assertArrayEquals(solved, s.mapFromFingerprint!!, 0f)
+        assertEquals(1, fronts.size) // nothing changed, no rebuild
+        val r = s.onFrame(frame(yaw(15.0)))
+        assertEquals(TrackingState.LOCKED, r.state)
+        assertArrayEquals(r.acceptedCameraFromMap!!, r.pose!!.cameraFromMap, 1e-4f)
+        assertArrayEquals(r.baseCameraFromMap!!, r.pose!!.cameraFromMap, 1e-4f) // still rebased, not gyro-only
+
+        // A host map overrides it; passing null again returns to the session's solved map.
+        val hostMap = viewAt(1f, 0f, 0f)
+        s.updatePrecisionLayer(reference, mapFromFingerprint = hostMap)
+        assertArrayEquals(hostMap, s.mapFromFingerprint!!, 0f)
+        s.updatePrecisionLayer(reference)
+        assertArrayEquals(solved, s.mapFromFingerprint!!, 0f)
+
+        // A new reference drops the old reference's map and re-arms the solve.
+        val other = PhotosphereTrackingSession.ReferenceImage(noise(400 * 300, 9), 400, 300)
+        s.updatePrecisionLayer(other)
+        assertNull(s.mapFromFingerprint)
+        s.onFrame(frame(yaw(30.0)))
+        fronts.last().next = match(wall)
+        repeat(2) { s.onFrame(frame(yaw(30.0))) }
+        assertEquals(2, rec.solved.size)
+        assertNotNull(s.mapFromFingerprint)
+    }
+
+    @Test
+    fun `a reference swap resets tracking and needs a confirmed lock before solving the map`() {
+        val s = session()
+        s.onFrame(frame(yaw(0.0)))
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame(yaw(0.0)))
+        fronts.single().next = match(viewAt(0f, 0f, 2f))
+        repeat(2) { s.onFrame(frame(yaw(0.0))) }
+        assertEquals(TrackingState.LOCKED, s.trackingState)
+        assertEquals(1, rec.solved.size)
+
+        val other = PhotosphereTrackingSession.ReferenceImage(noise(400 * 300, 9), 400, 300)
+        s.updatePrecisionLayer(other)
+        assertEquals(TrackingState.INITIALIZING, s.trackingState)
+        assertEquals(TrackingState.INITIALIZING, rec.states.last())
+        s.onFrame(frame(yaw(0.0)))
+        fronts.last().next = match(viewAt(0.5f, 0f, 2f))
+        val first = s.onFrame(frame(yaw(0.0)))
+        assertEquals(TrackingState.INITIALIZING, first.state) // one unconfirmed frame is not a lock
+        assertNull(first.pose)
+        assertEquals(1, rec.solved.size) // and does not fix the map bridge
+        val second = s.onFrame(frame(yaw(0.0)))
+        assertEquals(TrackingState.LOCKED, second.state)
+        assertEquals(2, rec.solved.size)
+
+        // Dropping the reference leaves no lock behind.
+        s.updatePrecisionLayer(null)
+        assertEquals(TrackingState.INITIALIZING, s.trackingState)
+        assertNull(s.onFrame(frame(yaw(0.0))).pose)
+    }
+
+    @Test
+    fun `the next visual pose after a gyro bridge blends from the bridged pose`() {
+        val s = session()
+        val predictor = DisplayPosePredictor()
+        s.displayPosePredictor = predictor
+        s.onFrame(frame(yaw(0.0)))
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame(yaw(0.0)))
+        val wall = viewAt(0f, 0f, 2f)
+        fronts.single().next = match(wall)
+        repeat(3) { s.onFrame(frame(yaw(0.0))) }
+        fronts.single().next = null
+        advance(50)
+        val bridged = s.onFrame(frame(yaw(8.0)))
+        assertEquals(TrackingState.IMU_BRIDGE, bridged.state)
+        assertEquals(bridged.pose!!.timestampNs, predictor.poseTimestampNs) // the predictor holds the bridged pose
+        assertArrayEquals(bridged.pose!!.cameraFromMap, predictor.predict(yaw(8.0).quaternion), 1e-5f)
+
+        // Vision returns where the gyro said the camera is: the overlay must not swing back.
+        val truth = RotationMath.rotateAboutCameraCentre(wall, RotationMath.cameraRotationDelta(yaw(0.0).quaternion, yaw(8.0).quaternion))
+        fronts.single().next = match(truth)
+        advance(50)
+        val back = s.onFrame(frame(yaw(8.0)))
+        assertEquals(TrackingState.LOCKED, back.state)
+        assertEquals(0f, RigidMath.rotationDeltaDeg(bridged.pose!!.cameraFromMap, back.pose!!.cameraFromMap), 0.05f)
+        assertEquals(0f, RigidMath.rotationDeltaDeg(back.acceptedCameraFromMap!!, back.pose!!.cameraFromMap), 0.05f)
+    }
+
+    @Test
+    fun `Config maxBridgeMs is the only bridge limit`() {
+        val s = session(
+            PhotosphereTrackingSession.Config(maxBridgeMs = 400L, trackingState = TrackingStateConfig(maxBridgeMs = 50L)),
+        )
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame())
+        fronts.single().next = match(viewAt(0f, 0f, 2f))
+        repeat(2) { s.onFrame(frame()) }
+        fronts.single().next = null
+        advance(100)
+        assertEquals(TrackingState.IMU_BRIDGE, s.onFrame(frame()).state)
+        advance(200) // 300 ms since the lock: past trackingState.maxBridgeMs, inside Config.maxBridgeMs
+        assertEquals(TrackingState.IMU_BRIDGE, s.onFrame(frame()).state)
+        advance(200) // 500 ms
+        assertEquals(TrackingState.REACQUIRING, s.onFrame(frame()).state)
+    }
+
+    @Test
+    fun `the base map follows a display rotation of the tracked frame`() {
+        val s = session()
+        fun f(att: AttitudeSample, displayDeg: Int) = PhotosphereTrackingSession.Frame(
+            textured, intrinsics, nowNs, att,
+            cameraFromDevice = com.hereliesaz.sphereslam.attitude.DeviceCameraRotation.cameraFromDeviceForDisplayFrame(displayDeg),
+        )
+        s.onFrame(f(yaw(0.0), 0))
+        // Same device attitude, display turned 90°: the image (camera frame) is rolled by 90°.
+        val rolled = s.onFrame(f(yaw(0.0), 90)).baseCameraFromMap!!
+        val c90 = com.hereliesaz.sphereslam.attitude.DeviceCameraRotation.cameraFromDeviceForDisplayFrame(90)
+        for (row in 0..2) for (col in 0..2) assertEquals(c90[row * 3 + col], rolled[col * 4 + row], 1e-6f)
+        // Plus a yaw: C_now · ΔR · C_refᵀ.
+        val turned = s.onFrame(f(yaw(20.0), 90)).baseCameraFromMap!!
+        val expected = PhotosphereTrackingSession.baseCameraRotation(
+            RotationMath.IDENTITY_3X3, yaw(0.0).quaternion, c90, yaw(20.0).quaternion,
+        )
+        for (row in 0..2) for (col in 0..2) assertEquals(expected[row * 3 + col], turned[col * 4 + row], 1e-6f)
+        assertEquals(0f, RigidMath.translationNorm(turned), 0f)
+    }
+
+    @Test
+    fun `the page table and the live matcher stay consistent`() {
+        val s = session()
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame())
+        fronts.single().next = match(viewAt(0.6f, 0f, 1f))
+        repeat(2) { s.onFrame(frame()) }
+        val grown = rec.grown.single()
+        assertEquals(2, fronts.size)
+
+        // Handing the grown pages back changes nothing.
+        s.updatePrecisionLayer(reference, atlasPages = s.atlasPages)
+        assertEquals(2, fronts.size)
+        assertFalse(fronts[1].closed)
+        // Equal copies (e.g. reloaded from storage) are the same pages too.
+        val copy = PhotosphereTrackingSession.AtlasPage(
+            grown.pageNo, grown.luma, grown.width, grown.height, grown.referenceWidthUnits, grown.physicallyMetric, grown.canonicalFromPage,
+        )
+        s.updatePrecisionLayer(reference, atlasPages = listOf(copy))
+        assertEquals(2, fronts.size)
+
+        // Omitting them rebuilds a matcher that holds exactly page 0 …
+        s.updatePrecisionLayer(reference, atlasPages = emptyList())
+        assertTrue(s.atlasPages.isEmpty())
+        s.onFrame(frame())
+        assertEquals(listOf(0), fronts.last().pages.map { it.first })
+        // … and later growth never reuses a page number (the fake rejects duplicates like KPM does).
+        fronts.last().next = match(viewAt(0.6f, 0f, 1f))
+        advance(PhotosphereAtlasGrowth.MIN_GROW_INTERVAL_MS + 1)
+        repeat(2) { s.onFrame(frame()) }
+        assertEquals(2, rec.grown.size)
+        assertEquals(listOf(2), s.atlasPages.map { it.pageNo })
+        assertTrue(rec.diagnostics.none { it.contains("atlas growth failed") })
+
+        // New host pages with the same reference are loaded.
+        val hostPage = PhotosphereTrackingSession.AtlasPage(
+            7, noise(100 * 100, 4), 100, 100, 0.5f, false, RigidMath.identity().also { it[12] = -1f },
+        )
+        s.updatePrecisionLayer(reference, atlasPages = s.atlasPages + hostPage)
+        s.onFrame(frame())
+        assertEquals(listOf(0, 2, 7), fronts.last().pages.map { it.first })
     }
 
     @Test
@@ -524,7 +768,7 @@ class PhotosphereTrackingSessionTest {
         repeat(2) { s.onFrame(frame()) } // confirm + lock; the first lock reports at once
         val line = rec.diagnostics.last { it.startsWith("SphereSLAM standalone KPM") }
         assertTrue(line, line.startsWith("SphereSLAM standalone KPM page=0 inliers=30"))
-        assertTrue(line, line.contains("timing{frames=3 matched=3 convertMs=2.0/2.0 setupMs="))
+        assertTrue(line, line.contains("timing{frames=3 attempts=3 matched=2 convertMs=2.0/2.0 setupMs="))
         assertTrue(line, line.contains(" matchMs=") && line.contains(" keyframeMs=") && line.contains(" growthMs="))
         fun kpmLines() = rec.diagnostics.count { it.startsWith("SphereSLAM standalone KPM") }
         val before = kpmLines()
@@ -534,11 +778,11 @@ class PhotosphereTrackingSessionTest {
         fronts.single().next = null
         s.onFrame(frame()) // window: the locked frame above + this miss
         val windowed = rec.diagnostics.last { it.startsWith("SphereSLAM standalone KPM") }
-        assertTrue(windowed, windowed.contains("page=0") && windowed.contains("timing{frames=2 matched=2 convertMs=-"))
+        assertTrue(windowed, windowed.contains("page=0") && windowed.contains("timing{frames=2 attempts=2 matched=1 convertMs=-"))
         advance(1_100)
         s.onFrame(frame())
         val idle = rec.diagnostics.last { it.startsWith("SphereSLAM standalone KPM") }
-        assertTrue(idle, idle.startsWith("SphereSLAM standalone KPM no-lock timing{frames=1 matched=1"))
+        assertTrue(idle, idle.startsWith("SphereSLAM standalone KPM no-lock timing{frames=1 attempts=1 matched=0"))
     }
 
     @Test

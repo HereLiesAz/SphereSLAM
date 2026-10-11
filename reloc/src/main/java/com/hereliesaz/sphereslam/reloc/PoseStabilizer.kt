@@ -17,11 +17,18 @@ package com.hereliesaz.sphereslam.reloc
  *
  * @property alpha weight toward the newest pose each frame, `(0, 1]`; 0.5 halves per-frame jitter
  *   while keeping the emitted pose within half a frame's motion of the truth.
+ * @property snapDistance camera-centre move, in the poses' units, that passes through unsmoothed
+ *   (`> 0`); [PoseBlend.SNAP_DISTANCE_METERS] for metric poses, [PoseBlend.snapDistanceFor] otherwise.
  */
 @ExperimentalSphereSlamRelocApi
 class PoseStabilizer(
     private val alpha: Float = DEFAULT_ALPHA,
+    private val snapDistance: Float = PoseBlend.SNAP_DISTANCE_METERS,
 ) {
+    init {
+        require(snapDistance.isFinite() && snapDistance > 0f) { "snapDistance must be finite and positive" }
+    }
+
     private var last: FloatArray? = null
 
     /**
@@ -36,7 +43,7 @@ class PoseStabilizer(
     fun stabilize(raw: FloatArray): FloatArray {
         require(raw.size == 16) { "pose must be a length-16 column-major matrix" }
         val prev = last
-        val out = if (prev == null || PoseBlend.diverged(prev, raw)) raw.copyOf() else PoseBlend.blend(prev, raw, alpha)
+        val out = if (prev == null || PoseBlend.diverged(prev, raw, snapDistance)) raw.copyOf() else PoseBlend.blend(prev, raw, alpha)
         last = out
         return out
     }

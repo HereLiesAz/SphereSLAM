@@ -15,8 +15,28 @@ import kotlin.math.sqrt
 @ExperimentalSphereSlamRelocApi
 object PoseBlend {
 
-    /** Translation difference (metres) beyond which two poses are considered a discontinuity. */
+    /**
+     * Translation difference (metres) beyond which two poses are considered a discontinuity. Applies
+     * to poses in metres only; for poses in other units use [snapDistanceFor].
+     */
     const val SNAP_DISTANCE_METERS = 0.20f
+
+    /**
+     * Snap distance for poses whose wall reference is not physically metric, in reference widths:
+     * with a normalized width of 1 it equals [SNAP_DISTANCE_METERS] numerically.
+     */
+    const val SNAP_DISTANCE_REFERENCE_WIDTHS = 0.20f
+
+    /**
+     * The snap distance in a pose's own units: [SNAP_DISTANCE_METERS] when the reference is
+     * [physicallyMetric] (units are metres), otherwise [SNAP_DISTANCE_REFERENCE_WIDTHS] ×
+     * [referenceWidthUnits] (units are an arbitrary scale of the reference width, so the threshold
+     * scales with it instead of reading a normalized unit as a metre).
+     */
+    fun snapDistanceFor(referenceWidthUnits: Float, physicallyMetric: Boolean): Float {
+        if (physicallyMetric || !referenceWidthUnits.isFinite() || referenceWidthUnits <= 0f) return SNAP_DISTANCE_METERS
+        return SNAP_DISTANCE_REFERENCE_WIDTHS * referenceWidthUnits
+    }
 
     /** Rotation difference (degrees) beyond which two poses are considered a discontinuity. */
     const val SNAP_ANGLE_DEGREES = 15f
@@ -54,13 +74,15 @@ object PoseBlend {
      *
      * @param a first pose, column-major length 16.
      * @param b second pose, column-major length 16.
-     * @return true if the camera-centre (`−Rᵀt`) gap ≥ [SNAP_DISTANCE_METERS] or the rotation gap ≥
+     * @param snapDistance the camera-centre gap that counts as a discontinuity, in the poses' units
+     *   ([snapDistanceFor]); [SNAP_DISTANCE_METERS] for metric poses.
+     * @return true if the camera-centre (`−Rᵀt`) gap ≥ [snapDistance] or the rotation gap ≥
      *   [SNAP_ANGLE_DEGREES].
      */
-    fun diverged(a: FloatArray, b: FloatArray): Boolean {
+    fun diverged(a: FloatArray, b: FloatArray, snapDistance: Float = SNAP_DISTANCE_METERS): Boolean {
         val ca = cameraCenter(a); val cb = cameraCenter(b)
         val dx = ca[0] - cb[0]; val dy = ca[1] - cb[1]; val dz = ca[2] - cb[2]
-        if (sqrt(dx * dx + dy * dy + dz * dz) >= SNAP_DISTANCE_METERS) return true
+        if (sqrt(dx * dx + dy * dy + dz * dz) >= snapDistance) return true
         val qa = PoseMath.matrixToQuaternion(a); val qb = PoseMath.matrixToQuaternion(b)
         val dot = abs(qa[0] * qb[0] + qa[1] * qb[1] + qa[2] * qb[2] + qa[3] * qb[3]).coerceIn(0f, 1f)
         val angleDeg = Math.toDegrees(2.0 * acos(dot.toDouble())).toFloat()

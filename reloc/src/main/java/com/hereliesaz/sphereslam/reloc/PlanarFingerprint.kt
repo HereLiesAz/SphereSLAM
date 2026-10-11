@@ -35,7 +35,12 @@ class PlanarFingerprint(
             val orb = ORB.create(maxFeatures)
             val kps = MatOfKeyPoint()
             val descriptors = Mat()
-            orb.detectAndCompute(gray, Mat(), kps, descriptors)
+            val mask = Mat()
+            try {
+                orb.detectAndCompute(gray, mask, kps, descriptors)
+            } finally {
+                mask.release()
+            }
 
             val w = gray.cols()
             val h = gray.rows()

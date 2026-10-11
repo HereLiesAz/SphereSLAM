@@ -14,7 +14,6 @@ import org.opencv.core.Size
 import org.opencv.core.TermCriteria
 import org.opencv.geometry.Geometry
 import org.opencv.video.Video
-import kotlin.math.sqrt
 
 /**
  * Frame-to-frame planar tracking between full KPM solves (ARToolKit AR2-style): the KPM inlier
@@ -30,10 +29,10 @@ import kotlin.math.sqrt
  * `SphereSlamStandaloneSession.cameraFromCanonical` converts.
  *
  * Requires the OpenCV Java native library; construction and use throw [LinkageError] without it.
+ * The point-selection and acceptance rules are the pure [FlowPoseMath] (unit-tested on the JVM);
+ * this class only adds the OpenCV Lucas–Kanade and PnP calls.
  */
-internal class FlowPoseTracker(intrinsics: CameraIntrinsics, private val config: KpmMatchSpeedConfig) : AutoCloseable {
-
-    class Result(val cameraFromPage3x4: FloatArray, val meanSquaredErrorPx: Float, val inliers: Int)
+internal class FlowPoseTracker(intrinsics: CameraIntrinsics, private val config: KpmMatchSpeedConfig) : FlowTracker {
 
     private val width = intrinsics.width
     private val height = intrinsics.height
@@ -53,30 +52,16 @@ internal class FlowPoseTracker(intrinsics: CameraIntrinsics, private val config:
     private var seededCount = 0
     private var pageNo = -1
 
-    /** The page being tracked, or -1. */
-    val trackedPage: Int get() = if (seededCount > 0) pageNo else -1
+    override val trackedPage: Int get() = if (seededCount > 0) pageNo else -1
 
-    /**
-     * Seed from a full solve on [luma] (this tracker's frame size): [correspondences] rows of
-     * (frame x, frame y, page x mm, page y mm) in this frame's pixels, and the solve's
-     * [cameraFromPage3x4]. Returns false (and stays unseeded) with fewer than
-     * [KpmMatchSpeedConfig.minFlowInliers] usable rows.
-     */
-    fun seed(luma: ByteArray, pageNo: Int, correspondences: FloatArray, cameraFromPage3x4: FloatArray): Boolean {
+    override fun seed(luma: ByteArray, pageNo: Int, correspondences: FloatArray, cameraFromPage3x4: FloatArray): Boolean {
         reset()
         require(luma.size >= width * height && cameraFromPage3x4.size == 12)
-        val n = correspondences.size / 4
-        if (n < config.minFlowInliers) return false
-        val img = ArrayList<Point>(n)
-        val obj = ArrayList<Point3>(n)
-        for (i in 0 until n) {
-            val x = correspondences[i * 4]
-            val y = correspondences[i * 4 + 1]
-            if (!x.isFinite() || !y.isFinite() || x < 0f || y < 0f || x > width - 1 || y > height - 1) continue
-            img += Point(x.toDouble(), y.toDouble())
-            obj += Point3(correspondences[i * 4 + 2].toDouble(), correspondences[i * 4 + 3].toDouble(), 0.0)
-        }
-        if (img.size < config.minFlowInliers) return false
+        if (correspondences.size / 4 < config.minFlowInliers) return false
+        val rows = FlowPoseMath.usableSeedRows(correspondences, width, height)
+        if (rows.size < config.minFlowInliers) return false
+        val img = rows.map { i -> Point(correspondences[i * 4].toDouble(), correspondences[i * 4 + 1].toDouble()) }
+        val obj = rows.map { i -> Point3(correspondences[i * 4 + 2].toDouble(), correspondences[i * 4 + 3].toDouble(), 0.0) }
         prev.put(0, 0, luma, 0, width * height)
         setPose(cameraFromPage3x4)
         imagePoints = img
@@ -86,8 +71,7 @@ internal class FlowPoseTracker(intrinsics: CameraIntrinsics, private val config:
         return true
     }
 
-    /** Track into [luma]; null (and unseeded) on loss. */
-    fun track(luma: ByteArray): Result? {
+    override fun track(luma: ByteArray): FlowTracker.Result? {
         if (seededCount == 0) return null
         cur.put(0, 0, luma, 0, width * height)
         val prevPts = MatOfPoint2f(*imagePoints.toTypedArray())
@@ -101,35 +85,30 @@ internal class FlowPoseTracker(intrinsics: CameraIntrinsics, private val config:
             Video.calcOpticalFlowPyrLK(cur, prev, nextPts, backPts, backStatus, err, winSize, PYRAMID_LEVELS, criteria)
             val next = nextPts.toArray()
             val back = backPts.toArray()
-            val ok = status.toArray()
-            val backOk = backStatus.toArray()
-            val img = ArrayList<Point>(next.size)
-            val obj = ArrayList<Point3>(next.size)
-            for (i in next.indices) {
-                if (ok[i].toInt() == 0 || backOk[i].toInt() == 0) continue
-                val p = next[i]
-                if (p.x < 0 || p.y < 0 || p.x > width - 1 || p.y > height - 1) continue
-                val dx = back[i].x - imagePoints[i].x
-                val dy = back[i].y - imagePoints[i].y
-                if (dx * dx + dy * dy > FB_MAX_PX * FB_MAX_PX) continue
-                img += p
-                obj += objectPoints[i]
-            }
-            if (!enoughPoints(img.size)) return lost()
+            val survivors = FlowPoseMath.forwardBackwardSurvivors(
+                previousXY = xy(imagePoints),
+                nextXY = xy(next.asList()),
+                backXY = xy(back.asList()),
+                forwardOk = status.toArray(),
+                backwardOk = backStatus.toArray(),
+                width = width,
+                height = height,
+                maxForwardBackwardPx = FB_MAX_PX,
+            )
+            if (!FlowPoseMath.enoughPoints(survivors.size, seededCount, config)) return lost()
+            var img = survivors.map { next[it] }
+            var obj = survivors.map { objectPoints[it] }
 
             var solved = solve(obj, img) ?: return lost()
             // One outlier-rejection pass on the reprojection residuals.
-            val keep = solved.residualsSq.indices.filter { solved.residualsSq[it] <= OUTLIER_PX * OUTLIER_PX }
+            val keep = FlowPoseMath.inlierIndices(solved.residualsSq, OUTLIER_PX)
             if (keep.size < img.size) {
-                if (!enoughPoints(keep.size)) return lost()
-                val img2 = keep.map { img[it] }
-                val obj2 = keep.map { obj[it] }
-                solved = solve(obj2, img2) ?: return lost()
-                img.clear(); img.addAll(img2)
-                obj.clear(); obj.addAll(obj2)
+                if (!FlowPoseMath.enoughPoints(keep.size, seededCount, config)) return lost()
+                img = keep.map { img[it] }
+                obj = keep.map { obj[it] }
+                solved = solve(obj, img) ?: return lost()
             }
-            val mse = solved.residualsSq.average().toFloat()
-            if (!mse.isFinite() || sqrt(mse) > config.maxFlowRmsErrorPx) return lost()
+            val mse = FlowPoseMath.acceptedMeanSquaredError(solved.residualsSq, config) ?: return lost()
 
             // Accept: the current frame becomes the reference for the next LK step.
             val t = prev
@@ -137,14 +116,14 @@ internal class FlowPoseTracker(intrinsics: CameraIntrinsics, private val config:
             cur = t
             imagePoints = img
             objectPoints = obj
-            return Result(currentPose(), mse, img.size)
+            return FlowTracker.Result(currentPose(), mse, img.size)
         } finally {
             prevPts.release(); nextPts.release(); backPts.release()
             status.release(); backStatus.release(); err.release()
         }
     }
 
-    fun reset() {
+    override fun reset() {
         imagePoints = emptyList()
         objectPoints = emptyList()
         seededCount = 0
@@ -159,10 +138,16 @@ internal class FlowPoseTracker(intrinsics: CameraIntrinsics, private val config:
 
     private class Solve(val residualsSq: DoubleArray)
 
-    private fun enoughPoints(n: Int): Boolean =
-        n >= config.minFlowInliers && n >= config.minFlowInlierFraction * seededCount
+    private fun xy(points: List<Point>): DoubleArray {
+        val out = DoubleArray(points.size * 2)
+        for ((i, p) in points.withIndex()) {
+            out[i * 2] = p.x
+            out[i * 2 + 1] = p.y
+        }
+        return out
+    }
 
-    private fun lost(): Result? {
+    private fun lost(): FlowTracker.Result? {
         reset()
         return null
     }
@@ -220,5 +205,86 @@ internal class FlowPoseTracker(intrinsics: CameraIntrinsics, private val config:
         const val PYRAMID_LEVELS = 3
         const val FB_MAX_PX = 1.0
         const val OUTLIER_PX = 3.0
+    }
+}
+
+/** The frame-to-frame tracker [KpmPlanarFrontEnd] uses between full solves ([FlowPoseTracker]). */
+internal interface FlowTracker : AutoCloseable {
+
+    /** A tracked pose: KPM-convention row-major camera-from-page 3×4 (mm), mean squared error (px²). */
+    class Result(val cameraFromPage3x4: FloatArray, val meanSquaredErrorPx: Float, val inliers: Int)
+
+    /** The page being tracked, or -1. */
+    val trackedPage: Int
+
+    /**
+     * Seed from a full solve on [luma] (this tracker's frame size): [correspondences] rows of
+     * (frame x, frame y, page x mm, page y mm) in this frame's pixels, and the solve's
+     * [cameraFromPage3x4]. Returns false (and stays unseeded) with fewer than
+     * [KpmMatchSpeedConfig.minFlowInliers] usable rows.
+     */
+    fun seed(luma: ByteArray, pageNo: Int, correspondences: FloatArray, cameraFromPage3x4: FloatArray): Boolean
+
+    /** Track into [luma]; null (and unseeded) on loss. */
+    fun track(luma: ByteArray): Result?
+
+    fun reset()
+}
+
+/** The pure point-selection and acceptance rules of [FlowPoseTracker]. */
+internal object FlowPoseMath {
+
+    /** Indices of correspondence rows whose frame point is finite and inside a `width × height` frame. */
+    fun usableSeedRows(correspondences: FloatArray, width: Int, height: Int): List<Int> =
+        (0 until correspondences.size / 4).filter { i ->
+            val x = correspondences[i * 4]
+            val y = correspondences[i * 4 + 1]
+            x.isFinite() && y.isFinite() && x >= 0f && y >= 0f && x <= width - 1 && y <= height - 1
+        }
+
+    /**
+     * Indices of points that survived Lucas–Kanade both ways: tracked forward and back, inside the
+     * frame, and returned within [maxForwardBackwardPx] of where they started. Point arrays are
+     * interleaved `x, y`.
+     */
+    fun forwardBackwardSurvivors(
+        previousXY: DoubleArray,
+        nextXY: DoubleArray,
+        backXY: DoubleArray,
+        forwardOk: ByteArray,
+        backwardOk: ByteArray,
+        width: Int,
+        height: Int,
+        maxForwardBackwardPx: Double,
+    ): List<Int> {
+        val n = minOf(previousXY.size, nextXY.size, backXY.size) / 2
+        val out = ArrayList<Int>(n)
+        for (i in 0 until minOf(n, forwardOk.size, backwardOk.size)) {
+            if (forwardOk[i].toInt() == 0 || backwardOk[i].toInt() == 0) continue
+            val x = nextXY[i * 2]
+            val y = nextXY[i * 2 + 1]
+            if (!(x >= 0.0 && y >= 0.0 && x <= width - 1.0 && y <= height - 1.0)) continue
+            val dx = backXY[i * 2] - previousXY[i * 2]
+            val dy = backXY[i * 2 + 1] - previousXY[i * 2 + 1]
+            if (!(dx * dx + dy * dy <= maxForwardBackwardPx * maxForwardBackwardPx)) continue
+            out += i
+        }
+        return out
+    }
+
+    /** Whether [n] surviving points still meet both the absolute and the fractional floor. */
+    fun enoughPoints(n: Int, seededCount: Int, config: KpmMatchSpeedConfig): Boolean =
+        n >= config.minFlowInliers && n >= config.minFlowInlierFraction * seededCount
+
+    /** Indices whose squared residual is within [outlierPx]. */
+    fun inlierIndices(residualsSq: DoubleArray, outlierPx: Double): List<Int> =
+        residualsSq.indices.filter { residualsSq[it] <= outlierPx * outlierPx }
+
+    /** The mean squared residual, or null when it is not finite or its RMS exceeds the config limit. */
+    fun acceptedMeanSquaredError(residualsSq: DoubleArray, config: KpmMatchSpeedConfig): Float? {
+        if (residualsSq.isEmpty()) return null
+        val mse = residualsSq.average().toFloat()
+        if (!mse.isFinite() || kotlin.math.sqrt(mse) > config.maxFlowRmsErrorPx) return null
+        return mse
     }
 }
