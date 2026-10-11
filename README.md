@@ -227,6 +227,7 @@ glow.rotationSource = CoverageGlowRenderer.RotationSource { frameTimeNanos, out 
 }
 // Whenever the map changes (per keyframe), not per frame:
 glow.setRegions(map.currentRegions())
+glow.setRegionProgress(map.regionsInProgress()) // tiles being scanned, filling until they open
 ~~~
 
 - `frameTimeNanos` is in the `SystemClock.elapsedRealtimeNanos()` base (the `SensorEvent.timestamp`
@@ -255,6 +256,16 @@ glow.setRegions(map.currentRegions())
 Colour and intensity are live too, from any thread while drawing: `hazeColor` (RGB floats) or
 `setHazeColorArgb(argb)`, `hazeAlpha` (wash, default 0.2), `outlineAlpha` and `outlineWidthPx` (edge).
 Defaults: hot pink `#FF69B4` at 0.2, `TRIANGLES`.
+
+**Scan progress.** A tile is scanned once 90 % of its area has been in frame across any number of
+keyframes (`PhotosphereMap.recordView`, called by `PhotosphereKeyframeStore.record`), not when a single
+frame happens to hold it. While it fills, `setRegionProgress(map.regionsInProgress())` draws it more
+opaque — from the wash toward `progressAlpha` (default 0.85) in ten steps, in every style — and once
+scanned it leaves the progress list and opens to the camera.
+
+**The whole sphere.** `PhotosphereMap()` and `SphereCoverage()` default to every heading and every
+elevation — 24 × 6 tiles of 15° × 30° — so the ceiling, the floor and what is behind the start can be
+scanned. Pass narrower arcs only for a deliberate front-only target.
 
 ### Hosting
 
@@ -581,8 +592,12 @@ Use `CameraTimestampSource.REALTIME` in `Config` only when Camera2 reports
 
 ~~~kotlin
 onKeyframe = { kf ->
-    val regions = synchronized(mapLock) { store.record(kf, nowMs); map.currentRegions() }
+    val (regions, progress) = synchronized(mapLock) {
+        store.record(kf, nowMs)
+        map.currentRegions() to map.regionsInProgress()
+    }
     glow.setRegions(regions) // regionsNeedingUpdate() for FillMode.TRIANGLES
+    glow.setRegionProgress(progress)
 }
 ~~~
 

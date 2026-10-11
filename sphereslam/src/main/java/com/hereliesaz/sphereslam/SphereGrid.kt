@@ -3,7 +3,8 @@ package com.hereliesaz.sphereslam
 import kotlin.math.floor
 
 /**
- * The shared angular lattice behind the guided sweep: the viewable front region partitioned into
+ * The shared angular lattice behind the guided sweep: the viewable region (by default the whole
+ * sphere) partitioned into
  * `sectorCount` azimuth sectors × `elevationBandCount` elevation bands, anchored to a wall-facing
  * heading. Pure geometry — no state, no sensors — so [SphereCoverage] (observed-ness) and
  * [PhotosphereMap] (per-tile freshness) address tiles through one definition and cannot drift apart.
