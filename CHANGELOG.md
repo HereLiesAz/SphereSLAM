@@ -26,14 +26,17 @@ through a per-pixel `ByteBuffer.get` loop.
     frame after its build rather than the same frame. A growth attempt that throws is now a
     diagnostic (`atlas growth failed`), not a fatal error.
   - `Frame.luma` is not retained after `onFrame` returns, so hosts may reuse a pooled buffer.
+  - The KPM front end (`KpmPlanarFrontEnd`) forks with its speed config and page windows; the fork
+    starts with fresh flow/scheduling state, so the first frame after a swap is a full solve. Growth
+    is still never started from a flow-tracked pose.
 - **Native (`KpmBridge.cpp`) thread-safety.** Sessions are now addressed by never-reused ids mapped to
   shared owners, each with its **own** lock (the registry lock is held only for lookup); destroy
   unregisters and frees once in-flight calls return. One handle is still never used by two threads at
   once; different sessions now run in parallel. New `KpmBridge.cloneSession` (calibration + deep copy
-  of the atlas; the source is locked only for the copy). **Fix:** adding a page to an already-indexed
-  session re-loaded the same FREAK database, whose `addKeyframe` throws "ID already exists" (a C++
-  exception through JNI aborts the process); the handle is now recreated before re-indexing, and KPM
-  calls are wrapped so an exception becomes an error code.
+  of the atlas; the source is locked only for the copy). The second-page crash fix (matcher rebuilt
+  before the grown atlas is loaded; see the KPM speed section) applies whenever a session was already
+  indexed, so it covers clones too; `nativeMatchPlanarEx` and its single-page matchers run under the
+  same per-session lock.
 - `SphereSlamStandaloneSession.fork()` (new, public): an independent session with every registered
   page, safe to create on another thread while this one matches; null for a non-KPM engine.
 - **`LumaFrameTransform` speed and buffer reuse.** Rows are bulk-read and rotated in 16-row bands
@@ -50,6 +53,46 @@ through a per-pixel `ByteBuffer.get` loop.
   `estimateLuma(luma, width, height, rowStride, outMaxDim)` feeds a grey plane straight into the
   model (bilinear resample, grey in all three channels) without an ARGB `Bitmap` round trip, reusing
   its input buffers.
+### Standalone tracking speed: downscaled KPM, flow tracking between solves, focused pages
+
+`PhotosphereTrackingSession` ran a full-resolution, all-pages native `kpmMatching` on every analyzer
+frame (est. 40–150+ ms at 640×480, growing with atlas pages), so the overlay pose only updated at
+that rate. New `Config.matchSpeed: KpmMatchSpeedConfig` (defaults on; additive API):
+
+- **Downscaled matching** (`matchDownscale = 2`, never below `minMatchShortSidePx = 240`): KPM runs
+  on a box-filtered luma with intrinsics scaled in the pixel-centre convention
+  (`fx' = fx/f`, `cx' = (cx + ½)/f − ½`). The calibrated pose is resolution-independent, so the returned
+  camera-from-wall transform has the same convention; the reprojection error stays in the pixels KPM
+  solved in (its own ≤ 10 px² gate and `PoseAcceptanceConfig` were tuned on that scale). artoolkitX's
+  own `kpmSetProcMode` is deliberately not used: in the pinned FREAK path the pose solve consumes
+  unscaled query coordinates against full-size calibration, giving wrong poses for any reduced mode.
+- **Frame-to-frame flow tracking** (`flowTracking`): the full solve's inlier correspondences (frame
+  pixel ↔ page millimetre) are tracked at full resolution with forward–backward-checked pyramidal
+  Lucas–Kanade and the pose is re-solved by iterative PnP against the page's own reference
+  coordinates (AR2-style; no chained drift), with one residual-outlier pass. A full KPM solve runs on
+  flow loss, too few inliers (`minFlowInliers`, `minFlowInlierFraction`), RMS error above
+  `maxFlowRmsErrorPx`, a pose-gate rejection, and at least every `fullSolveEveryFrames` (10) frames /
+  `fullSolveIntervalMs` (500 ms); a missed periodic solve may be covered by flow for at most
+  `maxFlowOnlyMs`. Requires OpenCV's native library (as `Relocalizer`); without it flow turns itself
+  off. Flow poses never grow the atlas.
+- **Focused page matching** (`focusedPageMatching`): with ≥ 2 pages and a lock within
+  `focusWindowMs`, the page under the gyro-predicted optical axis (hysteresis on the last locked page)
+  is matched alone first, falling back to all pages on a miss.
+- `TrackedPose.matchMethod` / `VisualMatchMethod` (`KPM_FULL`, `KPM_FOCUSED`, `FLOW`); the periodic KPM
+  diagnostic appends `method=`. `KpmMatchSpeedConfig.FULL_KPM_EVERY_FRAME` restores the old behaviour.
+- `:sphereslam`: `PlanarMatchRequest(pageNo, maxCorrespondences)`,
+  `SphereSlamEngine.match(luma, request)` (default ignores the request),
+  `SphereSlamStandaloneSession.match(luma, timestampNs, request)`,
+  `SphereSlamStandaloneSession.cameraFromCanonical(pageNo, cameraFromPage3x4)`,
+  `Pose.cameraFromPage3x4` / `Pose.correspondences`, `PlanarMatch.correspondences` (old constructor
+  kept).
+- Native (`KpmBridge.matchPlanarEx`): single-page matchers built lazily from the already-extracted
+  atlas features, inlier correspondence export, and the redundant per-page-slot ICP pose solves in
+  the FREAK path skipped (`kpmSetMatchingSkipPage` on every slot but the first — same pose, N−1 fewer
+  solves). C++ exceptions no longer cross JNI.
+- **Fix:** adding a second atlas page called `kpmSetRefDataSet` on a handle that already held pages;
+  the FREAK database re-adds image id 0 and throws `"ID already exists"`, aborting the process. The
+  matcher is now rebuilt from the retained calibration before loading the grown atlas.
 
 ### Coverage glow: display-rate, full-rotation tracking and styles (additive)
 

@@ -83,7 +83,7 @@ class PhotosphereTrackingSession internal constructor(
         callbacks: Callbacks = Callbacks(),
         correctAcceptedPose: ((FloatArray) -> FloatArray)? = null,
         elapsedRealtimeNanos: () -> Long = { SystemClock.elapsedRealtimeNanos() },
-    ) : this(config, callbacks, correctAcceptedPose, elapsedRealtimeNanos, PlanarFrontEndFactory.KPM, null)
+    ) : this(config, callbacks, correctAcceptedPose, elapsedRealtimeNanos, PlanarFrontEndFactory.kpm(config.matchSpeed), null)
 
     /**
      * @property timestampSource the camera's timestamp source (Camera2 `SENSOR_INFO_TIMESTAMP_SOURCE`);
@@ -92,6 +92,9 @@ class PhotosphereTrackingSession internal constructor(
      * @property keyframeIntervalMs photosphere keyframe cadence, ms.
      * @property atlasGrowth whether accepted poses may grow the KPM atlas.
      * @property metricsIntervalMs cadence of the KPM match-metrics + per-stage timing diagnostic, ms.
+     * @property matchSpeed per-frame planar matching cost levers (downscaled KPM, flow tracking between
+     *   full solves, focused page matching); [KpmMatchSpeedConfig.FULL_KPM_EVERY_FRAME] restores a
+     *   full-resolution all-pages KPM solve on every frame.
      */
     data class Config(
         val timestampSource: CameraTimestampSource = CameraTimestampSource.UNKNOWN,
@@ -103,6 +106,7 @@ class PhotosphereTrackingSession internal constructor(
         val keyframeIntervalMs: Long = 250L,
         val atlasGrowth: Boolean = true,
         val metricsIntervalMs: Long = 5_000L,
+        val matchSpeed: KpmMatchSpeedConfig = KpmMatchSpeedConfig(),
     ) {
         init {
             require(maxBridgeMs >= 0L && keyframeIntervalMs >= 0L && metricsIntervalMs >= 0L)
@@ -240,6 +244,8 @@ class PhotosphereTrackingSession internal constructor(
      * @property projection [ProjectionMatrix.buildFrom] of [intrinsics] (the full tracked frame).
      * @property unitsPerPixel wall units spanned by one vertical frame pixel at the target depth.
      * @property observationAgeMs trusted frame age, or null.
+     * @property matchMethod how the visual pose was solved (full / focused KPM or flow tracking); for
+     *   an [PoseSource.IMU_BRIDGE] pose, the method of the held pose.
      */
     class TrackedPose internal constructor(
         cameraFromMap: FloatArray,
@@ -253,6 +259,7 @@ class PhotosphereTrackingSession internal constructor(
         val observationAgeMs: Float?,
         val matchDurationMs: Float,
         val source: PoseSource,
+        val matchMethod: VisualMatchMethod = VisualMatchMethod.KPM_FULL,
     ) {
         private val view = cameraFromMap.copyOf()
         private val proj = projection.copyOf()
@@ -264,6 +271,7 @@ class PhotosphereTrackingSession internal constructor(
             TrackedPose(
                 RotationMath.rotateAboutCameraCentre(view, delta), projection, intrinsics, timestampNs, pageNo,
                 reprojectionError, inlierCount, unitsPerPixel, observationAgeMs, matchDurationMs, PoseSource.IMU_BRIDGE,
+                matchMethod,
             )
     }
 
@@ -322,6 +330,7 @@ class PhotosphereTrackingSession internal constructor(
     private var imuBridge: AttitudeRotationBridge? = null
     private var imuBridgeReferenceAtMs = -1L
     private var lastGood: TrackedPose? = null
+    private var lastAcceptedCameraFromCanonical: FloatArray? = null
 
     private var photosphereReferenceQuaternion: FloatArray? = null
     private var photosphereCameraFromDevice: FloatArray? = null
@@ -445,7 +454,15 @@ class PhotosphereTrackingSession internal constructor(
         val direct = directFrame(frame.luma)
         val matchStartNs = elapsedRealtimeNanos()
         timing.setup.add(matchStartNs - setupStartNs)
-        val pose = active.match(direct, frame.timestampNs)
+        val pose = active.match(
+            PlanarFrameInput(
+                luma = direct,
+                lumaBytes = frame.luma,
+                timestampNs = frame.timestampNs,
+                nowMs = matchStartNs / 1_000_000L,
+                predictedCameraFromCanonical = predictedCameraFromCanonical(frame.attitude),
+            ),
+        )
         val matchEndNs = elapsedRealtimeNanos()
         timing.match.add(matchEndNs - matchStartNs)
         val matchDurationMs = (matchEndNs - matchStartNs).toFloat() / 1_000_000f
@@ -462,6 +479,7 @@ class PhotosphereTrackingSession internal constructor(
             nowMs = matchEndNs / 1_000_000L,
             bridgeAvailable = canBridge(frame.attitude, matchEndNs / 1_000_000L),
         )
+        if (pose != null) active.onVerdict(outcome.accepted)
 
         if (outcome.accepted) {
             val locked = requireNotNull(pose)
@@ -471,6 +489,7 @@ class PhotosphereTrackingSession internal constructor(
                 return FrameResult(null, outcome.state, cameraFromMap, true, null, null, null, projection)
             }
 
+            lastAcceptedCameraFromCanonical = locked.cameraFromCanonical.copyOf()
             maybeEmitMapFromFingerprint(reference, cameraFromMap, locked.cameraFromCanonical)
 
             // The fingerprint never becomes the world: rebase the precision pose into the base map.
@@ -507,6 +526,7 @@ class PhotosphereTrackingSession internal constructor(
                 observationAgeMs = observationAge.ageMs,
                 matchDurationMs = matchDurationMs,
                 source = PoseSource.KPM,
+                matchMethod = locked.method,
             )
             lastGood = tracked
             lastKpmMetrics = tracked
@@ -676,6 +696,8 @@ class PhotosphereTrackingSession internal constructor(
         pose: PlanarMatchResult,
     ) {
         if (!config.atlasGrowth || !atlasWorker.isIdle) return
+        // Grow only from a fresh KPM solve, never from a flow-tracked pose.
+        if (pose.method == VisualMatchMethod.FLOW) return
         if (!PhotosphereAtlasGrowth.poseQualifies(pose.inlierCount, pose.reprojectionError, runtimeAtlasPages.size)) return
         val now = nowMs()
         if (lastAtlasGrowthMs != Long.MIN_VALUE && now - lastAtlasGrowthMs < PhotosphereAtlasGrowth.MIN_GROW_INTERVAL_MS) return
@@ -713,6 +735,13 @@ class PhotosphereTrackingSession internal constructor(
         adoptWorkerOutcome() // a synchronous executor has already finished
     }
 
+    /** The last accepted camera-from-canonical carried through the gyro rotation since, or null. */
+    private fun predictedCameraFromCanonical(attitude: AttitudeSample?): FloatArray? {
+        val last = lastAcceptedCameraFromCanonical ?: return null
+        val delta = imuBridge?.cameraRotationDelta(attitude?.quaternion) ?: return last
+        return RotationMath.rotateAboutCameraCentre(last, delta)
+    }
+
     private fun canBridge(attitude: AttitudeSample?, nowMs: Long): Boolean {
         if (lastGood == null || imuBridge == null || imuBridgeReferenceAtMs < 0L) return false
         val elapsed = nowMs - imuBridgeReferenceAtMs
@@ -744,6 +773,7 @@ class PhotosphereTrackingSession internal constructor(
         buildKey = null
         robustLoop = null
         lastGood = null
+        lastAcceptedCameraFromCanonical = null
         stabilizer.reset()
         clearImuReference()
     }
@@ -796,7 +826,8 @@ class PhotosphereTrackingSession internal constructor(
         val head = if (pose != null) {
             val age = pose.observationAgeMs?.let { String.format(Locale.US, "%.1f", it) } ?: "unavailable"
             "SphereSLAM standalone KPM page=${pose.pageNo} inliers=${pose.inlierCount} " +
-                "error=${pose.reprojectionError} ageMs=$age matchMs=${String.format(Locale.US, "%.1f", pose.matchDurationMs)}"
+                "error=${pose.reprojectionError} ageMs=$age matchMs=${String.format(Locale.US, "%.1f", pose.matchDurationMs)} " +
+                "method=${pose.matchMethod}"
         } else {
             "SphereSLAM standalone KPM no-lock"
         }
@@ -872,6 +903,21 @@ internal class PlanarMatchResult(
     val cameraFromCanonical: FloatArray,
     val reprojectionError: Float,
     val inlierCount: Int,
+    val method: VisualMatchMethod = VisualMatchMethod.KPM_FULL,
+)
+
+/**
+ * One frame for [PlanarFrontEnd.match]: the packed full-resolution luma as a direct buffer and as
+ * bytes, the session clock, and the predicted camera-from-canonical (last accepted pose carried by the
+ * gyro) for page prioritisation, or null.
+ */
+@ExperimentalSphereSlamRelocApi
+internal class PlanarFrameInput(
+    val luma: ByteBuffer,
+    val lumaBytes: ByteArray,
+    val timestampNs: Long,
+    val nowMs: Long,
+    val predictedCameraFromCanonical: FloatArray?,
 )
 
 /** The planar matcher a [PhotosphereTrackingSession] drives (KPM in production, a fake in tests). */
@@ -889,6 +935,12 @@ internal interface PlanarFrontEnd : AutoCloseable {
 
     fun match(luma: ByteBuffer, timestampNs: Long): PlanarMatchResult?
 
+    /** Match one frame with the session's context; defaults to the plain [match]. */
+    fun match(input: PlanarFrameInput): PlanarMatchResult? = match(input.luma, input.timestampNs)
+
+    /** Whether the pose gate accepted the pose returned by the last [match] (only called for non-null poses). */
+    fun onVerdict(accepted: Boolean) {}
+
     /**
      * An independent matcher holding every page added here, for growing the atlas on another thread
      * while this one keeps matching; null when unsupported (the caller then rebuilds from pages). Must
@@ -902,42 +954,15 @@ internal fun interface PlanarFrontEndFactory {
     fun create(intrinsics: CameraIntrinsics): PlanarFrontEnd
 
     companion object {
-        /** SphereSLAM's planar KPM ([SphereSlamStandaloneSession]) for the frame's intrinsics. */
-        val KPM = PlanarFrontEndFactory { intrinsics ->
-            kpm(SphereSlamStandaloneSession(intrinsics.width, intrinsics.height, intrinsics.toCalibration()))
-        }
+        /**
+         * SphereSLAM's planar KPM for the frame's intrinsics with [KpmMatchSpeedConfig]'s levers
+         * ([KpmPlanarFrontEnd]).
+         */
+        fun kpm(speed: KpmMatchSpeedConfig = KpmMatchSpeedConfig()) =
+            PlanarFrontEndFactory { intrinsics -> KpmPlanarFrontEnd(intrinsics, speed) }
 
-        private fun kpm(session: SphereSlamStandaloneSession): PlanarFrontEnd = object : PlanarFrontEnd {
-            override fun addPage(
-                luma: ByteBuffer,
-                width: Int,
-                height: Int,
-                referenceWidthUnits: Float,
-                physicallyMetric: Boolean,
-                pageNo: Int,
-                canonicalFromPage: FloatArray,
-            ): PhotosphereTrackingSession.RegisteredPage {
-                val r = session.addReference(
-                    luma = luma,
-                    width = width,
-                    height = height,
-                    referenceWidthMeters = referenceWidthUnits,
-                    physicallyMetric = physicallyMetric,
-                    pageNo = pageNo,
-                    canonicalFromPage = canonicalFromPage,
-                )
-                return PhotosphereTrackingSession.RegisteredPage(r.pageNo, r.featureCount, r.geometry, r.physicallyMetric)
-            }
-
-            override fun match(luma: ByteBuffer, timestampNs: Long): PlanarMatchResult? =
-                session.match(luma, timestampNs)?.let {
-                    PlanarMatchResult(it.pageNo, it.cameraFromCanonical, it.reprojectionError, it.inlierCount)
-                }
-
-            override fun fork(): PlanarFrontEnd? = session.fork()?.let(::kpm)
-
-            override fun close() = session.close()
-        }
+        /** [kpm] with the default [KpmMatchSpeedConfig]. */
+        val KPM: PlanarFrontEndFactory = kpm()
     }
 }
 

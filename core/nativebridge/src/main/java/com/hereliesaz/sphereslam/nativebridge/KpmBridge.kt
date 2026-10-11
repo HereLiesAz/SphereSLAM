@@ -104,6 +104,25 @@ object KpmBridge {
     }
 
     /**
+     * [matchPlanar] with two additions:
+     *
+     * - [pageNo] `>= 0` matches against that atlas page only (a single-page matcher built lazily from
+     *   the already-extracted page features), so FREAK search and verification cost one page instead
+     *   of the whole atlas. `-1` matches every page, exactly like [matchPlanar].
+     * - out[14] receives the number of inlier correspondences written to [correspondences] (may be
+     *   null): rows of 4 floats — query x, y in this session's frame pixels, then page x, y in KPM
+     *   page millimetres (the frame the 3x4 pose maps from, z = 0).
+     *
+     * [out] must hold at least [MATCH_EX_OUTPUT_FLOATS] floats. Returns pageNo, or -1 on no match.
+     */
+    fun matchPlanarEx(session: Long, luma: ByteBuffer, pageNo: Int, out: FloatArray, correspondences: FloatArray?): Int {
+        require(session != 0L)
+        require(luma.isDirect)
+        require(out.size >= MATCH_EX_OUTPUT_FLOATS)
+        return nativeMatchPlanarEx(session, luma, pageNo, out, correspondences)
+    }
+
+    /**
      * Drops every page from the session's atlas, keeping its calibration. After this, [matchPlanar]
      * reports no match until a page is added again with [addPlanarPage]; previously added pages can
      * never match again. Returns false when the session is unknown or the matcher could not be
@@ -152,8 +171,16 @@ object KpmBridge {
     ): Int
     private external fun nativeMatchPlanar(session: Long, luma: ByteBuffer, out: FloatArray): Int
     private external fun nativeCloneSession(session: Long): Long
+    private external fun nativeMatchPlanarEx(
+        session: Long,
+        luma: ByteBuffer,
+        pageNo: Int,
+        out: FloatArray,
+        correspondences: FloatArray?,
+    ): Int
     private external fun nativeClearPages(session: Long): Boolean
     private external fun nativeDestroySession(session: Long)
 
     const val MATCH_OUTPUT_FLOATS = 14
+    const val MATCH_EX_OUTPUT_FLOATS = 15
 }

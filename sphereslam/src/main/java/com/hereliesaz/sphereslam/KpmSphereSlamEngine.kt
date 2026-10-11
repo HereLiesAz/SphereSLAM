@@ -19,7 +19,7 @@ internal class KpmSphereSlamEngine private constructor(
     // Volatile: [fork] may run on a background thread while the owner thread matches or closes.
     @Volatile
     private var session: Long = initialSession
-    private val scratch = FloatArray(14)
+    private val scratch = FloatArray(15)
 
     override val isReady: Boolean
         get() = session != 0L
@@ -72,6 +72,24 @@ internal class KpmSphereSlamEngine private constructor(
         val cloned = api.clone(active)
         if (cloned == 0L) return null
         return KpmSphereSlamEngine(frameWidth, frameHeight, calibration, api, cloned)
+    }
+
+    override fun match(luma: ByteBuffer, request: PlanarMatchRequest): PlanarMatch? {
+        if (request.pageNo == PlanarMatchRequest.ALL_PAGES && request.maxCorrespondences == 0) return match(luma)
+        val active = requireOpen()
+        val packed = packedView(luma, frameWidth, frameHeight)
+        val corr = if (request.maxCorrespondences > 0) FloatArray(request.maxCorrespondences * 4) else null
+        scratch[14] = 0f
+        val pageNo = api.matchEx(active, packed, request.pageNo, scratch, corr)
+        if (pageNo < 0) return null
+        val written = scratch[14].toInt().coerceIn(0, request.maxCorrespondences)
+        return PlanarMatch(
+            pageNo = pageNo,
+            cameraFromPage3x4 = scratch.copyOfRange(0, 12),
+            reprojectionError = scratch[12],
+            inlierCount = scratch[13].toInt().coerceAtLeast(0),
+            correspondences = corr?.copyOf(written * 4) ?: FloatArray(0),
+        )
     }
 
     override fun close() {

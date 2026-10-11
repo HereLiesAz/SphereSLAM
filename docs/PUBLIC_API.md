@@ -20,6 +20,7 @@ Recommended entry points:
 - `SphereSlamEngine`
 - `PlanarPage`
 - `PlanarMatch`
+- `PlanarMatchRequest`
 - `SphereSlamStandaloneSession`
 - `AnchoredStandaloneSession`
 - `SphereSlamTracker`
@@ -41,7 +42,8 @@ Supporting packages (all pure / Android-light, no ARCore types):
 - `com.hereliesaz.sphereslam.attitude` — `GameRotationAttitudeSource`, `AttitudeSample`,
   `DeviceCameraRotation`, `AttitudeRotationBridge`, `AttitudeExtrapolator`, `DisplayPosePredictor`.
 - `com.hereliesaz.sphereslam.camera` — `CameraIntrinsics`, `CameraIntrinsicsEstimator`,
-  `CameraIntrinsicsTransforms`, `CaptureRotation`, `LumaFrameTransform`, `ProjectionMatrix`,
+  `CameraIntrinsicsTransforms`, `CaptureRotation`, `LumaFrameTransform` (plus
+  `LumaFrameBufferPool` / `packCropAndRotateInto` for allocation-free camera loops), `ProjectionMatrix`,
   `ScreenIntrinsics` (`FIT_CENTER`), `CameraFillCenter` (`FILL_CENTER`: track the full frame, apply
   the display crop only where the frame meets the screen).
 - `com.hereliesaz.sphereslam.sidecar` — `HybridPoseHistory`, `HybridPageFrame`,
@@ -115,10 +117,30 @@ layer). Any exception while processing a frame is terminal (`TrackingState.FATAL
 `Callbacks.onFatalError`). `PhotosphereAtlasGrowth`, `TargetQuality` and `TrackingFailureClassifier`
 are usable on their own.
 
+Per-frame matching cost is set by `Config.matchSpeed` (`KpmMatchSpeedConfig`): KPM matches a
+half-resolution luma by default (intrinsics scaled to match, same pose convention), poses between full
+solves come from Lucas–Kanade flow + PnP against the KPM inlier correspondences (full solve on loss
+and at least every 10 frames / 500 ms), and a multi-page atlas is matched predicted-page-first.
+`TrackedPose.matchMethod` (`VisualMatchMethod`) says which path produced a pose. Flow tracking needs
+OpenCV's native library loaded (as for `Relocalizer`); without it every frame is a full KPM solve.
+`KpmMatchSpeedConfig.FULL_KPM_EVERY_FRAME` restores the previous every-frame full-resolution solve.
+`SphereSlamStandaloneSession.match(luma, timestampNs, PlanarMatchRequest(pageNo, maxCorrespondences))`
+exposes the underlying single-page match and inlier correspondences, and
+`SphereSlamStandaloneSession.cameraFromCanonical(pageNo, cameraFromPage3x4)` converts an externally
+solved page pose with the same conversion as `match`.
+
+Matcher builds and atlas growth run on the session's own background thread: growth forks the live
+matcher (`SphereSlamStandaloneSession.fork()`), adds the page to the fork and swaps it in on a later
+frame; `onFrame` never blocks on page feature extraction or index rebuilds. Until the first build
+lands a frame carries only the base pose. `Frame.luma` is not retained after `onFrame`.
+
 #### `:models`
 
 Optional ONNX model wrappers are marked with `ExperimentalSphereSlamModelsApi`. They are not part
 of the compatibility-guaranteed planar API.
+`DepthEstimator` takes `DepthEstimatorOptions` (intra-op threads, default 2; CPU / XNNPACK / NNAPI
+with CPU fallback, see `activeExecutionProvider`) and accepts a luma plane directly via
+`estimateLuma`.
 
 ### Internal modules
 
