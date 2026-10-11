@@ -115,6 +115,42 @@ class SphereSlamStandaloneSessionTest {
     }
 
     @Test
+    fun matchRequest_forwardsPageAndCorrespondences_andExternalPosesConvertIdentically() {
+        val engine = FakeEngine()
+        val session = SphereSlamStandaloneSession(
+            frameWidth = 4,
+            frameHeight = 2,
+            calibration = SphereSlamCalibration(4f, 4f, 2f, 1f),
+            engineFactory = SphereSlamStandaloneSession.EngineFactory { _, _, _ -> engine },
+        )
+        session.addReference(ByteBuffer.allocateDirect(8), 4, 2, 1f, true, pageNo = 0)
+        session.addReference(
+            ByteBuffer.allocateDirect(8), 4, 2, 1f, true, pageNo = 1,
+            canonicalFromPage = SphereSlamPoseMath.identity4().also { it[12] = 1f },
+        )
+        val pose3x4 = floatArrayOf(1f, 0f, 0f, 3f, 0f, 1f, 0f, -2f, 0f, 0f, 1f, 1000f)
+        val corr = floatArrayOf(1f, 1f, 10f, 20f, 2f, 0.5f, 30f, 40f)
+        engine.nextMatch = PlanarMatch(1, pose3x4, 0.2f, 24, corr)
+
+        val request = PlanarMatchRequest(pageNo = 1, maxCorrespondences = 50)
+        val pose = requireNotNull(session.match(ByteBuffer.allocateDirect(8), 5L, request))
+        assertEquals(request, engine.lastRequest)
+        assertArrayEquals(corr, pose.correspondences, 0f)
+        assertArrayEquals(pose3x4, pose.cameraFromPage3x4, 0f)
+        // A pose solved elsewhere (e.g. flow tracking) converts exactly like a match.
+        assertArrayEquals(pose.cameraFromCanonical, session.cameraFromCanonical(1, pose3x4)!!, 0f)
+        assertNull(session.cameraFromCanonical(7, pose3x4))
+        // A page that is not registered never reaches the engine.
+        engine.lastRequest = null
+        assertNull(session.match(ByteBuffer.allocateDirect(8), 5L, PlanarMatchRequest(pageNo = 9)))
+        assertNull(engine.lastRequest)
+        // The plain overload is the all-pages request.
+        session.match(ByteBuffer.allocateDirect(8), 6L)
+        assertEquals(PlanarMatchRequest(), engine.lastRequest)
+        session.close()
+    }
+
+    @Test
     fun switchingAcrossThreePages_keepsExactlyOneCanonicalCameraPose() {
         val engine = FakeEngine()
         val session = SphereSlamStandaloneSession(
@@ -266,6 +302,13 @@ class SphereSlamStandaloneSessionTest {
         }
 
         override fun match(luma: ByteBuffer): PlanarMatch? = nextMatch
+
+        var lastRequest: PlanarMatchRequest? = null
+
+        override fun match(luma: ByteBuffer, request: PlanarMatchRequest): PlanarMatch? {
+            lastRequest = request
+            return nextMatch
+        }
 
         override fun close() {
             if (!isReady) return

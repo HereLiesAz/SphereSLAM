@@ -62,6 +62,18 @@ class PhotosphereTrackingSessionTest {
             return next
         }
 
+        val inputs = mutableListOf<PlanarFrameInput>()
+        val verdicts = mutableListOf<Boolean>()
+
+        override fun match(input: PlanarFrameInput): PlanarMatchResult? {
+            inputs += input
+            return match(input.luma, input.timestampNs)
+        }
+
+        override fun onVerdict(accepted: Boolean) {
+            verdicts += accepted
+        }
+
         override fun close() {
             closed = true
         }
@@ -299,6 +311,53 @@ class PhotosphereTrackingSessionTest {
         // A rebuild re-registers the grown page.
         s.onFrame(frame(k = CameraIntrinsics(500f, 500f, 320f, 240f, 640, 480).copy(fx = 501f)))
         assertEquals(listOf(0, 1), fronts.last().pages.map { it.first })
+    }
+
+    @Test
+    fun `the front end gets frame context, gate verdicts and a gyro-predicted pose`() {
+        val s = session()
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame(yaw(0.0)))
+        val fe = fronts.single()
+        assertNull(fe.inputs.single().predictedCameraFromCanonical) // nothing accepted yet
+        assertTrue(fe.verdicts.isEmpty()) // no pose, no verdict
+        assertEquals(nowNs / 1_000_000L, fe.inputs.single().nowMs)
+
+        val wall = viewAt(0f, 0f, 2f)
+        fe.next = match(wall)
+        repeat(2) { s.onFrame(frame(yaw(0.0))) }
+        assertEquals(listOf(true, true), fe.verdicts)
+
+        // The next frame's prediction is the accepted pose rotated by the gyro change since.
+        fe.next = null
+        s.onFrame(frame(yaw(10.0)))
+        val predicted = fe.inputs.last().predictedCameraFromCanonical!!
+        assertEquals(10f, RigidMath.rotationAngleDeg(RigidMath.multiply(predicted, RigidMath.rigidInverse(wall))), 1e-2f)
+        assertTrue(fe.inputs.last().lumaBytes.contentEquals(textured))
+
+        // A gated-out pose is reported back as rejected.
+        fe.next = match(wall, inliers = 1)
+        s.onFrame(frame(yaw(10.0)))
+        assertEquals(false, fe.verdicts.last())
+    }
+
+    @Test
+    fun `flow-tracked poses carry their method and never grow the atlas`() {
+        val s = session()
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame())
+        fronts.single().next = PlanarMatchResult(0, viewAt(0.6f, 0f, 1f), 1f, 30, VisualMatchMethod.FLOW)
+        val r = run {
+            s.onFrame(frame())
+            s.onFrame(frame())
+        }
+        assertEquals(VisualMatchMethod.FLOW, r.pose!!.matchMethod)
+        assertEquals(PhotosphereTrackingSession.PoseSource.KPM, r.pose!!.source)
+        assertTrue(rec.grown.isEmpty())
+        // The same pose from a KPM solve does grow it.
+        fronts.single().next = PlanarMatchResult(0, viewAt(0.6f, 0f, 1f), 1f, 30, VisualMatchMethod.KPM_FOCUSED)
+        assertEquals(VisualMatchMethod.KPM_FOCUSED, s.onFrame(frame()).pose!!.matchMethod)
+        assertEquals(1, rec.grown.size)
     }
 
     @Test

@@ -46,6 +46,25 @@ class KpmSphereSlamEngineTest {
         engine.close()
     }
 
+    @Test
+    fun matchRequest_usesExtendedNativeMatch_andTrimsCorrespondences() {
+        val api = FakeKpmApi()
+        val engine = KpmSphereSlamEngine(4, 4, calibration, api)
+        engine.addPage(ByteBuffer.allocateDirect(16), 4, 4, PlanarPage(pageNo = 7))
+
+        val match = requireNotNull(engine.match(ByteBuffer.allocateDirect(16), PlanarMatchRequest(pageNo = 7, maxCorrespondences = 5)))
+        assertEquals(7, api.exPage)
+        assertEquals(20, api.exCorrCapacity)
+        assertEquals(2, match.correspondenceCount)
+        assertEquals(listOf(1f, 2f, 3f, 4f, 5f, 6f, 7f, 8f), match.correspondences.toList())
+
+        // The default request takes the original path (no correspondences).
+        api.exPage = Int.MIN_VALUE
+        assertEquals(0, engine.match(ByteBuffer.allocateDirect(16), PlanarMatchRequest())!!.correspondenceCount)
+        assertEquals(Int.MIN_VALUE, api.exPage)
+        engine.close()
+    }
+
     private class FakeKpmApi(
         private val matchPage: Int = 7,
     ) : KpmApi {
@@ -78,6 +97,18 @@ class KpmSphereSlamEngineTest {
             out[12] = 0.25f
             out[13] = 9f
             return matchPage
+        }
+
+        var exPage = Int.MIN_VALUE
+        var exCorrCapacity = -1
+
+        override fun matchEx(session: Long, luma: ByteBuffer, pageNo: Int, out: FloatArray, correspondences: FloatArray?): Int {
+            exPage = pageNo
+            exCorrCapacity = correspondences?.size ?: 0
+            val page = match(session, luma, out)
+            if (correspondences != null) for (i in 0 until 8) correspondences[i] = (i + 1).toFloat()
+            out[14] = 2f
+            return page
         }
 
         override fun destroy(session: Long) {

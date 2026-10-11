@@ -2,6 +2,47 @@
 
 ## Unreleased — audit fixes
 
+### Standalone tracking speed: downscaled KPM, flow tracking between solves, focused pages
+
+`PhotosphereTrackingSession` ran a full-resolution, all-pages native `kpmMatching` on every analyzer
+frame (est. 40–150+ ms at 640×480, growing with atlas pages), so the overlay pose only updated at
+that rate. New `Config.matchSpeed: KpmMatchSpeedConfig` (defaults on; additive API):
+
+- **Downscaled matching** (`matchDownscale = 2`, never below `minMatchShortSidePx = 240`): KPM runs
+  on a box-filtered luma with intrinsics scaled in the pixel-centre convention
+  (`fx' = fx/f`, `cx' = (cx + ½)/f − ½`). The calibrated pose is resolution-independent, so the returned
+  camera-from-wall transform has the same convention; the reprojection error stays in the pixels KPM
+  solved in (its own ≤ 10 px² gate and `PoseAcceptanceConfig` were tuned on that scale). artoolkitX's
+  own `kpmSetProcMode` is deliberately not used: in the pinned FREAK path the pose solve consumes
+  unscaled query coordinates against full-size calibration, giving wrong poses for any reduced mode.
+- **Frame-to-frame flow tracking** (`flowTracking`): the full solve's inlier correspondences (frame
+  pixel ↔ page millimetre) are tracked at full resolution with forward–backward-checked pyramidal
+  Lucas–Kanade and the pose is re-solved by iterative PnP against the page's own reference
+  coordinates (AR2-style; no chained drift), with one residual-outlier pass. A full KPM solve runs on
+  flow loss, too few inliers (`minFlowInliers`, `minFlowInlierFraction`), RMS error above
+  `maxFlowRmsErrorPx`, a pose-gate rejection, and at least every `fullSolveEveryFrames` (10) frames /
+  `fullSolveIntervalMs` (500 ms); a missed periodic solve may be covered by flow for at most
+  `maxFlowOnlyMs`. Requires OpenCV's native library (as `Relocalizer`); without it flow turns itself
+  off. Flow poses never grow the atlas.
+- **Focused page matching** (`focusedPageMatching`): with ≥ 2 pages and a lock within
+  `focusWindowMs`, the page under the gyro-predicted optical axis (hysteresis on the last locked page)
+  is matched alone first, falling back to all pages on a miss.
+- `TrackedPose.matchMethod` / `VisualMatchMethod` (`KPM_FULL`, `KPM_FOCUSED`, `FLOW`); the periodic KPM
+  diagnostic appends `method=`. `KpmMatchSpeedConfig.FULL_KPM_EVERY_FRAME` restores the old behaviour.
+- `:sphereslam`: `PlanarMatchRequest(pageNo, maxCorrespondences)`,
+  `SphereSlamEngine.match(luma, request)` (default ignores the request),
+  `SphereSlamStandaloneSession.match(luma, timestampNs, request)`,
+  `SphereSlamStandaloneSession.cameraFromCanonical(pageNo, cameraFromPage3x4)`,
+  `Pose.cameraFromPage3x4` / `Pose.correspondences`, `PlanarMatch.correspondences` (old constructor
+  kept).
+- Native (`KpmBridge.matchPlanarEx`): single-page matchers built lazily from the already-extracted
+  atlas features, inlier correspondence export, and the redundant per-page-slot ICP pose solves in
+  the FREAK path skipped (`kpmSetMatchingSkipPage` on every slot but the first — same pose, N−1 fewer
+  solves). C++ exceptions no longer cross JNI.
+- **Fix:** adding a second atlas page called `kpmSetRefDataSet` on a handle that already held pages;
+  the FREAK database re-adds image id 0 and throws `"ID already exists"`, aborting the process. The
+  matcher is now rebuilt from the retained calibration before loading the grown atlas.
+
 ### Coverage glow: display-rate, full-rotation tracking and styles (additive)
 
 Why the glow felt loosely attached to the scene (diagnosis):

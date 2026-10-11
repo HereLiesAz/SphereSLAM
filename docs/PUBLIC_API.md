@@ -20,6 +20,7 @@ Recommended entry points:
 - `SphereSlamEngine`
 - `PlanarPage`
 - `PlanarMatch`
+- `PlanarMatchRequest`
 - `SphereSlamStandaloneSession`
 - `AnchoredStandaloneSession`
 - `SphereSlamTracker`
@@ -114,6 +115,18 @@ transform back on the next `updatePrecisionLayer` call (a different transform re
 layer). Any exception while processing a frame is terminal (`TrackingState.FATAL`,
 `Callbacks.onFatalError`). `PhotosphereAtlasGrowth`, `TargetQuality` and `TrackingFailureClassifier`
 are usable on their own.
+
+Per-frame matching cost is set by `Config.matchSpeed` (`KpmMatchSpeedConfig`): KPM matches a
+half-resolution luma by default (intrinsics scaled to match, same pose convention), poses between full
+solves come from Lucas–Kanade flow + PnP against the KPM inlier correspondences (full solve on loss
+and at least every 10 frames / 500 ms), and a multi-page atlas is matched predicted-page-first.
+`TrackedPose.matchMethod` (`VisualMatchMethod`) says which path produced a pose. Flow tracking needs
+OpenCV's native library loaded (as for `Relocalizer`); without it every frame is a full KPM solve.
+`KpmMatchSpeedConfig.FULL_KPM_EVERY_FRAME` restores the previous every-frame full-resolution solve.
+`SphereSlamStandaloneSession.match(luma, timestampNs, PlanarMatchRequest(pageNo, maxCorrespondences))`
+exposes the underlying single-page match and inlier correspondences, and
+`SphereSlamStandaloneSession.cameraFromCanonical(pageNo, cameraFromPage3x4)` converts an externally
+solved page pose with the same conversion as `match`.
 
 #### `:models`
 
