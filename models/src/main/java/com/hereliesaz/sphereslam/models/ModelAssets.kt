@@ -6,8 +6,9 @@ import android.util.Log
 import java.io.File
 
 /**
- * Shared asset extraction for the ONNX wrappers. ORT opens a model from a file path, so a bundled
- * asset is copied to `filesDir` once — and **re-copied when its size differs from the bundled asset**
+ * Shared asset extraction for the model wrappers. ONNX Runtime and LiteRT open a model from a file
+ * path (LiteRT memory-maps it, which a compressed APK asset would not allow), so a bundled asset is
+ * copied to `filesDir` once — and **re-copied when its size differs from the bundled asset**
  * (an app update shipping a new model under the same name must not keep running the stale copy).
  * The copy is written to a temp file and renamed into place, so a crash mid-copy never leaves a
  * truncated model at the final path.

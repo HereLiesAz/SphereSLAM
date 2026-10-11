@@ -22,7 +22,7 @@ SphereSLAM is **pre-1.0**. There is no fictitious “frozen since 1.0” contrac
 | `:sphereslam` | **Supported pre-1.0 API** | Planar tracking, standalone tracking, ARCore sidecar tracking, coverage, placement |
 | `:overlay` | **Supported pre-1.0 API** | Optional coverage-haze UI |
 | `:reloc` | **Experimental** | OpenCV-backed photosphere/relocalization primitives |
-| `:models` | **Experimental** | Optional ONNX model helpers |
+| `:models` | **Experimental** | Optional model helpers: MiDaS depth on LiteRT GPU, SuperPoint / Zero-DCE on ONNX Runtime ([models](docs/MODELS.md)) |
 | `:core:common` | **Internal** | Native loading/implementation support |
 | `:core:nativebridge` | **Internal** | JNI/KPM bridge |
 

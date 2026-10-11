@@ -45,14 +45,37 @@ through a per-pixel `ByteBuffer.get` loop.
   `slots − 1` frames or copy) and `packCropAndRotateInto` / `packAndRotateInto` (caller-owned
   destination). The existing `packAndRotate` / `packCropAndRotate` still return a fresh array, so
   callers that retain frames are unaffected.
-- **`:models` `DepthEstimator`.** New `DepthEstimatorOptions(intraOpThreads = 2,
-  executionProvider = CPU | XNNPACK | NNAPI, allowSpinning = false)` constructor parameter (the old
-  5-argument constructor is kept): the requested provider falls back to CPU when it cannot be added or
-  the session fails to open (`activeExecutionProvider` reports which). Behaviour change: the default
-  is now 2 intra-op threads with spinning off (was ONNX Runtime's one-per-core default). New
-  `estimateLuma(luma, width, height, rowStride, outMaxDim)` feeds a grey plane straight into the
-  model (bilinear resample, grey in all three channels) without an ARGB `Bitmap` round trip, reusing
-  its input buffers.
+- **`:models` `DepthEstimator`.** New `estimateLuma(luma, width, height, rowStride, outMaxDim)`
+  feeds a grey plane straight into the model (bilinear resample, grey in all three channels) without
+  an ARGB `Bitmap` round trip, reusing its input buffers.
+- **`:models` `DepthEstimator` runs on the GPU (LiteRT).** Monocular depth moved from ONNX Runtime
+  (CPU) to **LiteRT 1.4.2** (`com.google.ai.edge.litert:litert`, `litert-gpu`, `litert-gpu-api`) with
+  the **GPU delegate** as the default: fp16 precision allowed, sustained-speed preference, compiled
+  programs serialized under `codeCacheDir/sphereslam-depth-gpu` (token = model name + size + CRC32).
+  Opening runs one warm-up inference; if the GPU delegate cannot be created, the device is on LiteRT's
+  GPU compatibility block list, or that first run fails, it falls back to LiteRT's XNNPACK CPU path
+  and logs an **error** (GPU is the expected path). `activeBackend` reports the backend truthfully.
+  - **Model:** `midas_v21_small_256_int8.onnx` (17.3 MB) is replaced by
+    `midas_v21_small_256_fp16.tflite` (33.2 MB) — the official isl-org/MiDaS `v2_1`
+    `model_opt.tflite` (MIT) with float16 weights (`models/tools/tflite_fp16_weights.py`); outputs
+    match the fp32 file within 0.15 % and track the PyTorch reference far better than the old ONNX
+    path did. `DepthEstimator.MODEL_ASSET` changed accordingly. Provenance, sha256 and the size change:
+    `docs/MODELS.md`.
+  - **Threading:** the estimator owns a single `SphereSLAM-depth` thread; the delegate is created,
+    run and closed there, and `load` / `loadFrom` / `estimate` / `estimateLuma` / `close` hand their
+    model work to it and block, so callers may use any (and changing) threads. `close()` ends the
+    thread; a later `load()` starts a new one.
+  - **Options (replacing this branch's unreleased ONNX ones):** `DepthEstimatorOptions(backend = GPU
+    | CPU, cpuThreads = 2, allowFp16Precision = true, gpuProgramCache = true)`; `activeBackend`
+    replaces `activeExecutionProvider`. The `intraOpThreads` / `XNNPACK` / `NNAPI` / `allowSpinning`
+    options never shipped in a release and are gone.
+  - Unchanged: constructors, `load`, `loadFrom` (now takes a `.tflite` path), `estimate`,
+    `estimateLuma`, `inputSize` (default 256), `MEAN`/`STD`, and `DepthMap` (MiDaS relative inverse
+    depth, row-major, at most `outMaxDim` on the long side). Custom models may be NHWC or NCHW.
+  - `:models` now ships consumer R8 rules (LiteRT reflection/JNI and ONNX Runtime's JNI exception
+    class), so apps need no keep rules of their own for it. Do not add LiteRT 2.x (`litert:2.*`) to an
+    app using `:models`: it drops the classic delegate API that `litert-gpu` 1.4.2 needs.
+  - SuperPoint and Zero-DCE stay on ONNX Runtime, unchanged.
 ### Standalone tracking speed: downscaled KPM, flow tracking between solves, focused pages
 
 `PhotosphereTrackingSession` ran a full-resolution, all-pages native `kpmMatching` on every analyzer

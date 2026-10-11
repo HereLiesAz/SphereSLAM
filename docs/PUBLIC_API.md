@@ -136,11 +136,15 @@ lands a frame carries only the base pose. `Frame.luma` is not retained after `on
 
 #### `:models`
 
-Optional ONNX model wrappers are marked with `ExperimentalSphereSlamModelsApi`. They are not part
-of the compatibility-guaranteed planar API.
-`DepthEstimator` takes `DepthEstimatorOptions` (intra-op threads, default 2; CPU / XNNPACK / NNAPI
-with CPU fallback, see `activeExecutionProvider`) and accepts a luma plane directly via
-`estimateLuma`.
+Optional on-device model wrappers are marked with `ExperimentalSphereSlamModelsApi`. They are not
+part of the compatibility-guaranteed planar API.
+`DepthEstimator` runs MiDaS v2.1 Small (fp16 TFLite) on **LiteRT with the GPU delegate**;
+`DepthEstimatorOptions(backend = GPU | CPU, cpuThreads = 2, allowFp16Precision = true,
+gpuProgramCache = true)` selects the backend, and a GPU that fails to initialise falls back to the
+XNNPACK CPU path (logged as an error; `activeBackend` reports which). All model work runs on the
+estimator's own `SphereSLAM-depth` thread, so its methods may be called from any thread (they block).
+It accepts a luma plane directly via `estimateLuma`. `SuperPointDetector` and `LowLightEnhancer` stay
+on ONNX Runtime (CPU). Model provenance and sizes: [MODELS.md](MODELS.md).
 
 ### Internal modules
 
