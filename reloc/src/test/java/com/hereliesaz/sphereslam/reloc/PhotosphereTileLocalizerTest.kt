@@ -112,6 +112,30 @@ class PhotosphereTileLocalizerTest {
     }
 
     @Test
+    fun `the tiles around the lock direction outlive the tile cap`() {
+        val loc = PhotosphereTileLocalizer(backend, PhotosphereTileLocalizer.Config(maxTilesPerStation = 4))
+        val s0 = loc.addStation(DoubleArray(3))
+        val origin = DoubleArray(3)
+        fun add(yaw: Double) = loc.addTile(s0, lumaFor(Pose(rot(yaw), origin)), w, h, k, rot(yaw))!!
+        val lockTile = add(0.0)
+        loc.anchor(s0, rot(2.0)) // the wall locked from (near) the first tile's direction
+        assertTrue(lockTile.anchored)
+        // Neighbours captured after the lock (within anchorRadiusDeg = 18) are anchored too.
+        val right = add(15.0)
+        val left = add(-15.0)
+        assertTrue(right.anchored && left.anchored)
+        // Farther tiles fill the cap and push each other out; the anchor tiles stay.
+        val far = listOf(30.0, -30.0, 45.0, -45.0).map { add(it) }
+        assertTrue(far.none { it.anchored })
+        assertEquals(4, s0.tileCount)
+        assertEquals(listOf(lockTile, right, left, far.last()), s0.tiles)
+        assertEquals(3, s0.anchorTileCount)
+        // A later lock elsewhere does not move the anchor.
+        loc.anchor(s0, rot(45.0))
+        assertEquals(3, s0.anchorTileCount)
+    }
+
+    @Test
     fun `keyframes closer than the tile spacing do not add tiles`() {
         val loc = PhotosphereTileLocalizer(backend)
         val s0 = loc.addStation(DoubleArray(3))

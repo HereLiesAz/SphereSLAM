@@ -26,7 +26,10 @@ import kotlin.math.abs
  * - the **camera centre**: from wall locks and landmark (6-DoF) tile fixes;
  * - the **stations**: when a fix puts the camera more than the spawn distance from every station, a
  *   new one opens there and becomes active (earlier ones are kept); within half that of another
- *   station, that one becomes active again.
+ *   station, that one becomes active again;
+ * - the **anchor**: a station's first lock anchors its tiles around that view direction — the lock
+ *   tile and its neighbours outlive the per-station tile cap, so the wall's surroundings stay
+ *   recognisable however long the artist works away from it ([PhotosphereTileLocalizer.anchor]).
  *
  * Tile capture, comparison and localization run on a serial worker ([PhotosphereTileLocalizer] is only
  * touched there); a finished fix is adopted on the next frame unless a newer fix (or lock) has landed
@@ -81,6 +84,7 @@ internal class PhotosphereStationTracker(
     private var spawnDistance = DEFAULT_SPAWN_DISTANCE
     private var closed = false
     private var wallKey: List<Float>? = null
+    private val anchoredStations = HashSet<Int>()
 
     // Counters for the periodic diagnostic (analyzer thread).
     private var rotationFixes = 0
@@ -89,6 +93,7 @@ internal class PhotosphereStationTracker(
     @Volatile private var tileCount = 0
     @Volatile private var landmarkCount = 0
     @Volatile private var pseudoCount = 0
+    @Volatile private var anchorCount = 0
 
     /** Stations opened so far. */
     val stationCount: Int get() = stationCentres.size
@@ -194,10 +199,22 @@ internal class PhotosphereStationTracker(
      */
     fun onLock(renderedMapView: FloatArray, base: DoubleArray, nowMs: Long) {
         if (closed) return
-        correction = mul3(transpose3(base), rotationOfView(renderedMapView))
+        val rotation = rotationOfView(renderedMapView)
+        correction = mul3(transpose3(base), rotation)
         lastFixMs = nowMs
         lastLockMs = nowMs
         setCentre(centreOfView(renderedMapView), nowMs)
+        // Once per station: its first lock's view direction anchors the tiles around it.
+        val station = activeStation
+        if (station >= 0 && anchoredStations.add(station)) {
+            val rotationCv = cv(rotation)
+            val gen = generation.get()
+            submit {
+                if (gen != generation.get()) return@submit
+                localizer.stations.getOrNull(station)?.let { localizer.anchor(it, rotationCv) }
+                refreshCounts()
+            }
+        }
     }
 
     /**
@@ -244,6 +261,7 @@ internal class PhotosphereStationTracker(
         lastLockMs = Long.MIN_VALUE
         lastCentreMs = Long.MIN_VALUE
         stationCentres.clear()
+        anchoredStations.clear()
         activeStation = -1
         centre.fill(0.0)
         wallKey = null
@@ -254,13 +272,14 @@ internal class PhotosphereStationTracker(
     /** `tiles{…}` for the periodic diagnostic. */
     fun summary(): String = String.format(
         Locale.US,
-        "tiles{stations=%d active=%d tiles=%d landmarks=%d depthPoints=%d rotFixes=%d poseFixes=%d%s}",
-        stationCentres.size, activeStation, tileCount, landmarkCount, pseudoCount, rotationFixes, poseFixes,
+        "tiles{stations=%d active=%d tiles=%d anchored=%d landmarks=%d depthPoints=%d rotFixes=%d poseFixes=%d%s}",
+        stationCentres.size, activeStation, tileCount, anchorCount, landmarkCount, pseudoCount, rotationFixes, poseFixes,
         if (disabled) " disabled" else "",
     ).also { rotationFixes = 0; poseFixes = 0 }
 
     private fun refreshCounts() {
         tileCount = localizer.stations.sumOf { it.tileCount }
+        anchorCount = localizer.stations.sumOf { it.anchorTileCount }
         landmarkCount = localizer.stations.sumOf { st -> st.tiles.sumOf { it.landmarkCount } }
         pseudoCount = localizer.stations.sumOf { st -> st.tiles.sumOf { it.pseudoLandmarkCount } }
     }

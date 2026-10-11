@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Anchor tiles.** A station's tile cap (64) dropped the oldest tile first, and the oldest are the
+  ones around the wall, captured at the first lock, so a long session forgot exactly the tiles that
+  re-find the wall. A station's first lock now anchors its view direction: the lock tile and its
+  immediate neighbours (`PhotosphereTileLocalizer.Config.anchorRadiusDeg`, 18° = 1.5 × tile spacing),
+  including those captured later, are never evicted. The periodic diagnostic gains
+  `tiles{… anchored=N …}`.
 - **The photosphere is a sphere.** `SphereCoverage` / `PhotosphereMap` defaulted to a front region —
   12 sectors over ±85° and one band (±60° when banded) — so the ceiling, the floor and everything
   behind the start lay outside the lattice: never scannable, glowing for good, and "100 %" meant a
