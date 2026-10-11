@@ -171,7 +171,7 @@ To draw the coverage inside your own GL renderer (beneath your artwork), use
 | --- | --- |
 | `math` | `RotationMath`, `RigidMath` (quaternions, rigid/similarity 4×4, GL ↔ CV flips) |
 | `attitude` | `GameRotationAttitudeSource`, `DeviceCameraRotation`, `AttitudeRotationBridge` |
-| `camera` | `CameraIntrinsicsEstimator`, `CaptureRotation`, `LumaFrameTransform`, `ProjectionMatrix`, `ScreenIntrinsics` |
+| `camera` | `CameraIntrinsicsEstimator`, `CaptureRotation`, `LumaFrameTransform`, `ProjectionMatrix`, `ScreenIntrinsics` (`FIT_CENTER`), `CameraFillCenter` (`FILL_CENTER` projection, tap mapping, FOV) |
 | `sidecar` | ARCore + KPM sidecar fusion: `HybridPoseHistory`, `HybridKpmCorrection`, `HybridAnchorFusion`, `MetricPageRectification` |
 | `gyro` | `GyroCompensationMath` (gyro-stabilised screen overlays) |
 
@@ -216,6 +216,33 @@ experimental contract can opt in:
 fun useReloc() {
     // ...
 }
+~~~
+
+Wide-area relocalization: `WallFeatureMap` grows from every successful `RelocResult` and is matched
+frustum-gated (`visibleIndices` → `toFingerprint`); `RectifyHomography` pre-cancels oblique
+perspective; `MetricMarks` builds metric marks from a known plane or two views; `RadialDepthPlacement`
+places off-wall features from a calibrated relative depth map.
+
+`PlanarTracker` is the small case: track one captured reference image and get an OpenGL view matrix
+per frame (`setReference(luma, w, h, halfW, halfH)`, then `track(luma, w, h, intrinsics, attitude)`),
+with a short gyro bridge across misses.
+
+For a phone without ARCore, `PhotosphereTrackingSession` is the whole frame-in / pose-out runtime
+(base photosphere from device attitude, planar KPM precision layer rebased into it, gyro bridge,
+self-growing page atlas):
+
+~~~kotlin
+val tracking = PhotosphereTrackingSession(
+    PhotosphereTrackingSession.Config(timestampSource = CameraTimestampSource.REALTIME),
+    PhotosphereTrackingSession.Callbacks(onMapFromFingerprintSolved = { persist(it) }),
+)
+tracking.updatePrecisionLayer(PhotosphereTrackingSession.ReferenceImage(luma, w, h))
+// per display-upright analysis frame:
+val result = tracking.onFrame(
+    PhotosphereTrackingSession.Frame(packedLuma, intrinsics, timestampNs, attitude.latestSample(),
+        DeviceCameraRotation.cameraFromDevice(sensorOrientation, rotationDegrees)),
+)
+result.pose?.let { draw(it.cameraFromMap, it.projection) }
 ~~~
 
 The optional `:models` module follows the same policy with

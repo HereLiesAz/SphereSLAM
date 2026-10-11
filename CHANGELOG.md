@@ -2,6 +2,59 @@
 
 ## Unreleased — audit fixes
 
+### App → library consolidation, part 2 (additive)
+
+The SLAM pieces deferred from the first consolidation. All additions are new API.
+
+- New `com.hereliesaz.sphereslam.camera.CameraFillCenter`: `FILL_CENTER` display math beside
+  `ScreenIntrinsics.fitCenter` — `scale`, `intrinsics` (rescale to cover, then centre-crop, rounded at
+  view resolution so registration stays within ½ view pixel), `projection`, `viewToFrameNormalized`
+  and the new inverse `frameToViewNormalized`, `fieldOfViewDegrees`, `screenIntrinsics` /
+  `screenIntrinsicsFallback`. `ScreenIntrinsics` gains `fillCenter(...)` / `fillCenterFallback(...)`
+  delegates. Ported with its tests from GraffitiXR `rendering.CameraFillCenter`.
+- `:reloc` `PhotosphereTrackingSession`: the standalone (no-ARCore) photosphere tracking runtime,
+  frame in / pose out (packed display-upright luma + `CameraIntrinsics` + timestamp +
+  `AttitudeSample` + body→camera rotation in; `FrameResult` / `TrackedPose` out, plus `Callbacks` for
+  keyframes, `map_from_fingerprint`, reference/atlas registration, failures, state and diagnostics).
+  Base rotation-only photosphere pose from the first attitude, quality-gated `PhotosphereKeyframe`s,
+  same-frame `map_from_fingerprint` solve and rebasing of the planar KPM pose into the map,
+  `RobustTrackingLoop` gating with an optional `correctAcceptedPose` hook, a ≤ 400 ms gyro bridge,
+  planar-session rebuild on an intrinsics change, `unitsPerPixel`, and multi-page atlas growth.
+  Ported from GraffitiXR `SphereSlamStandaloneTrackingAnalyzer`; CameraX, MobileGS, depth and UI stay
+  in the host.
+- `:reloc` `PhotosphereAtlasGrowth` (page proposal around the optical axis, overlap/baseline/margin
+  gates, perspective rectification through `MetricPageRectification.warpQuadToRect` instead of
+  OpenCV/Bitmap), `TargetQuality` / `TargetQualityConfig` / `TargetQualityReport` /
+  `ReferenceTooWeakException` (keyframe and page quality gate), and the failure taxonomy
+  `TrackingFailureReason` / `TrackingFailureSeverity` / `TrackingFailureEvent` /
+  `TrackingFailureClassifier` (no user-facing strings). Ported from GraffitiXR `StandaloneAtlasGrowth`,
+  `StandaloneTargetQuality` and `StandaloneFailure`.
+- `:reloc` relocalizer convergence with GraffitiXR's native `MobileGS` (pure Kotlin, no new JNI):
+  `WallPlane` (PCA plane fit, `transformedBy`), `RectifyHomography` (plane-induced homography
+  between the fingerprint capture view and the live view, obliquity, `warpCurrentToReference`;
+  **fix:** the native `computeRectifyHomography` used `R − t·nᵀ/d` for a plane written `nᵀX = d`,
+  which is wrong whenever the cameras translate — the library uses `R + t·nᵀ/d`, pinned by a
+  synthetic test), `WallFeatureMap` (the self-growing wall feature map of `growMapFromReloc`:
+  confidence re-observation, capacity pruning, wall-plane back-projection, frustum gate
+  `visibleIndices`, `toFingerprint` for `Relocalizer` (optionally merged with the base fingerprint),
+  snapshot / native-blob round-trip with GraffitiXR's `WallFeatureMap` model and
+  `exportWallFeatureMap` layout), and `InverseDepthMap` / `RadialDepthPlacement` (the
+  `setLatestDepthMap` radial placement of off-wall features, now calibrated with the robust
+  `DepthScaleFit` instead of plain least squares). `MetricMarks` adds single-view plane
+  back-projection (`backProjectToPlane`, `backProjectToCameraPlane`), two-view triangulation through
+  `TileTriangulator` (`triangulateTwoView`) and the display-orientation view helpers, ported from
+  GraffitiXR `anchor.PlaneMarks` / `anchor.MetricMarks`.
+- `:reloc` `PlanarTracker`: live planar tracking of one captured reference with a gyro bridge —
+  packed luma + `CameraIntrinsics` (+ optional `AttitudeSample` and body→camera rotation) in, an
+  OpenGL camera-from-plane view matrix in the caller's half-extent units out. Same vision algorithm
+  and gates as GraffitiXR's native `HomographyTracker` (ORB, Lowe 0.75, `solvePnPRansac` + IPPE
+  refine, ≥ 30 reference features, ≥ 12 matches, ≥ 8 inliers, inlier ratio ≥ 0.35, inlier spread
+  ≥ 25 % per axis) on the OpenCV Java `Relocalizer`, with `BridgedHomographyTracker`'s ≤ 400 ms
+  rotation-only bridge and linearly decaying confidence. Replaces the app's `HomographyTracker`
+  JNI stack. Supporting additions: `Relocalizer.relocalizeDetailed` / `RelocDetail` (match count,
+  inlier ratio and inlier bounding box), `PlanarGeometry.pixelToExtents` and
+  `PlanarFingerprint.fromReferenceExtents` (reference stretched onto explicit half-extents).
+
 ### App → library consolidation (additive)
 
 Generic code moved out of GraffitiXR. All additions are new API; nothing existing was removed or

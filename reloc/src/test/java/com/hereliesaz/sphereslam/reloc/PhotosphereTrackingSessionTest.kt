@@ -1,0 +1,356 @@
+package com.hereliesaz.sphereslam.reloc
+
+import com.hereliesaz.sphereslam.PhotosphereKeyframe
+import com.hereliesaz.sphereslam.SphereSlamPoseMath
+import com.hereliesaz.sphereslam.attitude.AttitudeSample
+import com.hereliesaz.sphereslam.camera.CameraIntrinsics
+import com.hereliesaz.sphereslam.math.RigidMath
+import com.hereliesaz.sphereslam.math.RotationMath
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.nio.ByteBuffer
+import kotlin.random.Random
+
+class PhotosphereTrackingSessionTest {
+
+    private val intrinsics = CameraIntrinsics(500f, 500f, 320f, 240f, 640, 480)
+    private val textured = noise(640 * 480, 1)
+    private val flat = ByteArray(640 * 480) { 100 }
+    private var nowNs = 1_000_000_000L
+
+    private fun noise(n: Int, seed: Int): ByteArray {
+        val r = Random(seed)
+        return ByteArray(n) { r.nextInt(256).toByte() }
+    }
+
+    /** Attitude yawed [deg] about the device y axis. */
+    private fun yaw(deg: Double): AttitudeSample {
+        val h = Math.toRadians(deg) / 2
+        return AttitudeSample(floatArrayOf(0f, kotlin.math.sin(h).toFloat(), 0f, kotlin.math.cos(h).toFloat()), nowNs)
+    }
+
+    /** GL camera-from-canonical for a camera at (x, y, d) looking down -z at the wall. */
+    private fun viewAt(x: Float, y: Float, d: Float) = RigidMath.identity().also {
+        it[12] = -x; it[13] = -y; it[14] = -d
+    }
+
+    private class FakeFrontEnd(private val featuresFor: (Int) -> Int) : PlanarFrontEnd {
+        val pages = mutableListOf<Pair<Int, FloatArray>>()
+        var next: PlanarMatchResult? = null
+        var closed = false
+        var matches = 0
+
+        override fun addPage(
+            luma: ByteBuffer, width: Int, height: Int, referenceWidthUnits: Float,
+            physicallyMetric: Boolean, pageNo: Int, canonicalFromPage: FloatArray,
+        ): PhotosphereTrackingSession.RegisteredPage {
+            pages += pageNo to canonicalFromPage.copyOf()
+            val dpi = SphereSlamPoseMath.dpiForReferenceWidth(width, referenceWidthUnits)
+            return PhotosphereTrackingSession.RegisteredPage(
+                pageNo, featuresFor(pageNo), SphereSlamPoseMath.pageGeometry(width, height, dpi), physicallyMetric,
+            )
+        }
+
+        override fun match(luma: ByteBuffer, timestampNs: Long): PlanarMatchResult? {
+            matches++
+            return next
+        }
+
+        override fun close() {
+            closed = true
+        }
+    }
+
+    private class Recorder {
+        val keyframes = mutableListOf<PhotosphereKeyframe>()
+        val solved = mutableListOf<FloatArray>()
+        val ready = mutableListOf<PhotosphereTrackingSession.RegisteredPage>()
+        val grown = mutableListOf<PhotosphereTrackingSession.AtlasPage>()
+        val failures = mutableListOf<TrackingFailureEvent>()
+        val states = mutableListOf<TrackingState>()
+        val fatal = mutableListOf<Throwable>()
+        val callbacks = PhotosphereTrackingSession.Callbacks(
+            onKeyframe = { keyframes += it },
+            onMapFromFingerprintSolved = { solved += it },
+            onReferenceReady = { ready += it },
+            onAtlasPageAdded = { p, _ -> grown += p },
+            onFailure = { failures += it },
+            onTrackingStateChanged = { states += it },
+            onFatalError = { fatal += it },
+        )
+    }
+
+    private val fronts = mutableListOf<FakeFrontEnd>()
+    private var featuresFor: (Int) -> Int = { 100 }
+    private val rec = Recorder()
+
+    private fun session(config: PhotosphereTrackingSession.Config = PhotosphereTrackingSession.Config()) =
+        PhotosphereTrackingSession(
+            config, rec.callbacks, null, { nowNs },
+            PlanarFrontEndFactory { FakeFrontEnd(featuresFor).also { fronts += it } },
+        )
+
+    private fun frame(
+        attitude: AttitudeSample? = yaw(0.0),
+        luma: ByteArray = textured,
+        k: CameraIntrinsics = intrinsics,
+        heading: Float? = null,
+    ) = PhotosphereTrackingSession.Frame(
+        luma = if (luma.size == k.width * k.height) luma else noise(k.width * k.height, 2),
+        intrinsics = k,
+        timestampNs = nowNs,
+        attitude = attitude,
+        headingDeg = heading,
+        elevationDeg = heading?.let { 0f },
+    )
+
+    private val reference = PhotosphereTrackingSession.ReferenceImage(noise(400 * 300, 3), 400, 300)
+
+    private fun match(view: FloatArray, inliers: Int = 30, error: Float = 1f) = PlanarMatchResult(0, view, error, inliers)
+
+    private fun advance(ms: Long) {
+        nowNs += ms * 1_000_000L
+    }
+
+    @Test
+    fun `base map is identity at the first attitude then rotation only`() {
+        val s = session()
+        assertNull(s.onFrame(frame(attitude = null)).baseCameraFromMap)
+        val first = s.onFrame(frame(yaw(0.0))).baseCameraFromMap!!
+        assertArrayEquals(RigidMath.identity(), first, 1e-6f)
+        val turned = s.onFrame(frame(yaw(20.0))).baseCameraFromMap!!
+        assertEquals(20f, RigidMath.rotationAngleDeg(turned), 1e-2f)
+        assertEquals(0f, RigidMath.translationNorm(turned), 0f)
+    }
+
+    @Test
+    fun `keyframes are cadenced and quality gated`() {
+        val s = session()
+        s.onFrame(frame(heading = 10f))
+        assertEquals(1, rec.keyframes.size)
+        advance(100)
+        s.onFrame(frame(heading = 10f))
+        assertEquals(1, rec.keyframes.size) // inside the 250 ms cadence
+        advance(300)
+        s.onFrame(frame(luma = flat, heading = 10f))
+        assertEquals(1, rec.keyframes.size) // flat frame rejected
+        advance(100)
+        s.onFrame(frame(heading = 10f))
+        assertEquals(1, rec.keyframes.size) // the rejected frame consumed the slot
+        advance(300)
+        s.onFrame(frame(heading = 10f))
+        assertEquals(2, rec.keyframes.size)
+        assertNotNull(rec.keyframes.last().cameraFromMap)
+        s.onFrame(frame(heading = null).also { advance(300) })
+        assertEquals(2, rec.keyframes.size) // no absolute attitude, no keyframe
+    }
+
+    @Test
+    fun `no reference means no planar session and no pose`() {
+        val s = session()
+        val r = s.onFrame(frame())
+        assertNull(r.pose)
+        assertTrue(fronts.isEmpty())
+        assertFalse(s.hasReference)
+    }
+
+    @Test
+    fun `a lock solves map_from_fingerprint once and rebases into the base map`() {
+        val s = session()
+        s.onFrame(frame(yaw(0.0))) // defines the base map
+        s.updatePrecisionLayer(reference)
+        val wall = viewAt(0.2f, 0.1f, 2f)
+        val r1 = run {
+            s.onFrame(frame(yaw(15.0)))
+            fronts.single().next = match(wall)
+            s.onFrame(frame(yaw(15.0)))
+        }
+        assertTrue(r1.visualAccepted)
+        assertNull(r1.pose) // confirming
+        val r2 = s.onFrame(frame(yaw(15.0)))
+        assertEquals(TrackingState.LOCKED, r2.state)
+        assertEquals(1, rec.solved.size)
+        val base = r2.baseCameraFromMap!!
+        assertArrayEquals(RigidMath.multiply(RigidMath.rigidInverse(base), wall), rec.solved[0], 1e-4f)
+        // With the solved bridge the rendered and accepted map views equal the base pose.
+        assertArrayEquals(base, r2.pose!!.cameraFromMap, 1e-4f)
+        assertArrayEquals(base, r2.acceptedCameraFromMap!!, 1e-4f)
+        assertArrayEquals(wall, r2.acceptedCameraFromFingerprint!!, 0f)
+        assertEquals(PhotosphereTrackingSession.PoseSource.KPM, r2.pose!!.source)
+        assertEquals(2f * 2f / (500f / 240f * 480f), r2.pose!!.unitsPerPixel, 1e-6f)
+        s.onFrame(frame(yaw(15.0)))
+        assertEquals(1, rec.solved.size) // once per reference
+        assertArrayEquals(rec.solved[0], s.mapFromFingerprint!!, 0f)
+        assertEquals(1, rec.ready.size)
+    }
+
+    @Test
+    fun `a brief miss is gyro bridged then dropped`() {
+        val s = session()
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame(yaw(0.0)))
+        fronts.single().next = match(viewAt(0f, 0f, 2f))
+        repeat(2) { s.onFrame(frame(yaw(0.0))) }
+        val held = s.onFrame(frame(yaw(0.0))).pose!!
+        fronts.single().next = null
+        advance(100)
+        val bridged = s.onFrame(frame(yaw(3.0)))
+        assertEquals(TrackingState.IMU_BRIDGE, bridged.state)
+        val pose = bridged.pose!!
+        assertEquals(PhotosphereTrackingSession.PoseSource.IMU_BRIDGE, pose.source)
+        assertEquals(3f, RigidMath.rotationDeltaDeg(held.cameraFromMap, pose.cameraFromMap), 1e-2f)
+        assertArrayEquals(RigidMath.cameraCentre(held.cameraFromMap), RigidMath.cameraCentre(pose.cameraFromMap), 1e-5f)
+        advance(100)
+        s.onFrame(frame(yaw(4.0)))
+        // Once before the lock, once for this miss streak (reported on change of reason only).
+        assertEquals(2, rec.failures.count { it.reason == TrackingFailureReason.NO_CURRENT_PAGE_MATCH })
+        advance(500) // past maxBridgeMs
+        val dropped = s.onFrame(frame(yaw(5.0)))
+        assertNull(dropped.pose)
+        assertEquals(TrackingState.REACQUIRING, dropped.state)
+        assertEquals(TrackingFailureReason.NO_CURRENT_PAGE_MATCH, dropped.failure!!.reason)
+    }
+
+    @Test
+    fun `rejections are classified`() {
+        val s = session()
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame())
+        fronts.single().next = match(viewAt(0f, 0f, 2f), inliers = 2)
+        val r = s.onFrame(frame())
+        assertEquals(TrackingFailureReason.INSUFFICIENT_INLIERS, r.failure!!.reason)
+        assertEquals(TrackingFailureSeverity.TRANSIENT, r.failure!!.severity)
+    }
+
+    @Test
+    fun `planar session is rebuilt when intrinsics change`() {
+        val s = session()
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame())
+        s.onFrame(frame())
+        assertEquals(1, fronts.size)
+        val other = CameraIntrinsics(480f, 480f, 240f, 320f, 480, 640)
+        s.onFrame(frame(k = other))
+        assertEquals(2, fronts.size)
+        assertTrue(fronts[0].closed)
+        assertEquals(2, rec.ready.size)
+    }
+
+    @Test
+    fun `a weak reference is fatal`() {
+        featuresFor = { 3 }
+        val s = session()
+        s.updatePrecisionLayer(reference)
+        val r = s.onFrame(frame())
+        assertEquals(TrackingState.FATAL, r.state)
+        assertEquals(TrackingFailureReason.REFERENCE_TOO_WEAK, r.failure!!.reason)
+        assertTrue(rec.fatal.single() is ReferenceTooWeakException)
+        assertTrue(s.isFatal)
+        assertTrue(fronts.single().closed)
+        assertNull(s.onFrame(frame()).pose)
+        assertEquals(1, fronts.size)
+    }
+
+    @Test
+    fun `precision layer swaps rebuild only on change`() {
+        val s = session()
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame())
+        val map = viewAt(1f, 0f, 0f)
+        s.updatePrecisionLayer(reference, mapFromFingerprint = map)
+        s.onFrame(frame())
+        assertEquals(2, fronts.size) // map changed
+        s.updatePrecisionLayer(reference, mapFromFingerprint = map.copyOf())
+        s.onFrame(frame())
+        assertEquals(2, fronts.size) // same map
+        s.updatePrecisionLayer(reference, mapFromFingerprint = map, forceRebuild = true)
+        s.onFrame(frame())
+        assertEquals(3, fronts.size)
+        s.updatePrecisionLayer(null)
+        assertNull(s.onFrame(frame()).pose)
+        assertTrue(fronts.last().closed)
+    }
+
+    @Test
+    fun `an accepted off-centre pose grows a rectified atlas page`() {
+        val s = session()
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame())
+        fronts.single().next = match(viewAt(0.6f, 0f, 1f))
+        repeat(2) { s.onFrame(frame()) }
+        val grown = rec.grown.single()
+        assertEquals(1, grown.pageNo)
+        assertEquals(0.6f, grown.canonicalFromPage[12], 1e-4f)
+        assertEquals(1f, grown.referenceWidthUnits, 1e-4f)
+        assertEquals(500, grown.width)
+        assertEquals(375, grown.height)
+        assertEquals(listOf(0, 1), fronts.single().pages.map { it.first })
+        assertEquals(listOf(1), s.atlasPages.map { it.pageNo })
+        s.onFrame(frame())
+        assertEquals(1, rec.grown.size) // growth interval
+        // A rebuild re-registers the grown page.
+        s.onFrame(frame(k = CameraIntrinsics(500f, 500f, 320f, 240f, 640, 480).copy(fx = 501f)))
+        assertEquals(listOf(0, 1), fronts.last().pages.map { it.first })
+    }
+
+    @Test
+    fun `a weak grown page is discarded and the matcher rebuilt`() {
+        featuresFor = { if (it == 0) 100 else 5 }
+        val s = session()
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame())
+        fronts.single().next = match(viewAt(0.6f, 0f, 1f))
+        repeat(2) { s.onFrame(frame()) }
+        assertTrue(rec.grown.isEmpty())
+        assertTrue(fronts.single().closed)
+        assertTrue(s.atlasPages.isEmpty())
+        s.onFrame(frame())
+        assertEquals(2, fronts.size)
+        assertEquals(listOf(0), fronts[1].pages.map { it.first })
+    }
+
+    @Test
+    fun `atlas growth can be disabled`() {
+        val s = session(PhotosphereTrackingSession.Config(atlasGrowth = false))
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame())
+        fronts.single().next = match(viewAt(0.6f, 0f, 1f))
+        repeat(3) { s.onFrame(frame()) }
+        assertTrue(rec.grown.isEmpty())
+    }
+
+    @Test
+    fun `close stops processing and releases the matcher`() {
+        val s = session()
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame())
+        s.close()
+        assertTrue(fronts.single().closed)
+        assertNull(s.onFrame(frame()).baseCameraFromMap)
+    }
+
+    @Test
+    fun `static helpers`() {
+        val proj = com.hereliesaz.sphereslam.camera.ProjectionMatrix.buildFrom(intrinsics)
+        assertEquals(2f * 2f * (240f / 500f) / 480f, PhotosphereTrackingSession.unitsPerPixel(viewAt(0f, 0f, 2f), proj, 480), 1e-6f)
+        assertEquals(0f, PhotosphereTrackingSession.unitsPerPixel(viewAt(0f, 0f, 2f), proj, 0), 0f)
+        val cameraFromMap = RigidMath.identity().also { System.arraycopy(rotY(30f), 0, it, 0, 16) }
+        val fp = viewAt(0.3f, 0f, 2f)
+        val m = PhotosphereTrackingSession.solveMapFromFingerprint(cameraFromMap, fp)!!
+        assertArrayEquals(fp, RigidMath.multiply(cameraFromMap, m), 1e-5f)
+    }
+
+    private fun rotY(deg: Float): FloatArray {
+        val r = RotationMath.toRotationMatrix3x3(
+            floatArrayOf(0f, kotlin.math.sin(Math.toRadians(deg / 2.0)).toFloat(), 0f, kotlin.math.cos(Math.toRadians(deg / 2.0)).toFloat()),
+        )
+        val out = RigidMath.identity()
+        for (row in 0..2) for (col in 0..2) out[col * 4 + row] = r[row * 3 + col]
+        return out
+    }
+}
