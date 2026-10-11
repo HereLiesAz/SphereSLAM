@@ -19,6 +19,10 @@ import java.nio.ByteBuffer
  * initialization still succeeds and [isAvailable] returns false; no ExceptionInInitializerError is
  * thrown. Callers must check [isAvailable] before using the session entry points, which otherwise
  * fail with UnsatisfiedLinkError.
+ *
+ * Threading: every call on one session is serialized by that session's own native lock; different
+ * sessions run concurrently. Destroying a session while another thread is inside a call on it is
+ * safe (the native objects are released when that call returns). Session ids are never reused.
  */
 @InternalSphereSlamApi
 object KpmBridge {
@@ -110,6 +114,18 @@ object KpmBridge {
         return nativeClearPages(session)
     }
 
+    /**
+     * Creates an independent session with [session]'s calibration and a copy of its atlas, or 0 when
+     * [session] is unknown or the copy failed. The clone matches nothing until a page is added with
+     * [addPlanarPage] (which indexes the copied pages plus the new one), so a grown matcher can be
+     * built on a background thread while [session] keeps matching: each session has its own native
+     * lock, and the source is locked only for the copy.
+     */
+    fun cloneSession(session: Long): Long {
+        require(session != 0L)
+        return nativeCloneSession(session)
+    }
+
     fun destroySession(session: Long) {
         if (session != 0L) nativeDestroySession(session)
     }
@@ -135,6 +151,7 @@ object KpmBridge {
         maxFeatures: Int,
     ): Int
     private external fun nativeMatchPlanar(session: Long, luma: ByteBuffer, out: FloatArray): Int
+    private external fun nativeCloneSession(session: Long): Long
     private external fun nativeClearPages(session: Long): Boolean
     private external fun nativeDestroySession(session: Long)
 

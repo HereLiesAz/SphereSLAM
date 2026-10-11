@@ -46,9 +46,56 @@ class KpmSphereSlamEngineTest {
         engine.close()
     }
 
+    @Test
+    fun fork_clonesTheNativeSessionIntoAnIndependentEngine() {
+        val api = FakeKpmApi(cloneTo = 456L)
+        val engine = KpmSphereSlamEngine(4, 4, calibration, api)
+        engine.addPage(ByteBuffer.allocateDirect(16), 4, 4, PlanarPage(pageNo = 0))
+        val fork = engine.fork()!!
+        assertEquals(listOf(123L), api.clonedFrom)
+        fork.addPage(ByteBuffer.allocateDirect(16), 4, 4, PlanarPage(pageNo = 1))
+        assertEquals(listOf(123L, 456L), api.addedTo)
+        fork.close()
+        assertEquals(listOf(456L), api.destroyed)
+        assertTrue(engine.isReady)
+        engine.close()
+        assertEquals(listOf(456L, 123L), api.destroyed)
+        assertNull(engine.fork()) // closed
+    }
+
+    @Test
+    fun fork_isNullWhenCloningFails() {
+        val engine = KpmSphereSlamEngine(4, 4, calibration, FakeKpmApi(cloneTo = 0L))
+        assertNull(engine.fork())
+    }
+
+    @Test
+    fun standaloneSessionFork_carriesItsPagesAndMatchesThem() {
+        val api = FakeKpmApi(cloneTo = 456L)
+        val session = SphereSlamStandaloneSession(
+            4, 4, calibration,
+            SphereSlamStandaloneSession.EngineFactory { w, h, c -> KpmSphereSlamEngine(w, h, c, api) },
+        )
+        session.addReference(ByteBuffer.allocateDirect(16), 4, 4, 1f, false, pageNo = 7)
+        val fork = session.fork()!!
+        assertTrue(fork.hasReference)
+        assertNotNull(fork.match(ByteBuffer.allocateDirect(16), 1L)) // page 7 is known to the fork
+        fork.addReference(ByteBuffer.allocateDirect(16), 4, 4, 1f, false, pageNo = 8)
+        assertEquals(456L, api.addedTo.last())
+        fork.close()
+        assertTrue(session.isReady)
+        assertNotNull(session.match(ByteBuffer.allocateDirect(16), 2L))
+        session.close()
+        assertNull(session.fork())
+    }
+
     private class FakeKpmApi(
         private val matchPage: Int = 7,
+        private val cloneTo: Long = 0L,
     ) : KpmApi {
+        val clonedFrom = mutableListOf<Long>()
+        val addedTo = mutableListOf<Long>()
+        val destroyed = mutableListOf<Long>()
         var destroyCalls = 0
         var createdWith: SphereSlamCalibration? = null
 
@@ -70,7 +117,15 @@ class KpmSphereSlamEngineTest {
             pageNo: Int,
             imageNo: Int,
             maxFeatures: Int,
-        ): Int = 42
+        ): Int {
+            addedTo += session
+            return 42
+        }
+
+        override fun clone(session: Long): Long {
+            clonedFrom += session
+            return cloneTo
+        }
 
         override fun match(session: Long, luma: ByteBuffer, out: FloatArray): Int {
             if (matchPage < 0) return -1
@@ -81,6 +136,7 @@ class KpmSphereSlamEngineTest {
         }
 
         override fun destroy(session: Long) {
+            destroyed += session
             destroyCalls++
         }
     }

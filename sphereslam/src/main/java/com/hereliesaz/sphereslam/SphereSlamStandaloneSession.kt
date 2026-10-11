@@ -188,6 +188,44 @@ class SphereSlamStandaloneSession internal constructor(
         )
     }
 
+    /**
+     * An independent session holding every page registered here (same frame size and calibration),
+     * for growing the atlas off the matching thread: add pages to the fork with [addReference] (its
+     * first add indexes the copied pages plus the new one), then swap it in and close this session.
+     * A fork that is never added to matches nothing.
+     *
+     * May be called from another thread while this session's [match] runs (the native copy is
+     * serialized against matching per session; nothing else here is mutated), but not concurrently
+     * with [addReference], [reset] or [close] on this session. Returns null when this session is
+     * closed or its engine cannot be cloned (e.g. a non-KPM engine); callers then rebuild from pages.
+     */
+    fun fork(): SphereSlamStandaloneSession? {
+        if (closed) return null
+        val engine = this.engine as? KpmSphereSlamEngine ?: return null
+        val forked = engine.fork() ?: return null
+        return SphereSlamStandaloneSession(
+            frameWidth, frameHeight, calibration, forkedEngineFactory(forked, engineFactory), references.values.toList(),
+        )
+    }
+
+    private constructor(
+        frameWidth: Int,
+        frameHeight: Int,
+        calibration: SphereSlamCalibration,
+        engineFactory: EngineFactory,
+        pages: List<Reference>,
+    ) : this(frameWidth, frameHeight, calibration, engineFactory) {
+        pages.forEach { references[it.pageNo] = it }
+    }
+
+    private companion object {
+        /** Hands out [forked] once (this fork's first engine), then defers to [fallback] (e.g. [reset]). */
+        fun forkedEngineFactory(forked: SphereSlamEngine, fallback: EngineFactory): EngineFactory {
+            var first: SphereSlamEngine? = forked
+            return EngineFactory { w, h, c -> first?.also { first = null } ?: fallback.create(w, h, c) }
+        }
+    }
+
     /** Drop the atlas and create a fresh native matcher with the same live-camera calibration. */
     fun reset() {
         requireOpen()

@@ -11,8 +11,11 @@
 #include <jni.h>
 #include <android/log.h>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
 #include <mutex>
-#include <set>
+#include <unordered_map>
 
 #define LOG_TAG "POSEPROBE"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -38,21 +41,85 @@ struct KpmSession {
     ARParamLT *cameraParams = nullptr;
     int frameWidth = 0;
     int frameHeight = 0;
-    // Lifetime + mutual exclusion is handled by gKpmRegistryMutex below, not a per-session lock.
+    // True once kpmSetRefDataSet has loaded the atlas into `handle`. The FREAK matcher inside a
+    // handle cannot be re-loaded (VisualDatabase::addKeyframe throws "ID already exists" for a
+    // reused image id), so a later add rebuilds the handle before indexing the grown atlas.
+    bool indexed = false;
+    // Serializes every use of THIS session's handle/atlas (add, match, clone, clear). Different
+    // sessions never share a lock, so a background atlas build on a cloned session cannot stall the
+    // live matcher (the previous design held one global lock across kpmMatching).
+    std::mutex work;
+
+    ~KpmSession() {
+        if (atlas) kpmDeleteRefDataSet(&atlas);
+        if (handle) kpmDeleteHandle(&handle);
+        if (cameraParams) arParamLTFree(&cameraParams);
+    }
 };
 
-KpmSession *asSession(jlong value) {
-    return reinterpret_cast<KpmSession *>(static_cast<intptr_t>(value));
+// Lifetime guard. Sessions are addressed by a monotonically increasing id (never a raw pointer, so a
+// freed-and-reused address can never alias a live session). A work function looks its session up
+// under the briefly held registry lock, keeps the shared_ptr for the whole call and then takes only
+// that session's `work` lock. nativeDestroySession unregisters the id; the native objects are freed
+// by ~KpmSession when the last in-flight call drops its reference. No use-after-free, no
+// double-free, and no cross-session serialization.
+std::mutex gKpmRegistryMutex;
+std::unordered_map<jlong, std::shared_ptr<KpmSession>> gKpmSessions;
+jlong gKpmNextId = 1;
+
+std::shared_ptr<KpmSession> findSession(jlong id) {
+    std::lock_guard<std::mutex> registryLock(gKpmRegistryMutex);
+    auto it = gKpmSessions.find(id);
+    return it == gKpmSessions.end() ? nullptr : it->second;
 }
 
-// Lifetime guard. nativeDestroySession can run on a different thread than nativeMatchPlanar /
-// nativeAddPlanarPage; the per-session std::mutex cannot protect against the session (and that mutex)
-// being deleted out from under an in-flight call. This registry serializes create/destroy against the
-// work functions and lets them confirm the session is still alive before dereferencing it, closing the
-// use-after-free. (A session-lifetime guard.) Holding it across kpmMatching
-// serializes KPM globally, which is acceptable: a session is driven by a single frame pipeline.
-std::mutex gKpmRegistryMutex;
-std::set<KpmSession *> gKpmSessions;
+jlong registerSession(const std::shared_ptr<KpmSession> &session) {
+    std::lock_guard<std::mutex> registryLock(gKpmRegistryMutex);
+    const jlong id = gKpmNextId++;
+    gKpmSessions[id] = session;
+    return id;
+}
+
+// Deep copy of a reference data set (malloc'd like artoolkitX's own, so kpmDeleteRefDataSet frees it).
+KpmRefDataSet *copyRefDataSet(const KpmRefDataSet *src) {
+    if (!src) return nullptr;
+    auto *dst = static_cast<KpmRefDataSet *>(calloc(1, sizeof(KpmRefDataSet)));
+    if (!dst) return nullptr;
+    if (src->num > 0 && src->refPoint) {
+        dst->refPoint = static_cast<KpmRefData *>(malloc(sizeof(KpmRefData) * src->num));
+        if (!dst->refPoint) {
+            free(dst);
+            return nullptr;
+        }
+        memcpy(dst->refPoint, src->refPoint, sizeof(KpmRefData) * src->num);
+        dst->num = src->num;
+    }
+    if (src->pageNum > 0 && src->pageInfo) {
+        dst->pageInfo = static_cast<KpmPageInfo *>(calloc(src->pageNum, sizeof(KpmPageInfo)));
+        if (!dst->pageInfo) {
+            kpmDeleteRefDataSet(&dst);
+            return nullptr;
+        }
+        dst->pageNum = src->pageNum;
+        for (int i = 0; i < src->pageNum; ++i) {
+            const KpmPageInfo &from = src->pageInfo[i];
+            KpmPageInfo &to = dst->pageInfo[i];
+            to.pageNo = from.pageNo;
+            to.imageNum = 0;
+            to.imageInfo = nullptr;
+            if (from.imageNum > 0 && from.imageInfo) {
+                to.imageInfo = static_cast<KpmImageInfo *>(malloc(sizeof(KpmImageInfo) * from.imageNum));
+                if (!to.imageInfo) {
+                    kpmDeleteRefDataSet(&dst);
+                    return nullptr;
+                }
+                memcpy(to.imageInfo, from.imageInfo, sizeof(KpmImageInfo) * from.imageNum);
+                to.imageNum = from.imageNum;
+            }
+        }
+    }
+    return dst;
+}
 
 bool directBuffer(JNIEnv *env, jobject buffer, jlong requiredBytes, ARUint8 **out) {
     if (!buffer || !out || requiredBytes <= 0) return false;
@@ -151,7 +218,7 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeCreateCalibratedSess
 #ifdef HAVE_ARX_KPM
     if (width <= 0 || height <= 0 || fx <= 0.0f || fy <= 0.0f) return 0;
 
-    auto *session = new KpmSession();
+    auto session = std::make_shared<KpmSession>();
     session->cameraParams = makeCameraParams(
         static_cast<int>(width),
         static_cast<int>(height),
@@ -161,26 +228,19 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeCreateCalibratedSess
         cy
     );
     if (!session->cameraParams) {
-        delete session;
         LOGE("nativeCreateCalibratedSession: camera parameter creation failed");
         return 0;
     }
 
     session->handle = kpmCreateHandle(session->cameraParams);
     if (!session->handle) {
-        arParamLTFree(&session->cameraParams);
-        delete session;
         LOGE("nativeCreateCalibratedSession: KPM handle creation failed");
         return 0;
     }
 
     session->frameWidth = static_cast<int>(width);
     session->frameHeight = static_cast<int>(height);
-    {
-        std::lock_guard<std::mutex> registryLock(gKpmRegistryMutex);
-        gKpmSessions.insert(session);
-    }
-    return static_cast<jlong>(reinterpret_cast<intptr_t>(session));
+    return registerSession(session);
 #else
     (void) width;
     (void) height;
@@ -188,6 +248,47 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeCreateCalibratedSess
     (void) fy;
     (void) cx;
     (void) cy;
+    return 0;
+#endif
+}
+
+// A new, independent session with the source's calibration and a deep copy of its atlas. The copy
+// takes the source's work lock only for the memcpy; the clone's own (re)index happens on its first
+// nativeAddPlanarPage, on whatever thread calls it, without touching the source. Until then the
+// clone matches nothing. Returns 0 when the source is unknown or the copy fails.
+JNIEXPORT jlong JNICALL
+Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeCloneSession(
+        JNIEnv *, jobject, jlong sourceValue) {
+#ifdef HAVE_ARX_KPM
+    std::shared_ptr<KpmSession> source = findSession(sourceValue);
+    if (!source) return 0;
+    auto clone = std::make_shared<KpmSession>();
+    {
+        std::lock_guard<std::mutex> workLock(source->work);
+        if (!source->cameraParams) return 0;
+        clone->cameraParams = arParamLTCreate(&source->cameraParams->param, AR_PARAM_LT_DEFAULT_OFFSET);
+        if (!clone->cameraParams) {
+            LOGE("nativeCloneSession: camera parameter copy failed");
+            return 0;
+        }
+        if (source->atlas) {
+            clone->atlas = copyRefDataSet(source->atlas);
+            if (!clone->atlas) {
+                LOGE("nativeCloneSession: atlas copy failed");
+                return 0;
+            }
+        }
+        clone->frameWidth = source->frameWidth;
+        clone->frameHeight = source->frameHeight;
+    }
+    clone->handle = kpmCreateHandle(clone->cameraParams);
+    if (!clone->handle) {
+        LOGE("nativeCloneSession: KPM handle creation failed");
+        return 0;
+    }
+    return registerSession(clone);
+#else
+    (void) sourceValue;
     return 0;
 #endif
 }
@@ -205,11 +306,11 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeAddPlanarPage(
         jint imageNo,
         jint maxFeatures) {
 #ifdef HAVE_ARX_KPM
-    KpmSession *session = asSession(sessionValue);
-    // Hold the registry lock across the whole call and confirm the session is still alive before any
-    // dereference, so a concurrent nativeDestroySession cannot free it mid-use.
-    std::lock_guard<std::mutex> registryLock(gKpmRegistryMutex);
-    if (!session || gKpmSessions.find(session) == gKpmSessions.end() || !session->handle) return -1;
+    // The shared_ptr keeps the session alive for the whole call even if it is destroyed concurrently.
+    std::shared_ptr<KpmSession> session = findSession(sessionValue);
+    if (!session) return -1;
+    std::lock_guard<std::mutex> workLock(session->work);
+    if (!session->handle || !session->cameraParams) return -1;
     if (width <= 0 || height <= 0 || referenceDpi <= 0.0f ||
         pageNo < 0 || imageNo < 0 || maxFeatures <= 0) {
         return -2;
@@ -219,44 +320,61 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeAddPlanarPage(
     ARUint8 *luma = nullptr;
     if (!directBuffer(env, lumaBuffer, requiredBytes, &luma)) return -3;
 
-    const int before = session->atlas ? session->atlas->num : 0;
-    const int addResult = kpmAddRefDataSet(
-        luma,
-        static_cast<int>(width),
-        static_cast<int>(height),
-        referenceDpi,
-        KpmProcFullSize,
-        KpmCompNull,
-        static_cast<int>(maxFeatures),
-        static_cast<int>(pageNo),
-        static_cast<int>(imageNo),
-        &session->atlas
-    );
-    if (addResult < 0 || !session->atlas) {
-        LOGE("nativeAddPlanarPage: kpmAddRefDataSet failed (%d)", addResult);
-        return -4;
-    }
+    try {
+        const int before = session->atlas ? session->atlas->num : 0;
+        const int addResult = kpmAddRefDataSet(
+            luma,
+            static_cast<int>(width),
+            static_cast<int>(height),
+            referenceDpi,
+            KpmProcFullSize,
+            KpmCompNull,
+            static_cast<int>(maxFeatures),
+            static_cast<int>(pageNo),
+            static_cast<int>(imageNo),
+            &session->atlas
+        );
+        if (addResult < 0 || !session->atlas) {
+            LOGE("nativeAddPlanarPage: kpmAddRefDataSet failed (%d)", addResult);
+            return -4;
+        }
 
-    const int generated = session->atlas->num - before;
-    if (generated <= 0) {
-        LOGE("nativeAddPlanarPage: no features generated");
-        return -5;
-    }
+        const int generated = session->atlas->num - before;
+        if (generated <= 0) {
+            LOGE("nativeAddPlanarPage: no features generated");
+            return -5;
+        }
 
-    const int setResult = kpmSetRefDataSet(session->handle, session->atlas);
-    if (setResult < 0) {
-        LOGE("nativeAddPlanarPage: kpmSetRefDataSet failed (%d)", setResult);
-        return -6;
-    }
+        if (session->indexed) {
+            // A handle's FREAK database can only be loaded once: start from a fresh handle.
+            kpmDeleteHandle(&session->handle);
+            session->indexed = false;
+            session->handle = kpmCreateHandle(session->cameraParams);
+            if (!session->handle) {
+                LOGE("nativeAddPlanarPage: KPM handle re-creation failed");
+                return -6;
+            }
+        }
+        const int setResult = kpmSetRefDataSet(session->handle, session->atlas);
+        if (setResult < 0) {
+            LOGE("nativeAddPlanarPage: kpmSetRefDataSet failed (%d)", setResult);
+            return -6;
+        }
+        session->indexed = true;
 
-    LOGI(
-        "nativeAddPlanarPage: page=%d image=%d features=%d atlasFeatures=%d",
-        pageNo,
-        imageNo,
-        generated,
-        session->atlas->num
-    );
-    return generated;
+        LOGI(
+            "nativeAddPlanarPage: page=%d image=%d features=%d atlasFeatures=%d",
+            pageNo,
+            imageNo,
+            generated,
+            session->atlas->num
+        );
+        return generated;
+    } catch (...) {
+        // Never let a C++ exception unwind through JNI (that aborts the process).
+        LOGE("nativeAddPlanarPage: KPM threw");
+        return -7;
+    }
 #else
     (void) env;
     (void) sessionValue;
@@ -279,14 +397,10 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeMatchPlanar(
         jobject lumaBuffer,
         jfloatArray outArray) {
 #ifdef HAVE_ARX_KPM
-    KpmSession *session = asSession(sessionValue);
-    // Hold the registry lock across the whole call and confirm the session is still alive before any
-    // dereference, so a concurrent nativeDestroySession cannot free it mid-match.
-    std::lock_guard<std::mutex> registryLock(gKpmRegistryMutex);
-    if (!session || gKpmSessions.find(session) == gKpmSessions.end() ||
-        !session->handle || !session->atlas || !outArray) {
-        return -1;
-    }
+    std::shared_ptr<KpmSession> session = findSession(sessionValue);
+    if (!session || !outArray) return -1;
+    std::lock_guard<std::mutex> workLock(session->work);
+    if (!session->handle || !session->atlas || !session->indexed) return -1;
     if (env->GetArrayLength(outArray) < 14) return -1;
 
     const jlong requiredBytes =
@@ -294,23 +408,28 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeMatchPlanar(
     ARUint8 *luma = nullptr;
     if (!directBuffer(env, lumaBuffer, requiredBytes, &luma)) return -1;
 
-    if (kpmMatching(session->handle, luma) < 0) return -1;
-
     float pose[3][4] = {};
     int pageNo = -1;
     float error = 0.0f;
-    if (kpmGetPose(session->handle, pose, &pageNo, &error) < 0 || pageNo < 0) return -1;
-
     int inliers = 0;
-    KpmResult *results = nullptr;
-    int resultCount = 0;
-    if (kpmGetResult(session->handle, &results, &resultCount) == 0 && results) {
-        for (int i = 0; i < resultCount; ++i) {
-            if (results[i].camPoseF == 0 && results[i].pageNo == pageNo) {
-                inliers = results[i].inlierNum;
-                break;
+    try {
+        if (kpmMatching(session->handle, luma) < 0) return -1;
+
+        if (kpmGetPose(session->handle, pose, &pageNo, &error) < 0 || pageNo < 0) return -1;
+
+        KpmResult *results = nullptr;
+        int resultCount = 0;
+        if (kpmGetResult(session->handle, &results, &resultCount) == 0 && results) {
+            for (int i = 0; i < resultCount; ++i) {
+                if (results[i].camPoseF == 0 && results[i].pageNo == pageNo) {
+                    inliers = results[i].inlierNum;
+                    break;
+                }
             }
         }
+    } catch (...) {
+        LOGE("nativeMatchPlanar: KPM threw");
+        return -1;
     }
 
     jfloat out[14] = {};
@@ -338,13 +457,13 @@ JNIEXPORT jboolean JNICALL
 Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeClearPages(
         JNIEnv *, jobject, jlong sessionValue) {
 #ifdef HAVE_ARX_KPM
-    KpmSession *session = asSession(sessionValue);
-    std::lock_guard<std::mutex> registryLock(gKpmRegistryMutex);
-    if (!session || gKpmSessions.find(session) == gKpmSessions.end() || !session->cameraParams) {
-        return JNI_FALSE;
-    }
+    std::shared_ptr<KpmSession> session = findSession(sessionValue);
+    if (!session) return JNI_FALSE;
+    std::lock_guard<std::mutex> workLock(session->work);
+    if (!session->cameraParams) return JNI_FALSE;
     if (session->handle) kpmDeleteHandle(&session->handle);
     if (session->atlas) kpmDeleteRefDataSet(&session->atlas);
+    session->indexed = false;
     session->handle = kpmCreateHandle(session->cameraParams);
     if (!session->handle) {
         // nativeAddPlanarPage / nativeMatchPlanar treat a null handle as unusable (-1).
@@ -362,17 +481,17 @@ JNIEXPORT void JNICALL
 Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeDestroySession(
         JNIEnv *, jobject, jlong sessionValue) {
 #ifdef HAVE_ARX_KPM
-    KpmSession *session = asSession(sessionValue);
-    // Take the registry lock and remove the session atomically. erase() returning 0 means it was never
-    // registered or already destroyed (double-free guard). Any in-flight add/match holds this same lock,
-    // so by the time we proceed no other thread can be inside the session.
-    std::lock_guard<std::mutex> registryLock(gKpmRegistryMutex);
-    if (!session || gKpmSessions.erase(session) == 0) return;
-
-    if (session->atlas) kpmDeleteRefDataSet(&session->atlas);
-    if (session->handle) kpmDeleteHandle(&session->handle);
-    if (session->cameraParams) arParamLTFree(&session->cameraParams);
-    delete session;
+    // Unregister atomically; an unknown or already-destroyed id finds nothing (double-free guard).
+    // In-flight calls hold their own shared_ptr, so ~KpmSession runs after the last of them returns.
+    std::shared_ptr<KpmSession> session;
+    {
+        std::lock_guard<std::mutex> registryLock(gKpmRegistryMutex);
+        auto it = gKpmSessions.find(sessionValue);
+        if (it == gKpmSessions.end()) return;
+        session = std::move(it->second);
+        gKpmSessions.erase(it);
+    }
+    // Dropping `session` here frees the native objects unless another thread is mid-call.
 #else
     (void) sessionValue;
 #endif

@@ -17,6 +17,9 @@ internal interface KpmApi {
     ): Int
     fun match(session: Long, luma: ByteBuffer, out: FloatArray): Int
     fun destroy(session: Long)
+
+    /** A copy of [session] (calibration + atlas) that is indexed on its first [addPage]; 0 = unsupported/failed. */
+    fun clone(session: Long): Long = 0L
 }
 
 internal object NativeKpmApi : KpmApi {
@@ -54,4 +57,6 @@ internal object NativeKpmApi : KpmApi {
         KpmBridge.matchPlanar(session, luma, out)
 
     override fun destroy(session: Long) = KpmBridge.destroySession(session)
+
+    override fun clone(session: Long): Long = KpmBridge.cloneSession(session)
 }

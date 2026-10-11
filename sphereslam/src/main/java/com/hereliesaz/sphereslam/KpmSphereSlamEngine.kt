@@ -2,13 +2,23 @@ package com.hereliesaz.sphereslam
 
 import java.nio.ByteBuffer
 
-internal class KpmSphereSlamEngine(
+internal class KpmSphereSlamEngine private constructor(
     override val frameWidth: Int,
     override val frameHeight: Int,
     override val calibration: SphereSlamCalibration,
     private val api: KpmApi,
+    initialSession: Long,
 ) : SphereSlamEngine {
-    private var session: Long = api.create(frameWidth, frameHeight, calibration)
+    constructor(
+        frameWidth: Int,
+        frameHeight: Int,
+        calibration: SphereSlamCalibration,
+        api: KpmApi,
+    ) : this(frameWidth, frameHeight, calibration, api, api.create(frameWidth, frameHeight, calibration))
+
+    // Volatile: [fork] may run on a background thread while the owner thread matches or closes.
+    @Volatile
+    private var session: Long = initialSession
     private val scratch = FloatArray(14)
 
     override val isReady: Boolean
@@ -48,6 +58,20 @@ internal class KpmSphereSlamEngine(
             reprojectionError = scratch[12],
             inlierCount = scratch[13].toInt().coerceAtLeast(0),
         )
+    }
+
+    /**
+     * An independent engine holding a copy of this one's atlas (same calibration), or null when the
+     * native layer cannot clone. Safe to call from another thread while this engine matches: the
+     * native source session is locked only for the copy. The fork's own index is built by its first
+     * [addPage], on the caller's thread.
+     */
+    fun fork(): KpmSphereSlamEngine? {
+        val active = session
+        if (active == 0L) return null
+        val cloned = api.clone(active)
+        if (cloned == 0L) return null
+        return KpmSphereSlamEngine(frameWidth, frameHeight, calibration, api, cloned)
     }
 
     override fun close() {

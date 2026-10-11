@@ -2,6 +2,55 @@
 
 ## Unreleased — audit fixes
 
+### Standalone frame rate: background atlas growth, pooled luma, depth session options
+
+Why standalone tracking felt low frame-rate (diagnosis): atlas growth ran on the analyzer thread
+(rectify + page quality gate + `kpmAddRefDataSet` feature extraction + `kpmSetRefDataSet` index
+rebuild, ~100–400 ms per attempt, every ≥ 3 s while locked); a page that failed the KPM feature floor
+closed the live matcher, so the *next* frame rebuilt KPM and re-added every page inline (a
+multi-second hitch); the native bridge held one global lock across every KPM call, so no matcher
+could be built while another matched; and every frame allocated a fresh ~300 KB rotated luma array
+through a per-pixel `ByteBuffer.get` loop.
+
+- **`:reloc` `PhotosphereTrackingSession`: matcher builds run off the analyzer thread.** The
+  initial build, rebuilds after a reference/intrinsics change and every atlas-growth attempt run on a
+  private single background thread (`AtlasMatcherWorker`, internal). Growth copies the frame, then on
+  the worker rectifies the page, gates it, **forks** the live matcher (native clone of its atlas) and
+  adds the page to the fork, while `onFrame` keeps matching on the live matcher; the grown matcher is
+  swapped in at the start of a later frame and the old one is closed on the worker. A rejected page
+  just drops the fork — the live matcher is never touched and nothing is rebuilt. Outcomes are
+  generation-checked, so a candidate built for a matcher that has since been dropped, rebuilt or
+  closed is discarded. All callbacks still fire on the `onFrame` thread.
+  - Behaviour change: until the first matcher build lands (and briefly after an intrinsics change),
+    frames return the base pose with no planar pose; a too-weak reference fails the session on the
+    frame after its build rather than the same frame. A growth attempt that throws is now a
+    diagnostic (`atlas growth failed`), not a fatal error.
+  - `Frame.luma` is not retained after `onFrame` returns, so hosts may reuse a pooled buffer.
+- **Native (`KpmBridge.cpp`) thread-safety.** Sessions are now addressed by never-reused ids mapped to
+  shared owners, each with its **own** lock (the registry lock is held only for lookup); destroy
+  unregisters and frees once in-flight calls return. One handle is still never used by two threads at
+  once; different sessions now run in parallel. New `KpmBridge.cloneSession` (calibration + deep copy
+  of the atlas; the source is locked only for the copy). **Fix:** adding a page to an already-indexed
+  session re-loaded the same FREAK database, whose `addKeyframe` throws "ID already exists" (a C++
+  exception through JNI aborts the process); the handle is now recreated before re-indexing, and KPM
+  calls are wrapped so an exception becomes an error code.
+- `SphereSlamStandaloneSession.fork()` (new, public): an independent session with every registered
+  page, safe to create on another thread while this one matches; null for a non-KPM engine.
+- **`LumaFrameTransform` speed and buffer reuse.** Rows are bulk-read and rotated in 16-row bands
+  (byte-identical output, pinned against the old scalar loop). New `LumaFrameBufferPool(slots = 2)`
+  (round-robin pooled output: a returned array is overwritten `slots` calls later, so keep at most
+  `slots − 1` frames or copy) and `packCropAndRotateInto` / `packAndRotateInto` (caller-owned
+  destination). The existing `packAndRotate` / `packCropAndRotate` still return a fresh array, so
+  callers that retain frames are unaffected.
+- **`:models` `DepthEstimator`.** New `DepthEstimatorOptions(intraOpThreads = 2,
+  executionProvider = CPU | XNNPACK | NNAPI, allowSpinning = false)` constructor parameter (the old
+  5-argument constructor is kept): the requested provider falls back to CPU when it cannot be added or
+  the session fails to open (`activeExecutionProvider` reports which). Behaviour change: the default
+  is now 2 intra-op threads with spinning off (was ONNX Runtime's one-per-core default). New
+  `estimateLuma(luma, width, height, rowStride, outMaxDim)` feeds a grey plane straight into the
+  model (bilinear resample, grey in all three channels) without an ARGB `Bitmap` round trip, reusing
+  its input buffers.
+
 ### Coverage glow: display-rate, full-rotation tracking and styles (additive)
 
 Why the glow felt loosely attached to the scene (diagnosis):
