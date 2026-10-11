@@ -2,6 +2,53 @@
 
 ## Unreleased — audit fixes
 
+### Coverage glow: display-rate, full-rotation tracking and styles (additive)
+
+Why the glow felt loosely attached to the scene (diagnosis):
+
+- **No roll.** `CoverageGlowProjection.projectRegions(heading, elevation, hFov, vFov)` builds a
+  horizon-levelled camera basis, so any device tilt rotated the glow against the preview by the full
+  roll angle (an error of `roll × distance from centre` on screen).
+- **Pole dropout.** Heading is undefined near vertical, so the projection (and
+  `CameraAttitudeProvider`'s heading) returned nothing when looking at the ceiling or floor, and the
+  host fell back to a full wash.
+- **Cadence and latency.** Hosts re-projected only when the vision analyzer delivered a tracked
+  frame (analyzer rate, after the 40–150+ ms solve, nothing while untracked), from an attitude read at
+  `SENSOR_DELAY_UI` (~16 Hz, up to ~60 ms stale). At a 90°/s pan that is 10–20° of lag, and the glow
+  froze whenever tracking dropped.
+- **Lens.** Only a centred principal point was supported (FOV in, no intrinsics).
+- Tile sampling was adequate (4×4 per tile; meridians project straight, parallels are curves), but
+  fixed per tile rather than per degree.
+
+Additions:
+
+- `CoverageGlowProjection.worldFromCamera(heading, elevation, roll)` (the `directionOfPixel` /
+  `CameraAttitudeProvider` convention) and `worldFromCamera(deviceToWorld, cameraFromDevice)`:
+  row-major 3×3 whose columns are the GL camera axes in East-North-Up.
+- `CoverageGlowProjection.Lens` (`fromFieldOfView`, `fromIntrinsics` incl. off-centre principal
+  point), `projectRegions(regions, worldFromCamera, lens, maxSegmentDeg = 5)`,
+  `project(directions, worldFromCamera, lens)`, and `prepareRegions(...)` →
+  `PreparedRegions.projectInto(worldFromCamera, lens, out)` (pre-sampled unit vectors, no trig or
+  allocation per frame; tile edges cut into ≤ 5° segments; seam-exact across 0/360°).
+  The heading/elevation `projectRegions` is **deprecated** (unchanged behaviour).
+- `CoverageGlowRenderer`: display-rate re-projection on the GL thread — `setRegions`, `setLens`,
+  `rotationSource: RotationSource` (queried every draw with the frame time) or `setWorldFromCamera`;
+  `drawEmbedded(frameTimeNanos)`. New styles `FillMode.OUTLINE` (soft edge glow on the needs-update
+  side of the current tiles) and `FillMode.COMPLEMENT_OUTLINED` (wash + edge), with `outlineAlpha`,
+  `outlineWidthPx`; `hazeColor` / `hazeAlpha` are now safe to change from any thread while drawing,
+  plus `setHazeColorArgb`. Defaults unchanged (`TRIANGLES`, hot pink at 0.2).
+- `CoverageGlowView`: `updateRegions(map)`, `update(map, worldFromCamera, lens)`,
+  `trackAtDisplayRate(source)`; the heading/elevation `update` is deprecated.
+- `attitude.AttitudeExtrapolator`: timestamped attitude history — slerp inside it, constant-velocity
+  extrapolation (capped, default 50 ms) past it; `quaternionAt`, `deviceToWorldAt`,
+  `worldFromCameraAt`; thread-safe, allocation-free reads.
+- `CameraAttitudeProvider`: `start(samplingPeriodUs)` (default unchanged), `latestSample()`, and
+  `attitudeExtrapolator` fed by every sample.
+- `attitude.DisplayPosePredictor`: rotates the last vision pose by the attitude change since its
+  frame (same math as the IMU bridge, camera centre held, no re-referencing) for per-draw pose
+  prediction between vision updates; `predictInto(currentAttitude, out)` /
+  `predictInto(extrapolator, targetTimeNs, out)` are allocation-free and thread-safe.
+
 ### App → library consolidation, part 2 (additive)
 
 The SLAM pieces deferred from the first consolidation. All additions are new API.

@@ -39,7 +39,7 @@ Supporting packages (all pure / Android-light, no ARCore types):
   `rotateAboutCameraCentre`) and `RigidMath` (column-major 4×4 rigid/similarity math, OpenGL ↔ OpenCV
   flips). `:reloc`'s `RotationDeltaMath` / `PoseMath` delegate to these.
 - `com.hereliesaz.sphereslam.attitude` — `GameRotationAttitudeSource`, `AttitudeSample`,
-  `DeviceCameraRotation`, `AttitudeRotationBridge`.
+  `DeviceCameraRotation`, `AttitudeRotationBridge`, `AttitudeExtrapolator`, `DisplayPosePredictor`.
 - `com.hereliesaz.sphereslam.camera` — `CameraIntrinsics`, `CameraIntrinsicsEstimator`,
   `CameraIntrinsicsTransforms`, `CaptureRotation`, `LumaFrameTransform`, `ProjectionMatrix`,
   `ScreenIntrinsics` (`FIT_CENTER`), `CameraFillCenter` (`FILL_CENTER`: track the full frame, apply
@@ -222,7 +222,7 @@ The library defensively copies:
 - `AnchoredStandaloneSession.AnchoredPose.cameraFromContent`
 - `PanoramaTile.representativeOrientation`
 - all array fields in `PhotosphereMapSnapshot`
-- `CoverageGlowRenderer.hazeColor`
+- `CoverageGlowRenderer.hazeColor`, `CoverageGlowRenderer.setWorldFromCamera`
 - `AttitudeSample.quaternion`, `PhotosphereKeyframe` arrays, `HybridPoseHistory.Sample` matrices,
   `HybridKpmCorrection.Accepted` matrices, `MetricPageRectification.Geometry` arrays,
   `PhotosphereFingerprintFrame.Placement.mapFromFingerprint`, `GyroCompensationMath.Result.Within.homography`
@@ -276,6 +276,9 @@ nor load OpenCV.
 - `SphereSlamStandaloneSession.addReference` throws `IllegalArgumentException` when
   `canonicalFromPage` is not a rigid transform.
 - `CoverageGlowProjection.project` and `projectRegions` throw when a field of view is outside `(0, 180)` degrees.
+  The full-rotation overloads throw for a non-finite or wrongly sized `worldFromCamera`;
+  `CoverageGlowProjection.Lens` rejects non-positive scales; `prepareRegions` rejects a non-positive
+  `maxSegmentDeg` or non-finite region bounds.
 - `PhotosphereMap.fromSnapshot` rejects a non-finite `wallHeadingDeg` and normalizes a finite one.
 - `SphereCoverage` and `PhotosphereMap` auto-anchor their wall heading only from an in-band sample.
 
@@ -287,8 +290,12 @@ nor load OpenCV.
   pending frame.
 - `PhotosphereMap`, `PhotosphereReviewLoop`, and experimental `:reloc` state machines are not
   generally thread-safe unless explicitly documented otherwise.
-- `CoverageGlowRenderer.setTriangles` and `fillMode` are safe to call from any thread;
-  `createGlResources`, `drawEmbedded` and `releaseGlResources` must run on the GL thread.
+- `CoverageGlowRenderer.setTriangles`, `setRegions`, `setLens`, `setWorldFromCamera`,
+  `rotationSource`, `fillMode`, `hazeColor`, `hazeAlpha`, `outlineAlpha` and `outlineWidthPx` are safe
+  to call from any thread; `createGlResources`, `drawEmbedded` and `releaseGlResources` must run on
+  the GL thread, and `RotationSource.worldFromCamera` is invoked there.
+- `AttitudeExtrapolator` and `DisplayPosePredictor` are thread-safe; their `*Into` / `*At` reads
+  allocate nothing.
 - `GameRotationAttitudeSource` reads and `AttitudeRotationBridge` are thread-safe.
 - `PhotosphereKeyframeStore`, `HybridPoseHistory` and `HybridAnchorFusion` are not thread-safe.
 - `PlanarTracker` is not thread-safe; drive it from one camera worker.
@@ -305,10 +312,16 @@ restores the GL state it touches. `FillMode.COMPLEMENT` draws a wash with holes:
 ~~~kotlin
 renderer.fillMode = CoverageGlowRenderer.FillMode.COMPLEMENT
 renderer.hazeColor = CoverageGlowRenderer.WHITE
-renderer.setTriangles(
-    CoverageGlowProjection.projectRegions(map.currentRegions(), heading, elevation, hFov, vFov)
-)
+renderer.setLens(CoverageGlowProjection.Lens.fromIntrinsics(shownIntrinsics))
+renderer.rotationSource = CoverageGlowRenderer.RotationSource { t, out ->
+    attitude.attitudeExtrapolator.worldFromCameraAt(t, cameraFromDisplay, out)
+}
+renderer.setRegions(map.currentRegions()) // per keyframe; re-projected every draw
 ~~~
+
+Rotation convention: `worldFromCamera` is row-major 3×3 whose columns are the GL camera axes (x right,
+y up, z backward) in East-North-Up world (`CoverageGlowProjection.worldFromCamera`). The
+heading/elevation `projectRegions` and `CoverageGlowView.update(map, heading, ...)` are deprecated.
 
 ## 6. Experimental opt-in
 
