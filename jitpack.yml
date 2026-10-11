@@ -7,6 +7,10 @@
 # JitPack may not carry the exact native toolchain version pinned by SphereSLAM. Bootstrap the exact
 # Gradle and CMake distributions declared by the project, verify their published SHA-256 hashes, and
 # point AGP at the standalone CMake install explicitly.
+#
+# Kitware's CMake tarball ships no Ninja, and JitPack's image no longer puts one on PATH (0.25.1/0.25.2
+# failed with CXX1416 "Could not find Ninja"). Pin Ninja too and drop it into the standalone CMake's
+# bin/, which AGP searches when cmake.dir is set.
 jdk:
   - openjdk21
 
@@ -26,6 +30,11 @@ before_install:
   - rm -rf /tmp/cmake-4.4.4-linux-x86_64
   - tar -xzf /tmp/cmake-4.4.4-linux-x86_64.tar.gz -C /tmp
   - test "$(/tmp/cmake-4.4.4-linux-x86_64/bin/cmake --version | head -n 1)" = "cmake version 4.4.4"
+  - curl --fail --location --retry 3 --output /tmp/ninja-1.12.1-linux.zip https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-linux.zip
+  - echo "6f98805688d19672bd699fbbfa2c2cf0fc054ac3df1f0e6a47664d963d530255  /tmp/ninja-1.12.1-linux.zip" | sha256sum --check -
+  - unzip -o -q /tmp/ninja-1.12.1-linux.zip -d /tmp/cmake-4.4.4-linux-x86_64/bin
+  - chmod +x /tmp/cmake-4.4.4-linux-x86_64/bin/ninja
+  - test "$(/tmp/cmake-4.4.4-linux-x86_64/bin/ninja --version)" = "1.12.1"
   - printf '\ncmake.dir=/tmp/cmake-4.4.4-linux-x86_64\n' >> local.properties
 
 install:
