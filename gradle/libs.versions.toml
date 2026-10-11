@@ -1,11 +1,13 @@
 # SphereSLAM standalone version catalog.
-# Policy: every declared dependency/tool version is pinned to the latest stable release or newer.
+# Policy: every version is pinned exactly (no ranges or dynamic versions), normally to the latest
+# stable release when last updated; deliberate exceptions are commented where they are declared.
 [versions]
 agp = "9.4.1"
 coreKtx = "1.19.1"
 onnxruntime = "1.30.0"
-# LiteRT classic Interpreter + GPU delegate line (litert-gpu has no 2.x release older than 2 weeks;
-# 2.x litert drops org.tensorflow.lite.Delegate). Do not mix with litert 2.x in the same app.
+# Exception: LiteRT stays on the 1.x classic Interpreter + GPU delegate line, because litert 2.x
+# removes org.tensorflow.lite.Delegate (an API break for DepthRuntime's GPU delegate). Do not mix
+# with litert 2.x in the same app.
 litert = "1.4.2"
 opencv = "5.0.0.1"
 junit = "4.13.2"

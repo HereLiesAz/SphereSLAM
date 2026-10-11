@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Verify the pinned artoolkitX commit
+        run: test "$(git -C third_party/artoolkitx rev-parse HEAD)" = "9d487c9fa02d2ae9cef986d2698e829c2dcfbd25"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # The native build requires CMake 4.4.4 exactly (same bootstrap as jitpack.yml).
+      - name: Install CMake 4.4.4
+        run: |
+          curl --fail --location --retry 3 --output /tmp/cmake.tar.gz https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-linux-x86_64.tar.gz
+          echo "e5bb807f7728cb60cd8b27ebc97a2edb469b68655f21e844a600c3575b76f5bb  /tmp/cmake.tar.gz" | sha256sum --check -
+          tar -xzf /tmp/cmake.tar.gz -C /tmp
+          test "$(/tmp/cmake-4.4.4-linux-x86_64/bin/cmake --version | head -n 1)" = "cmake version 4.4.4"
+          printf 'sdk.dir=%s\ncmake.dir=/tmp/cmake-4.4.4-linux-x86_64\n' "$ANDROID_HOME" > local.properties
+
+      - name: Assemble and run JVM tests
+        run: ./gradlew assemble test --stacktrace
