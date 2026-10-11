@@ -27,7 +27,7 @@ class SphereSlamTracker internal constructor(
 ) : AutoCloseable {
 
     /** Public tracker construction owns its private worker and native implementation. */
-    constructor() : this(KpmNative, newWorker())
+    constructor() : this(KpmNative(), newWorker())
 
     /** Test seam; intentionally not part of the consumer API. */
     internal constructor(native: Native) : this(native, newWorker())
@@ -120,6 +120,10 @@ class SphereSlamTracker internal constructor(
     private val closed = AtomicBoolean(false)
     private val latest = AtomicReference<Observation?>(null)
     private val pendingFrame = AtomicReference<PendingFrame?>(null)
+
+    // A packed-frame array the worker has finished with (or a superseded pending frame's), reused by
+    // the next submitFrame: steady state allocates no frame-sized array per frame.
+    private val spareLuma = AtomicReference<ByteArray?>(null)
     private val drainScheduled = AtomicBoolean(false)
 
     @Volatile private var cameraModel: CameraModel? = null
@@ -237,7 +241,11 @@ class SphereSlamTracker internal constructor(
         if (closed.get() || !referenceReady) return
         val model = cameraModel ?: return
         if (model.width != width || model.height != height) return
-        pendingFrame.set(PendingFrame(packLuma(luma, width, height, rowStride), timestampNs))
+        val size = width * height
+        val buffer = spareLuma.getAndSet(null)?.takeIf { it.size == size } ?: ByteArray(size)
+        packLumaInto(luma, width, height, rowStride, buffer)
+        // A superseded frame was never handed to the worker, so its array is free again.
+        pendingFrame.getAndSet(PendingFrame(buffer, timestampNs))?.let { spareLuma.set(it.luma) }
         scheduleDrain()
     }
 
@@ -251,6 +259,7 @@ class SphereSlamTracker internal constructor(
                     if (handle != 0L && referenceReady) {
                         native.match(handle, frame.luma, frame.timestampNs)?.let(latest::set)
                     }
+                    spareLuma.set(frame.luma)
                 }
             } finally {
                 drainScheduled.set(false)
@@ -295,13 +304,17 @@ class SphereSlamTracker internal constructor(
                 Thread(runnable, "sphereslam-kpm").apply { isDaemon = true }
             }
 
-        internal fun packLuma(source: ByteBuffer, width: Int, height: Int, rowStride: Int): ByteArray {
+        internal fun packLuma(source: ByteBuffer, width: Int, height: Int, rowStride: Int): ByteArray =
+            packLumaInto(source, width, height, rowStride, ByteArray(width * height))
+
+        /** [packLuma] into [out] (exactly `width * height` bytes); returns [out]. */
+        internal fun packLumaInto(source: ByteBuffer, width: Int, height: Int, rowStride: Int, out: ByteArray): ByteArray {
             require(width > 0 && height > 0)
             require(rowStride >= width)
+            require(out.size == width * height)
             val base = source.position()
             val requiredLastIndex = base + (height - 1) * rowStride + width
             require(requiredLastIndex <= source.limit())
-            val out = ByteArray(width * height)
             val duplicate = source.duplicate()
             var dst = 0
             for (row in 0 until height) {
@@ -313,7 +326,23 @@ class SphereSlamTracker internal constructor(
         }
     }
 
-    private object KpmNative : Native {
+    /**
+     * The JNI side. One instance per tracker, used only on its single worker thread, so the direct
+     * buffer and output array are reused across calls instead of allocated per frame.
+     */
+    private class KpmNative : Native {
+        private var direct: ByteBuffer? = null
+        private val out = FloatArray(KpmBridge.MATCH_OUTPUT_FLOATS)
+
+        private fun directCopy(luma: ByteArray): ByteBuffer {
+            val buffer = direct?.takeIf { it.capacity() >= luma.size }
+                ?: ByteBuffer.allocateDirect(luma.size).also { direct = it }
+            buffer.clear()
+            buffer.put(luma)
+            buffer.flip()
+            return buffer
+        }
+
         // KpmBridge.isAvailable() never throws; runCatching also covers a linkage error raised by a
         // KpmBridge class that failed to initialize, so configure() degrades instead of crashing.
         override val available: Boolean
@@ -335,11 +364,9 @@ class SphereSlamTracker internal constructor(
             imageNo: Int,
             maxFeatures: Int,
         ): Boolean {
-            val direct = ByteBuffer.allocateDirect(luma.size)
-            direct.put(luma).rewind()
             return KpmBridge.addPlanarPage(
                 handle,
-                direct,
+                directCopy(luma),
                 width,
                 height,
                 dpi,
@@ -352,10 +379,7 @@ class SphereSlamTracker internal constructor(
         override fun clear(handle: Long): Boolean = KpmBridge.clearPages(handle)
 
         override fun match(handle: Long, luma: ByteArray, timestampNs: Long): Observation? {
-            val direct = ByteBuffer.allocateDirect(luma.size)
-            direct.put(luma).rewind()
-            val out = FloatArray(KpmBridge.MATCH_OUTPUT_FLOATS)
-            val pageNo = KpmBridge.matchPlanar(handle, direct, out)
+            val pageNo = KpmBridge.matchPlanar(handle, directCopy(luma), out)
             if (pageNo < 0) return null
             return Observation(
                 timestampNs = timestampNs,

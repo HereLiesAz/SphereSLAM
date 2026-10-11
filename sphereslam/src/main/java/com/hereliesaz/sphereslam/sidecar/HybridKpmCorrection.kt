@@ -44,18 +44,42 @@ object HybridKpmCorrection {
     /** Rotation counterpart of [MAX_CORRECTION_M] (degrees). Same status: unmeasured first pass. */
     const val MAX_CORRECTION_DEG = 30f
 
-    /** Why an observation was refused (gate order). */
+    /**
+     * Fewest inliers at which [Accepted.confidence]'s inlier term saturates (also
+     * [HybridAnchorFusion.COLD_SNAP_MIN_INLIERS]).
+     */
+    const val CONFIDENCE_SATURATION_INLIERS = 20
+
+    /**
+     * Lowest [Accepted.confidence] (inlier saturation × reprojection margin) an observation may have
+     * — the same bar [HybridAnchorFusion] applies ([HybridAnchorFusion.MIN_CONFIDENCE]). Gated here
+     * so a refused observation is reported as [Reject.LOW_CONFIDENCE], never as accepted. Together
+     * with [MIN_INLIERS] and [MAX_REPROJECTION_ERROR_PX] it means: with `n` inliers the error must be
+     * at most `MAX_REPROJECTION_ERROR_PX · (1 − MIN_CONFIDENCE · 20 / min(n, 20))` px (e.g. ≤ 0.67 px
+     * at 12 inliers, ≤ 2 px at 20 or more).
+     */
+    const val MIN_CONFIDENCE = 0.5f
+
+    /** Why an observation was refused, in the order the gates run. */
     enum class Reject(
         /** The diagnostic outcome reported for this rejection. */
         val outcome: HybridKpmOutcome,
     ) {
         NON_METRIC(HybridKpmOutcome.NON_METRIC),
         STALE(HybridKpmOutcome.STALE),
-        NO_POSE_PAIR(HybridKpmOutcome.NO_POSE_PAIR),
         TOO_FEW_INLIERS(HybridKpmOutcome.TOO_FEW_INLIERS),
         BAD_REPROJECTION(HybridKpmOutcome.BAD_REPROJECTION),
+        LOW_CONFIDENCE(HybridKpmOutcome.LOW_CONFIDENCE),
         NON_FINITE(HybridKpmOutcome.NON_FINITE),
+        NO_POSE_PAIR(HybridKpmOutcome.NO_POSE_PAIR),
         CORRECTION_TOO_LARGE(HybridKpmOutcome.CORRECTION_TOO_LARGE),
+    }
+
+    /** `[0, 1]`: inlier saturation × reprojection margin — what [Accepted.confidence] reports. */
+    fun confidence(inliers: Int, reprojectionErrorPx: Float): Float {
+        val inlierConfidence = (inliers / CONFIDENCE_SATURATION_INLIERS.toFloat()).coerceIn(0f, 1f)
+        val reprojectionConfidence = (1f - reprojectionErrorPx / MAX_REPROJECTION_ERROR_PX).coerceIn(0f, 1f)
+        return (inlierConfidence * reprojectionConfidence).coerceIn(0f, 1f)
     }
 
     /**
@@ -166,6 +190,10 @@ object HybridKpmCorrection {
         ) {
             return reject(Reject.BAD_REPROJECTION)
         }
+        val confidence = confidence(inliers, reprojectionError)
+        if (confidence < MIN_CONFIDENCE) {
+            return reject(Reject.LOW_CONFIDENCE)
+        }
         if (
             cameraFromPage3x4.size != 12 ||
             cameraFromPage3x4.any { !it.isFinite() } ||
@@ -206,13 +234,6 @@ object HybridKpmCorrection {
         ) {
             return reject(Reject.CORRECTION_TOO_LARGE)
         }
-
-        // Independent confidence terms. Inliers saturate at the same 20-point bar HybridAnchorFusion uses
-        // for hard relocks; reprojection confidence falls linearly to zero at the acceptance edge.
-        val inlierConfidence = (inliers / 20f).coerceIn(0f, 1f)
-        val reprojectionConfidence =
-            (1f - reprojectionError / MAX_REPROJECTION_ERROR_PX).coerceIn(0f, 1f)
-        val confidence = (inlierConfidence * reprojectionConfidence).coerceIn(0f, 1f)
 
         return Decision(
             accepted = Accepted(

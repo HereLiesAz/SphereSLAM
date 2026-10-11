@@ -70,6 +70,39 @@ class HybridKpmCorrectionTest {
     }
 
     @Test
+    fun `an observation fusion would refuse is reported as low confidence, never as accepted`() {
+        val history = HybridPoseHistory()
+        history.add(1_000L, identity(), translated(0f, 0f, -2f))
+        // 12 inliers and 1 px each pass their own gate, but 0.6 × 0.75 = 0.45 < MIN_CONFIDENCE.
+        val weak = frontObservation(1_000L, 2_000f).copy(inliers = 12, error = 1f)
+        val d = solve(weak, geometry, true, identity(), history, 1_050L)
+        assertNull(d.accepted)
+        assertEquals(HybridKpmCorrection.Reject.LOW_CONFIDENCE, d.reject)
+        assertEquals(HybridKpmOutcome.LOW_CONFIDENCE, d.diagnostics.outcome)
+        // Whatever passes is something HybridAnchorFusion accepts.
+        val ok = solve(weak.copy(error = 0.5f), geometry, true, identity(), history, 1_050L).accepted!!
+        assertEquals(0.6f * 0.875f, ok.confidence, 1e-6f)
+        val fusion = HybridAnchorFusion()
+        fusion.currentAnchor(identity(), ok)
+        assertEquals(1, fusion.diagnostics().accepted)
+        assertEquals(0, fusion.diagnostics().rejected)
+        assertEquals(HybridAnchorFusion.MIN_CONFIDENCE, HybridKpmCorrection.MIN_CONFIDENCE, 0f)
+    }
+
+    @Test
+    fun `reject reasons are declared in gate order`() {
+        assertEquals(
+            listOf("NON_METRIC", "STALE", "TOO_FEW_INLIERS", "BAD_REPROJECTION", "LOW_CONFIDENCE", "NON_FINITE", "NO_POSE_PAIR", "CORRECTION_TOO_LARGE"),
+            HybridKpmCorrection.Reject.entries.map { it.name },
+        )
+        // A pose-pair miss is only reported once every earlier gate passed.
+        val history = HybridPoseHistory()
+        history.add(1_000L, identity(), translated(0f, 0f, -2f))
+        val far = frontObservation(100_000_000L, 2_000f).copy(inliers = 3)
+        assertEquals(HybridKpmCorrection.Reject.TOO_FEW_INLIERS, solve(far, geometry, true, identity(), history, 100_000_010L).reject)
+    }
+
+    @Test
     fun `missing timestamp pair is refused rather than using render-time camera pose`() {
         val history = HybridPoseHistory()
         history.add(1_000L, identity(), translated(0f,0f,-2f))

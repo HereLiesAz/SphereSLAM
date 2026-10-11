@@ -39,7 +39,7 @@ class HybridAnchorFusion {
         /** A correction stands and nothing new arrived. */
         HOLDING,
 
-        /** A new observation was refused (quality below [MIN_INLIER_RATIO]); the standing correction holds. */
+        /** A new observation was refused (confidence below [MIN_CONFIDENCE]); the standing correction holds. */
         RELOCK_REFUSED,
 
         /** A large move is pending until enough observations agree. */
@@ -138,9 +138,9 @@ class HybridAnchorFusion {
         if (isNew) {
             val quality = confidence.coerceIn(0f, 1f)
             lastQuality = quality
-            if (quality < MIN_INLIER_RATIO) rejected++
+            if (quality < MIN_CONFIDENCE) rejected++
 
-            if (quality >= MIN_INLIER_RATIO) {
+            if (quality >= MIN_CONFIDENCE) {
                 val newLocal = RigidMath.multiply(RigidMath.rigidInverse(backboneAtObservation), correctedAnchorAtObservation)
                 val correctedCurrent = RigidMath.multiply(currentBackbone, newLocal)
                 val applied = correction?.let { RigidMath.multiply(currentBackbone, it) }
@@ -165,7 +165,7 @@ class HybridAnchorFusion {
                 }
                 clearPending()
                 val cold = coldStart || applied == null || diverged(applied, correctedCurrent)
-                val highConf = quality >= COLD_SNAP_INLIER_RATIO && inliers >= COLD_SNAP_MIN_INLIERS
+                val highConf = quality >= COLD_SNAP_MIN_CONFIDENCE && inliers >= COLD_SNAP_MIN_INLIERS
                 correction = if (cold && highConf) {
                     coldStart = false
                     lastState = State.COLD_SNAP
@@ -227,8 +227,17 @@ class HybridAnchorFusion {
     }
 
     companion object {
-        /** Minimum observation quality for a fix to be trusted at all. */
-        const val MIN_INLIER_RATIO = 0.5f
+        /**
+         * Minimum observation confidence (`[0, 1]`, [HybridKpmCorrection.confidence]: inlier saturation
+         * × reprojection margin — not an inlier ratio) for a fix to be trusted at all. The same value as
+         * [HybridKpmCorrection.MIN_CONFIDENCE], which already refuses lower-confidence observations with
+         * a truthful [HybridKpmOutcome.LOW_CONFIDENCE]; it is re-checked here for callers that pass raw
+         * observations to [currentAnchor].
+         */
+        const val MIN_CONFIDENCE = HybridKpmCorrection.MIN_CONFIDENCE
+
+        @Deprecated("A confidence, not an inlier ratio", ReplaceWith("MIN_CONFIDENCE"))
+        const val MIN_INLIER_RATIO = MIN_CONFIDENCE
 
         /** Base smoothing rate for a (non-cold) correction update. */
         const val BASE_ALPHA = 0.25f
@@ -236,8 +245,11 @@ class HybridAnchorFusion {
         /** Floor of the effective confidence that scales blending: `CONF_FLOOR + (1 − CONF_FLOOR)·quality`. */
         const val CONF_FLOOR = 0.5f
 
-        /** A cold (hard) snap requires at least this quality … */
-        const val COLD_SNAP_INLIER_RATIO = 0.7f
+        /** A cold (hard) snap requires at least this confidence … */
+        const val COLD_SNAP_MIN_CONFIDENCE = 0.7f
+
+        @Deprecated("A confidence, not an inlier ratio", ReplaceWith("COLD_SNAP_MIN_CONFIDENCE"))
+        const val COLD_SNAP_INLIER_RATIO = COLD_SNAP_MIN_CONFIDENCE
 
         /** … and at least this many absolute inliers. */
         const val COLD_SNAP_MIN_INLIERS = 20f

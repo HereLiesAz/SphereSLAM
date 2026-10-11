@@ -172,4 +172,19 @@ class SphereCoverageTest {
         assertFalse(c.observe(180f, 10f))
         assertEquals(1, c.observationCount)
     }
+
+    @Test
+    fun `angle ranges are the documented half-open intervals`() {
+        // (0, 180] and (0, 90]: sub-degree arcs are valid, zero, negative and NaN are not.
+        SphereCoverage(viewableHalfAngleDeg = 0.5f, viewableElevationHalfAngleDeg = 0.25f)
+        PhotosphereMap(viewableHalfAngleDeg = 180f, viewableElevationHalfAngleDeg = 90f)
+        for ((h, e) in listOf(0f to 30f, -1f to 30f, Float.NaN to 30f, 181f to 30f, 60f to 0f, 60f to 90.5f, 60f to Float.NaN)) {
+            org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+                SphereCoverage(viewableHalfAngleDeg = h, viewableElevationHalfAngleDeg = e)
+            }
+            org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+                PhotosphereMap(viewableHalfAngleDeg = h, viewableElevationHalfAngleDeg = e)
+            }
+        }
+    }
 }

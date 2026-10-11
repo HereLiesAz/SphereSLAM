@@ -74,8 +74,9 @@ data class PhotosphereView(
  * Keeps the latest [PhotosphereKeyframe] per [PhotosphereMap] tile, feeding the map as keyframes
  * arrive. Ported from GraffitiXR's standalone photosphere (`onStandalonePhotosphereKeyframe`).
  *
- * The first keyframe anchors the map's wall heading when it has none (the photosphere owns its
- * frame from startup; this is not a fingerprint anchor). Not thread-safe — like [PhotosphereMap],
+ * The first keyframe inside the map's viewable elevation arc anchors the wall heading when the map
+ * has none (the photosphere owns its frame from startup; this is not a fingerprint anchor); an
+ * out-of-band keyframe never anchors it, matching [PhotosphereMap.markUpdated]. Not thread-safe — like [PhotosphereMap],
  * guard both with one lock when keyframes and reads cross threads.
  */
 class PhotosphereKeyframeStore(
@@ -97,15 +98,17 @@ class PhotosphereKeyframeStore(
     )
 
     /**
-     * Fold [keyframe] into the map (anchoring the wall heading if unset) and keep it for its tile.
+     * Fold [keyframe] into the map and keep it for its tile. An in-band keyframe anchors the wall
+     * heading when the map has none.
      *
-     * @return the updated tile, or null when the keyframe's direction lies outside the map's
-     *   viewable lattice (nothing is stored then).
+     * @return the updated tile (with [Recorded.firstCaptureForTile]), or null when the keyframe's
+     *   direction lies outside the map's viewable lattice — then nothing is stored and the map is left
+     *   unchanged (in particular, an out-of-band keyframe never anchors the wall heading).
      */
     fun record(keyframe: PhotosphereKeyframe, nowMs: Long): Recorded? {
-        if (!map.hasWallHeading()) map.setWallHeading(keyframe.headingDeg)
+        val anchored = map.hasWallHeading()
         val candidate = map.tileAt(keyframe.headingDeg, keyframe.elevationDeg)
-        val first = candidate != null && !map.hasBeenScanned(candidate)
+        val scannedBefore = candidate != null && map.hasBeenScanned(candidate)
         val tile = map.markUpdated(
             headingDeg = keyframe.headingDeg,
             elevationDeg = keyframe.elevationDeg,
@@ -114,7 +117,8 @@ class PhotosphereKeyframeStore(
         ) ?: return null
         frames[tile] = keyframe
         latest = keyframe
-        return Recorded(tile, first)
+        // The anchoring keyframe had no tile address before it anchored the map: its tile is new.
+        return Recorded(tile, firstCaptureForTile = if (anchored) !scannedBefore else true)
     }
 
     /** The keyframe stored for [tile], or null. */

@@ -28,8 +28,10 @@ import com.hereliesaz.sphereslam.math.RotationMath
  * Results are row-major 3×3, `v_camera = M · v_device`, in the **OpenGL** camera convention (x
  * right, y up, looking down −z) — the convention of `:reloc`'s `AttitudePosePredictor` and
  * [AttitudeRotationBridge]. The rear camera looks along body −z, so no axis flip is needed beyond the
- * roll about z. For an OpenCV camera frame (y down, z forward) conjugate by `diag(1, −1, −1)`, which
- * turns `R_z(θ)` into `R_z(−θ)` ([toOpenCv]).
+ * roll about z. For an OpenCV camera frame (y down, z forward) **left**-multiply by
+ * `D = diag(1, −1, −1)` ([toOpenCv]): `cvCameraFromDevice = D · glCameraFromDevice`. That relabels
+ * the camera axes only — it is not a rotation of the device frame and not `R_z(−θ)`. (A rotation
+ * expressed *in* the camera frame, such as a camera-frame delta, converts by conjugation `D · ΔR · D`.)
  *
  * `R_z(d)` for `d ∈ {0, 90, 180, 270}` equals `SensorManager.remapCoordinateSystem`'s body-to-display
  * remap (for 90: `x' = −y, y' = x`); `DeviceCameraRotationTest` pins this against an independent
@@ -69,7 +71,11 @@ object DeviceCameraRotation {
     /** GL-camera-from-device for a pose solved in the display-upright image: [bodyToDisplay]. */
     fun cameraFromDeviceForDisplayFrame(displayRotationDeg: Int): FloatArray = bodyToDisplay(displayRotationDeg)
 
-    /** Convert a GL-camera-frame rotation (row-major 3×3) to the OpenCV camera frame: `D · M`, `D = diag(1, −1, −1)`. */
+    /**
+     * Re-express a GL-camera-from-device rotation (row-major 3×3) with OpenCV camera axes:
+     * `D · M`, `D = diag(1, −1, −1)` (rows y and z negated). Only for `camera ← device` maps; a
+     * camera-frame rotation (`camera ← camera`) converts by `D · ΔR · D` instead.
+     */
     fun toOpenCv(glCameraFromDevice: FloatArray): FloatArray {
         require(glCameraFromDevice.size == 9) { "expected a row-major 3x3" }
         val sign = floatArrayOf(1f, -1f, -1f)

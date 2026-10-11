@@ -40,12 +40,13 @@ import com.hereliesaz.sphereslam.attitude.AttitudeSampleBuffer
  * (`start(SensorManager.SENSOR_DELAY_GAME)` or `SENSOR_DELAY_FASTEST`); the default UI rate (~16 Hz)
  * is enough for keyframe stamping only.
  *
- * @param context any Context; used only to obtain the system [SensorManager] (no reference retained
- *   beyond the sensor registration).
+ * @param context any Context. Only its **application** context's [SensorManager] is held (a
+ *   `SensorManager` obtained from an Activity references that Activity), so passing an Activity
+ *   does not keep it alive; the provider itself stays registered with the sensor until [stop].
  */
 class CameraAttitudeProvider(context: Context) : SensorEventListener {
 
-    private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+    private val sensorManager = applicationSensorManager(context)
     private val rotationSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
 
     /** True when this device has a magnetometer-fused rotation-vector sensor. */
@@ -93,7 +94,7 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
 
     /**
      * Latest sample as a body→world (East-North-Up) quaternion with its `SensorEvent.timestamp`
-     * (`elapsedRealtimeNanos` base), or null in the same cases as [latestHeadingDegrees]. Unlike the
+     * (`elapsedRealtimeNanos` base) and the sensor's last reported accuracy, or null in the same cases as [latestHeadingDegrees]. Unlike the
      * heading, this is defined when looking straight up or down.
      */
     fun latestSample(): AttitudeSample? = samples.latest()
@@ -145,16 +146,21 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
 
     override fun onSensorChanged(event: SensorEvent) {
         if (event.sensor.type != Sensor.TYPE_ROTATION_VECTOR) return
+        onRotationVector(event.values, event.timestamp)
+    }
+
+    /** [onSensorChanged] body for one `TYPE_ROTATION_VECTOR` sample (the JVM-testable seam). */
+    internal fun onRotationVector(values: FloatArray, timestampNs: Long) {
         val r = FloatArray(9)
         // getRotationMatrixFromVector throws on a malformed vector; a size-5 vector (with an extra
         // estimated-heading-accuracy element) must be truncated to 4 first.
-        val v = if (event.values.size > 4) event.values.copyOf(4) else event.values
+        val v = if (values.size > 4) values.copyOf(4) else values
         try {
             SensorManager.getRotationMatrixFromVector(r, v)
         } catch (_: IllegalArgumentException) {
             return
         }
-        samples.ingestRotationVector(event.values, event.timestamp)
+        samples.ingestRotationVector(values, timestampNs)
         samples.latest()?.let { attitudeExtrapolator.push(it) }
         cameraAxisHeadingElevation(r)?.let { (h, e) ->
             latestHeadingDeg = h
@@ -165,12 +171,26 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
-        if (sensor?.type == Sensor.TYPE_ROTATION_VECTOR) {
-            reliable = accuracy >= SensorManager.SENSOR_STATUS_ACCURACY_MEDIUM
-        }
+        if (sensor?.type == Sensor.TYPE_ROTATION_VECTOR) onRotationAccuracy(accuracy)
+    }
+
+    /**
+     * Record a reported `SENSOR_STATUS_*` accuracy: drives [isReliable] and is stamped on every later
+     * [latestSample] (`AttitudeSample.accuracy`).
+     */
+    internal fun onRotationAccuracy(accuracy: Int) {
+        reliable = accuracy >= SensorManager.SENSOR_STATUS_ACCURACY_MEDIUM
+        samples.accuracy = accuracy
     }
 
     companion object {
+        /**
+         * The [SensorManager] of [context]'s application context (falling back to [context] itself
+         * when it has none), so a long-lived listener never pins an Activity.
+         */
+        internal fun applicationSensorManager(context: Context): SensorManager? =
+            (context.applicationContext ?: context).getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+
         /**
          * Camera-axis (heading, elevation) in degrees from a device→world East-North-Up rotation
          * matrix [r] (row-major 3×3), or null when the axis is too near vertical for a meaningful

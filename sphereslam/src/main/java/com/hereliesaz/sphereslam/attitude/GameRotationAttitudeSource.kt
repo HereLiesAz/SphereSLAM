@@ -25,6 +25,9 @@ import com.hereliesaz.sphereslam.math.RotationMath
  * Fails soft: no sensor ⇒ [isAvailable] false and [latestSample] null. Reads are whole-value swaps,
  * safe from any thread; [start]/[stop] are safe from any thread.
  *
+ * Only the **application** context's [SensorManager] is held, so passing an Activity does not keep
+ * it alive (the source stays registered with the sensor until [stop]).
+ *
  * Typical use with `:reloc`:
  * ```
  * val attitude = GameRotationAttitudeSource(context).apply { start() }
@@ -35,7 +38,7 @@ import com.hereliesaz.sphereslam.math.RotationMath
  */
 class GameRotationAttitudeSource(context: Context) : SensorEventListener {
 
-    private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+    private val sensorManager = com.hereliesaz.sphereslam.CameraAttitudeProvider.applicationSensorManager(context)
     private val sensor = sensorManager?.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
     private val buffer = AttitudeSampleBuffer()
     private val lock = Any()

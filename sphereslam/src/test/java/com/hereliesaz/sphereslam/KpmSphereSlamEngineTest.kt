@@ -78,10 +78,12 @@ class KpmSphereSlamEngineTest {
         )
         session.addReference(ByteBuffer.allocateDirect(16), 4, 4, 1f, false, pageNo = 7)
         val fork = session.fork()!!
-        assertTrue(fork.hasReference)
-        assertNotNull(fork.match(ByteBuffer.allocateDirect(16), 1L)) // page 7 is known to the fork
+        assertTrue(fork.hasReference) // page 7's metadata is carried over…
+        // …but a native clone is not indexed until its first add, so it matches nothing yet.
+        assertNull(fork.match(ByteBuffer.allocateDirect(16), 1L))
         fork.addReference(ByteBuffer.allocateDirect(16), 4, 4, 1f, false, pageNo = 8)
         assertEquals(456L, api.addedTo.last())
+        assertNotNull(fork.match(ByteBuffer.allocateDirect(16), 2L)) // page 7 matches once indexed
         fork.close()
         assertTrue(session.isReady)
         assertNotNull(session.match(ByteBuffer.allocateDirect(16), 2L))
@@ -116,6 +118,10 @@ class KpmSphereSlamEngineTest {
         val addedTo = mutableListOf<Long>()
         val destroyed = mutableListOf<Long>()
         var destroyCalls = 0
+
+        // Like the native bridge: a session matches only once kpmSetRefDataSet has indexed its atlas,
+        // which happens on addPage; a fresh clone is unindexed until its first addPage.
+        private val indexed = mutableSetOf<Long>()
         var createdWith: SphereSlamCalibration? = null
 
         override fun create(
@@ -138,6 +144,7 @@ class KpmSphereSlamEngineTest {
             maxFeatures: Int,
         ): Int {
             addedTo += session
+            indexed += session
             return 42
         }
 
@@ -147,7 +154,7 @@ class KpmSphereSlamEngineTest {
         }
 
         override fun match(session: Long, luma: ByteBuffer, out: FloatArray): Int {
-            if (matchPage < 0) return -1
+            if (matchPage < 0 || session !in indexed) return -1
             for (i in 0 until 12) out[i] = i.toFloat()
             out[12] = 0.25f
             out[13] = 9f

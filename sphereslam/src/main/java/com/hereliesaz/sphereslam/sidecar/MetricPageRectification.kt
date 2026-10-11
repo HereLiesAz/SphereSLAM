@@ -156,10 +156,8 @@ object MetricPageRectification {
             halfW *= 0.88f
             halfH *= 0.88f
         }
-        val src = corners ?: return null
-        val widthMeters = halfW * 2f
-        val heightMeters = halfH * 2f
-        if (widthMeters < MIN_SIDE_M || heightMeters < MIN_SIDE_M) return null
+        var src = corners ?: return null
+        if (halfW * 2f < MIN_SIDE_M || halfH * 2f < MIN_SIDE_M) return null
 
         // KPM's centred page axes are +X right / +Y image-up; in the CV camera frame ex / ey are those
         // axes and ez = ex × ey points from the wall toward the camera. Convert once to OpenGL.
@@ -172,15 +170,39 @@ object MetricPageRectification {
         )
         val cameraFromPageGl = RigidMath.cvViewToGl(cameraFromPageCv)
 
+        // One square pixel pitch for the whole page (the DPI KPM is given), then whole pixels that fit
+        // inside the chosen rectangle: the page is shrunk (never grown) to exactly outW × outH pitches,
+        // so the warped image, the DPI and the page geometry describe the same physical size.
         val sourceWidthPx = max(dist(src, 0, 1), dist(src, 3, 2)).roundToInt().coerceAtLeast(MIN_REFERENCE_DIM)
         var outW = min(MAX_REFERENCE_DIM, sourceWidthPx)
-        var outH = (outW * heightMeters / widthMeters).roundToInt().coerceAtLeast(2)
+        var pitch = halfW * 2f / outW
+        var outH = floor(halfH * 2f / pitch).toInt()
         if (outH > MAX_REFERENCE_DIM) {
-            val s = MAX_REFERENCE_DIM.toFloat() / outH.toFloat()
-            outW = (outW * s).roundToInt().coerceAtLeast(2)
             outH = MAX_REFERENCE_DIM
+            pitch = halfH * 2f / outH
+            outW = floor(halfW * 2f / pitch).toInt()
         }
         if (outW < MIN_REFERENCE_DIM || outH < MIN_REFERENCE_DIM) return null
+        val widthMeters = outW * pitch
+        val heightMeters = outH * pitch
+        if (widthMeters < MIN_SIDE_M || heightMeters < MIN_SIDE_M) return null
+        if (widthMeters < halfW * 2f || heightMeters < halfH * 2f) {
+            // Re-project the (smaller, so still in-frame) exact rectangle.
+            halfW = widthMeters / 2f
+            halfH = heightMeters / 2f
+            val exact = FloatArray(8)
+            val physical = listOf(
+                add(add(c, scale(ex, -halfW)), scale(ey, halfH)),
+                add(add(c, scale(ex, halfW)), scale(ey, halfH)),
+                add(add(c, scale(ex, halfW)), scale(ey, -halfH)),
+                add(add(c, scale(ex, -halfW)), scale(ey, -halfH)),
+            )
+            for ((i, p) in physical.withIndex()) {
+                val uv = project(p, fx, fy, cx, cy) ?: return null
+                exact[i * 2] = uv[0]; exact[i * 2 + 1] = uv[1]
+            }
+            src = exact
+        }
 
         val dpi = SphereSlamPoseMath.dpiForReferenceWidth(outW, widthMeters)
         return Geometry(
@@ -196,9 +218,11 @@ object MetricPageRectification {
     }
 
     /**
-     * Resample the [geometry]'s source quadrilateral of a luma image into the metric page: TL, TR,
-     * BR, BL map to `(0, 0)`, `(W−1, 0)`, `(W−1, H−1)`, `(0, H−1)`; bilinear, out-of-image samples
-     * are 0 (OpenCV `warpPerspective` defaults).
+     * Resample the [geometry]'s source quadrilateral of a luma image into the metric page. The
+     * quadrilateral's corners are the page's physical corners, so they map to the output's pixel
+     * **edges** — TL, TR, BR, BL to `(−½, −½)`, `(W−½, −½)`, `(W−½, H−½)`, `(−½, H−½)` in pixel-centre
+     * coordinates — and each output pixel spans exactly `widthMeters / W` (the pitch
+     * [Geometry.referenceDpi] states). Bilinear; out-of-image samples are 0.
      *
      * @param rowStride bytes per source row (`>= width`).
      * @return null for a malformed image or a degenerate quadrilateral.
@@ -226,7 +250,8 @@ object MetricPageRectification {
 
     /**
      * Perspective-resample the quadrilateral [corners] (TL, TR, BR, BL as `[u0, v0, …]`) of a luma
-     * image to an [outWidth] × [outHeight] rectangle. Bilinear; samples outside the image read 0.
+     * image to an [outWidth] × [outHeight] rectangle whose outer pixel edges are the corners (pixel
+     * `(x, y)` samples the quad at `((x + ½)/W, (y + ½)/H)`). Bilinear; samples outside the image read 0.
      */
     fun warpQuadToRect(
         luma: ByteArray,
@@ -240,11 +265,12 @@ object MetricPageRectification {
         if (width <= 0 || height <= 0 || rowStride < width || outWidth <= 1 || outHeight <= 1) return null
         if (corners.size != 8 || corners.any { !it.isFinite() }) return null
         if (luma.size.toLong() < (height - 1).toLong() * rowStride + width) return null
-        val maxX = (outWidth - 1).toDouble()
-        val maxY = (outHeight - 1).toDouble()
-        // H maps output (x, y) to source (u, v).
+        val lo = -0.5
+        val maxX = outWidth - 0.5
+        val maxY = outHeight - 0.5
+        // H maps output (x, y) (pixel centres) to source (u, v); the corners sit on the outer edges.
         val h = homography(
-            doubleArrayOf(0.0, 0.0, maxX, 0.0, maxX, maxY, 0.0, maxY),
+            doubleArrayOf(lo, lo, maxX, lo, maxX, maxY, lo, maxY),
             DoubleArray(8) { corners[it].toDouble() },
         ) ?: return null
         val out = ByteArray(outWidth * outHeight)
