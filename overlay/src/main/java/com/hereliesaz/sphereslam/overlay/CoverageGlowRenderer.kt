@@ -6,6 +6,7 @@ import android.opengl.GLSurfaceView
 import android.os.SystemClock
 import android.util.Log
 import com.hereliesaz.sphereslam.CoverageGlowProjection
+import com.hereliesaz.sphereslam.PhotosphereMap
 import com.hereliesaz.sphereslam.SphereCoverage
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -116,6 +117,18 @@ class CoverageGlowRenderer(
             field = value
         }
 
+    /**
+     * Opacity a tile reaches just before its scan completes ([setRegionProgress]), `[0, 1]`: a tile
+     * being scanned fills from the wash's [hazeAlpha] (from nothing in [FillMode.OUTLINE]) toward this
+     * as its progress grows, then opens to the camera once scanned. Safe to set from any thread.
+     */
+    @Volatile
+    var progressAlpha: Float = DEFAULT_PROGRESS_ALPHA
+        set(value) {
+            require(value.isFinite() && value in 0f..1f) { "progressAlpha must be in [0, 1]" }
+            field = value
+        }
+
     init {
         require(validColor(color)) { "hazeColor must contain three RGB values in [0, 1]" }
         require(this.hazeAlpha.isFinite() && this.hazeAlpha in 0f..1f) { "hazeAlpha must be in [0, 1]" }
@@ -181,6 +194,9 @@ class CoverageGlowRenderer(
 
     private val latest = AtomicReference(FloatArray(0))
     private val liveRegions = AtomicReference<CoverageGlowProjection.PreparedRegions?>(null)
+    // Partly scanned tiles, grouped by quantized progress: one draw per level.
+    private val liveProgress = AtomicReference<List<Pair<CoverageGlowProjection.PreparedRegions, Float>>>(emptyList())
+    private var progressVertices = FloatArray(0)
     private val liveLens = AtomicReference<CoverageGlowProjection.Lens?>(null)
     private val pushedRotation = AtomicReference<FloatArray?>(null)
 
@@ -252,6 +268,25 @@ class CoverageGlowRenderer(
         maxSegmentDeg: Float = CoverageGlowProjection.DEFAULT_MAX_SEGMENT_DEG,
     ) {
         liveRegions.set(CoverageGlowProjection.prepareRegions(regions, maxSegmentDeg))
+    }
+
+    /**
+     * Tiles being scanned (`PhotosphereMap.regionsInProgress()`): each is drawn more opaque as its
+     * scan progresses — from the wash toward [progressAlpha] — on top of the current [fillMode], so the
+     * artist sees a tile fill as they sweep over it; a completed tile is no longer in progress and opens
+     * (COMPLEMENT styles cut it out as a current tile). Pre-sampled here, re-projected every draw like
+     * [setRegions]. Call when progress changes (per keyframe). Safe from any thread; empty clears it.
+     */
+    @JvmOverloads
+    fun setRegionProgress(
+        progress: List<PhotosphereMap.RegionProgress>,
+        maxSegmentDeg: Float = CoverageGlowProjection.DEFAULT_MAX_SEGMENT_DEG,
+    ) {
+        liveProgress.set(
+            progressLevels(progress).map { (regions, level) ->
+                CoverageGlowProjection.prepareRegions(regions, maxSegmentDeg) to level
+            },
+        )
     }
 
     /**
@@ -459,6 +494,7 @@ class CoverageGlowRenderer(
                         GLES20.glUniform3f(uColor, rgb[0], rgb[1], rgb[2])
                         GLES20.glUniform1f(uAlpha, hazeAlpha)
                     }
+                    drawProgress(frameTimeNanos, mode, rgb)
                 } finally {
                     saved.restore()
                 }
@@ -477,6 +513,7 @@ class CoverageGlowRenderer(
                     GLES20.glUniform1f(washAlpha, hazeAlpha)
                     GLES20.glUniform1i(washMask, 0)
                     drawFullScreen(washPosition)
+                    drawProgress(frameTimeNanos, mode, rgb)
                 } finally {
                     saved.restore()
                 }
@@ -501,12 +538,34 @@ class CoverageGlowRenderer(
                     GLES20.glUniform2f(edgeRadius, width / w, width / h)
                     GLES20.glUniform1i(edgeMask, 0)
                     drawFullScreen(edgePosition)
+                    drawProgress(frameTimeNanos, mode, rgb)
                 } finally {
                     saved.restore()
                 }
             }
         }
         return true
+    }
+
+    /** The scan-progress pass: partly scanned tiles, more opaque the further along. Blend is set. */
+    private fun drawProgress(frameTimeNanos: Long, mode: FillMode, rgb: FloatArray) {
+        val levels = liveProgress.get()
+        if (levels.isEmpty() || program == 0) return
+        val lens = liveLens.get() ?: return
+        if (!currentRotation(frameTimeNanos)) return
+        val haze = hazeAlpha
+        val peak = progressAlpha
+        for ((prepared, level) in levels) {
+            val alpha = progressOverlayAlpha(mode, haze, peak, level)
+            if (alpha <= 0f) continue
+            if (progressVertices.size < prepared.maxVertexFloats) progressVertices = FloatArray(prepared.maxVertexFloats)
+            val n = prepared.projectInto(rotationScratch, lens, progressVertices)
+            if (n == 0) continue
+            drawTriangles(program, aPosition, progressVertices, n) {
+                GLES20.glUniform3f(uColor, rgb[0], rgb[1], rgb[2])
+                GLES20.glUniform1f(uAlpha, alpha)
+            }
+        }
     }
 
     /** Capture host state and, on ES 3, switch to the renderer's own VAO for the whole draw. */
@@ -800,6 +859,39 @@ class CoverageGlowRenderer(
 
         /** Default [outlineAlpha]. */
         const val DEFAULT_OUTLINE_ALPHA = 0.5f
+
+        /** Default [progressAlpha]: a tile about to complete is nearly opaque, then opens. */
+        const val DEFAULT_PROGRESS_ALPHA = 0.85f
+
+        /** Progress is drawn in this many opacity steps (one draw call each). */
+        internal const val PROGRESS_LEVELS = 10
+
+        /**
+         * Group partly scanned tiles by progress, rounded up to [PROGRESS_LEVELS] steps (so a started
+         * tile always shows some fill); tiles at 0 or ≥ 1 are not in progress. Ascending by level.
+         */
+        internal fun progressLevels(
+            progress: List<PhotosphereMap.RegionProgress>,
+        ): List<Pair<List<SphereCoverage.TileRegion>, Float>> =
+            progress.asSequence()
+                .filter { it.progress > 0f && it.progress < 1f && it.progress.isFinite() }
+                .groupBy { kotlin.math.ceil(it.progress * PROGRESS_LEVELS).toInt().coerceIn(1, PROGRESS_LEVELS) }
+                .toSortedMap()
+                .map { (step, items) -> items.map { it.region } to step.toFloat() / PROGRESS_LEVELS }
+
+        /**
+         * The alpha the progress pass draws a tile with, over what the [mode] already put there: the
+         * tile's total opacity runs from the wash ([haze]; 0 in OUTLINE, which has no wash) at progress
+         * 0 to [peak] at 1. Drawn premultiplied over the wash, an overlay of `e` gives
+         * `haze + e·(1 − haze)`, so `e = (target − haze) / (1 − haze)`. 0 when nothing need be drawn.
+         */
+        internal fun progressOverlayAlpha(mode: FillMode, haze: Float, peak: Float, progress: Float): Float {
+            val p = progress.coerceIn(0f, 1f)
+            if (mode == FillMode.OUTLINE) return (peak * p).coerceIn(0f, 1f)
+            if (haze >= 1f) return 0f
+            val target = haze + (peak - haze) * p
+            return ((target - haze) / (1f - haze)).coerceIn(0f, 1f)
+        }
 
         /** Default [outlineWidthPx]. */
         const val DEFAULT_OUTLINE_WIDTH_PX = 24f

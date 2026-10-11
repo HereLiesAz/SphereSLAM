@@ -93,58 +93,48 @@ class PhotosphereKeyframeStore(
     data class Recorded(
         /** The tile under the keyframe's view axis (the one that keeps the keyframe). */
         val tile: TileId,
-        /** True when this was the tile's first ever capture. */
+        /** True when this keyframe completed [tile]'s scan for the first time. */
         val firstCaptureForTile: Boolean,
         /**
-         * Every other tile the frame covered ([PhotosphereMap.tilesCovered]) and marked current. They
-         * keep no keyframe of their own; [view] for them pairs [latest]'s intrinsics with the live
-         * attitude, as for a fresh tile.
+         * Every other tile this keyframe completed (its scan progress reached
+         * [PhotosphereMap.DEFAULT_COMPLETE_FRACTION]). They keep no keyframe of their own; [view] for
+         * them pairs [latest]'s intrinsics with the live attitude, as for a fresh tile.
          */
         val coveredTiles: List<TileId> = emptyList(),
         /** The subset of [coveredTiles] scanned for the first time by this keyframe. */
         val firstCoveredTiles: List<TileId> = emptyList(),
+        /** Every tile whose scan progress this keyframe advanced (including the completed ones). */
+        val progressedTiles: List<TileId> = emptyList(),
     )
 
     /**
-     * Fold [keyframe] into the map and keep it for its tile. An in-band keyframe anchors the wall
-     * heading when the map has none. Besides the tile under the view axis, every tile the frame covers
-     * ([PhotosphereMap.tilesCovered], through the keyframe's intrinsics and roll) is marked current.
+     * Fold [keyframe] into the map and keep it for the tile under its view axis. The first keyframe
+     * anchors the wall heading when the map has none. The keyframe's whole view (its intrinsics and
+     * roll) advances every tile's scan progress ([PhotosphereMap.recordView]); tiles that reach
+     * completion become current.
      *
-     * @return the updated tile (with [Recorded.firstCaptureForTile]), or null when the keyframe's
-     *   direction lies outside the map's viewable lattice — then nothing is stored and the map is left
-     *   unchanged (in particular, an out-of-band keyframe never anchors the wall heading).
+     * @return what changed, or null when the keyframe's direction lies outside the map's lattice (or
+     *   its axis is straight up/down, where heading is undefined) — then nothing is stored and the map
+     *   is left unchanged (in particular, the wall heading is not anchored).
      */
     fun record(keyframe: PhotosphereKeyframe, nowMs: Long): Recorded? {
-        val anchored = map.hasWallHeading()
-        val candidate = map.tileAt(keyframe.headingDeg, keyframe.elevationDeg)
-        val scannedBefore = candidate != null && map.hasBeenScanned(candidate)
-        val tile = map.markUpdated(
-            headingDeg = keyframe.headingDeg,
-            elevationDeg = keyframe.elevationDeg,
-            nowMs = nowMs,
-            representativeOrientation = keyframe.orientationQuaternion,
-        ) ?: return null
-        frames[tile] = keyframe
-        latest = keyframe
-        // The axis tile alone undercounts badly: a tile is ~14° × 40° against a ~50° × 65° frame, so
-        // everything else the frame saw would glow again once it left the screen. Mark every tile the
-        // frame covered (no keyframe stored for them: the axis tile's frame stays the best view).
         val k = keyframe.intrinsics
         val lens = CoverageGlowProjection.Lens.fromIntrinsics(k[0], k[1], k[2], k[3], keyframe.width, keyframe.height)
-        val covered = ArrayList<TileId>()
-        val firstCovered = ArrayList<TileId>()
-        for (id in map.tilesCovered(keyframe.headingDeg, keyframe.elevationDeg, keyframe.rollDeg, lens)) {
-            if (id == tile) continue
-            if (!map.hasBeenScanned(id)) firstCovered.add(id)
-            map.markUpdated(id, nowMs)
-            covered.add(id)
-        }
-        // The anchoring keyframe had no tile address before it anchored the map: its tile is new.
+        // recordView anchors the map on the first addressable view; an unaddressable one (outside the
+        // lattice, or straight up/down) changes nothing and is not stored.
+        val update = map.recordView(
+            keyframe.headingDeg, keyframe.elevationDeg, keyframe.rollDeg, lens,
+            nowMs = nowMs, representativeOrientation = keyframe.orientationQuaternion,
+        )
+        val tile = map.tileAt(keyframe.headingDeg, keyframe.elevationDeg) ?: return null
+        frames[tile] = keyframe
+        latest = keyframe
         return Recorded(
             tile,
-            firstCaptureForTile = if (anchored) !scannedBefore else true,
-            coveredTiles = covered,
-            firstCoveredTiles = firstCovered,
+            firstCaptureForTile = tile in update.firstCompleted,
+            coveredTiles = update.completed.filter { it != tile },
+            firstCoveredTiles = update.firstCompleted.filter { it != tile },
+            progressedTiles = update.progressed,
         )
     }
 

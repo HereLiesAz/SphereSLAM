@@ -100,32 +100,45 @@ class PhotosphereKeyframeTest {
         elevationDeg = elevation,
     )
 
+    /** A 480×640 portrait frame, fx = fy = 500: ~51° × 65°, the app's display-upright analysis frame. */
+    private fun portraitKeyframe(heading: Float, elevation: Float, roll: Float = 0f) = PhotosphereKeyframe(
+        timestampNs = 1L,
+        luma = ByteArray(480 * 640),
+        width = 480,
+        height = 640,
+        intrinsics = floatArrayOf(500f, 500f, 240f, 320f),
+        headingDeg = heading,
+        elevationDeg = elevation,
+        rollDeg = roll,
+    )
+
     @Test
     fun `store anchors the map, records per tile, and reports first captures`() {
-        val map = PhotosphereMap(sectorCount = 4, viewableHalfAngleDeg = 180f, elevationBandCount = 3, viewableElevationHalfAngleDeg = 60f)
+        val map = PhotosphereMap() // the whole sphere: 24 × 6 tiles of 15° × 30°
         val store = PhotosphereKeyframeStore(map)
-        val first = store.record(keyframe(10f, 0f), nowMs = 100L)!!
+        val first = store.record(portraitKeyframe(10f, 0f), nowMs = 100L)!!
         assertTrue(map.hasWallHeading())
-        assertTrue(first.firstCaptureForTile)
-        val again = store.record(keyframe(12f, 0f), nowMs = 200L)!!
+        assertEquals(TileId(12, 3), first.tile)
+        assertTrue(first.firstCaptureForTile) // wholly in frame: scanned at once
+        val again = store.record(portraitKeyframe(12f, 0f), nowMs = 200L)!!
         assertEquals(first.tile, again.tile)
         assertFalse(again.firstCaptureForTile)
         assertEquals(12f, store.keyframe(first.tile)!!.headingDeg, 0f)
         assertEquals(1, store.keyframes().size)
-        assertNull(store.record(keyframe(10f, 89f), nowMs = 300L)) // outside the elevation band
         store.clear()
         assertNull(store.latest)
     }
 
     @Test
     fun `an out-of-band keyframe never anchors the wall heading`() {
-        val map = PhotosphereMap(sectorCount = 4, viewableHalfAngleDeg = 90f, elevationBandCount = 3, viewableElevationHalfAngleDeg = 60f)
+        // A deliberately front-only lattice (±60° elevation).
+        val map = PhotosphereMap(sectorCount = 12, viewableHalfAngleDeg = 90f, elevationBandCount = 3, viewableElevationHalfAngleDeg = 60f)
         val store = PhotosphereKeyframeStore(map)
-        assertNull(store.record(keyframe(200f, 85f), nowMs = 1L)) // looking at the ceiling
+        assertNull(store.record(portraitKeyframe(200f, 85f), nowMs = 1L)) // looking at the ceiling
         assertFalse(map.hasWallHeading())
         assertNull(store.latest)
-        // The first in-band keyframe anchors (and is a first capture).
-        val first = store.record(keyframe(10f, 0f), nowMs = 2L)!!
+        // The first in-band keyframe anchors (and scans its tile).
+        val first = store.record(portraitKeyframe(10f, 0f), nowMs = 2L)!!
         assertTrue(first.firstCaptureForTile)
         assertEquals(10f, map.snapshot().wallHeadingDeg!!, 1e-6f)
     }
@@ -157,69 +170,82 @@ class PhotosphereKeyframeTest {
         assertEquals(90f, p.direction.azimuthDeg, 1e-3f)
     }
 
-    /** A 480×640 portrait frame, fx = fy = 500: ~51° × 65°, the app's display-upright analysis frame. */
-    private fun portraitKeyframe(heading: Float, elevation: Float, roll: Float = 0f) = PhotosphereKeyframe(
-        timestampNs = 1L,
-        luma = ByteArray(480 * 640),
-        width = 480,
-        height = 640,
-        intrinsics = floatArrayOf(500f, 500f, 240f, 320f),
-        headingDeg = heading,
-        elevationDeg = elevation,
-        rollDeg = roll,
-    )
-
     @Test
-    fun `a keyframe marks every tile its frame covers, not only the one under the axis`() {
-        // The app's lattice: 12 sectors over ±85° (~14.2° each), 3 bands over ±60° (40° each).
-        val map = PhotosphereMap(elevationBandCount = 3)
+    fun `a keyframe completes the tiles it holds and advances the ones it only partly sees`() {
+        val map = PhotosphereMap()
         val store = PhotosphereKeyframeStore(map)
         val r = store.record(portraitKeyframe(0f, 0f), nowMs = 1L)!!
-        val axis = r.tile
-        assertEquals(TileId(6, 1), axis)
-        // ±25.5° horizontally: the axis tile's two azimuth neighbours are wholly in frame.
-        assertTrue(TileId(5, 1) in r.coveredTiles)
-        assertTrue(TileId(7, 1) in r.coveredTiles)
-        assertEquals(r.coveredTiles, r.firstCoveredTiles)
-        for (id in r.coveredTiles + axis) assertFalse("$id current", map.needsUpdate(id))
-        // Only the axis tile keeps the keyframe.
-        assertEquals(1, store.keyframes().size)
-        // Far outside the frame and the upper/lower bands (only ~31 % in frame) stay unscanned.
-        assertTrue(map.needsUpdate(TileId(0, 1)))
-        assertTrue(map.needsUpdate(TileId(6, 0)))
-        assertTrue(map.needsUpdate(TileId(6, 2)))
-        // A tile already covered is not a first capture when the axis reaches it.
-        val next = store.record(portraitKeyframe(map.tile(TileId(7, 1))!!.center.azimuthDeg, 0f), nowMs = 2L)!!
-        assertEquals(TileId(7, 1), next.tile)
-        assertFalse(next.firstCaptureForTile)
+        // ±25.5° × ±32.5° around (0°, 0°): the four 15° × 30° tiles touching the axis are whole.
+        assertEquals(TileId(12, 3), r.tile)
+        for (id in listOf(TileId(11, 3), TileId(11, 2), TileId(12, 2))) assertTrue("$id", id in r.coveredTiles)
+        for (id in r.coveredTiles + r.tile) assertFalse("$id current", map.needsUpdate(id))
+        assertEquals(1, store.keyframes().size) // only the axis tile keeps the keyframe
+        // Sector 13 (15°–30°) is cut at 25.5°: partly scanned, still glowing, shown in progress.
+        val partial = TileId(13, 3)
+        assertTrue(partial in r.progressedTiles)
+        assertTrue(map.needsUpdate(partial))
+        assertTrue(map.scanProgress(partial) in 0.5f..0.89f)
+        assertTrue(map.regionsInProgress().any { it.progress == map.scanProgress(partial) })
+        // Turning 10° further completes it; it leaves the in-progress list.
+        val next = store.record(portraitKeyframe(10f, 0f), nowMs = 2L)!!
+        assertTrue(partial in next.firstCoveredTiles)
+        assertFalse(map.needsUpdate(partial))
+        assertEquals(1f, map.scanProgress(partial), 0f)
+        assertTrue(map.regionsInProgress().none { it.progress >= 1f })
+    }
+
+    @Test
+    fun `scan progress accumulates across views and resets when a tile goes stale`() {
+        val map = PhotosphereMap()
+        val lens = CoverageGlowProjection.Lens.fromIntrinsics(500f, 500f, 240f, 320f, 480, 640)
+        map.setWallHeading(0f)
+        val tile = TileId(14, 3) // 30°–45°, 0°–30°
+        // Two views each holding only part of it: neither alone completes it, together they do.
+        map.recordView(10f, 15f, 0f, lens) // reaches 35.5°
+        val half = map.scanProgress(tile)
+        assertTrue(half > 0f && half < 0.9f)
+        map.recordView(60f, 15f, 0f, lens) // from 34.5°
+        assertFalse(map.needsUpdate(tile))
+        map.markNeedsUpdate(tile)
+        assertEquals(0f, map.scanProgress(tile), 0f)
     }
 
     @Test
     fun `a level pan with keyframes wider apart than a sector leaves no gap in its band`() {
-        val map = PhotosphereMap(elevationBandCount = 3)
+        val map = PhotosphereMap()
         val store = PhotosphereKeyframeStore(map)
         store.record(portraitKeyframe(0f, 0f), nowMs = 0L) // anchors the lattice at 0°
         // 20° per keyframe (fast pan, 250 ms keyframes at 80°/s) from -40° to +40°.
         for ((i, h) in (-40..40 step 20).withIndex()) store.record(portraitKeyframe(h.toFloat(), 0f), nowMs = i + 1L)
         val anchor = map.snapshot().wallHeadingDeg!!
-        for (s in 0 until 12) {
-            val c = SphereGrid.signedDelta(map.tile(TileId(s, 1))!!.center.azimuthDeg, anchor)
-            if (c in -40f..40f) assertFalse("sector $s (centre $c°) current", map.needsUpdate(TileId(s, 1)))
+        for (s in 0 until 24) for (band in 2..3) {
+            val c = SphereGrid.signedDelta(map.tile(TileId(s, band))!!.center.azimuthDeg, anchor)
+            if (c in -50f..50f) assertFalse("sector $s band $band (centre $c°) current", map.needsUpdate(TileId(s, band)))
         }
     }
 
     @Test
-    fun `tilting up covers the upper band and roll is honoured`() {
-        val map = PhotosphereMap(elevationBandCount = 3)
+    fun `the ceiling and the floor can be scanned`() {
+        val map = PhotosphereMap()
         val store = PhotosphereKeyframeStore(map)
         store.record(portraitKeyframe(0f, 0f), nowMs = 0L) // anchor
-        store.record(portraitKeyframe(0f, 40f), nowMs = 1L)
-        assertFalse(map.needsUpdate(TileId(6, 2)))
-        // Roll turns the frame: a landscape 640×480 frame (~65° × 51°) aimed at sector 6's centre
-        // covers sector 8 (80 % in frame) upright, but only ~31 % of it when rolled 90°.
+        // Look up and turn around, then down and turn around.
+        for (h in 0 until 360 step 30) store.record(portraitKeyframe(h.toFloat(), 70f), nowMs = 1L)
+        for (h in 0 until 360 step 30) store.record(portraitKeyframe(h.toFloat(), -70f), nowMs = 2L)
+        for (s in 0 until 24) {
+            assertFalse("zenith tile $s", map.needsUpdate(TileId(s, 5)))
+            assertFalse("nadir tile $s", map.needsUpdate(TileId(s, 0)))
+        }
+    }
+
+    @Test
+    fun `roll is honoured`() {
+        val map = PhotosphereMap()
+        map.setWallHeading(0f)
+        // A landscape 640×480 frame (~65° × 51°) aimed at sector 12's centre (7.5°, 15°) covers
+        // sector 14 (30°–45°, 67 % in frame) upright, but only ~21 % of it when rolled 90°.
         val lens = CoverageGlowProjection.Lens.fromIntrinsics(500f, 500f, 320f, 240f, 640, 480)
-        val centre = map.tile(TileId(6, 1))!!.center.azimuthDeg
-        assertTrue(TileId(8, 1) in map.tilesCovered(centre, 0f, 0f, lens))
-        assertFalse(TileId(8, 1) in map.tilesCovered(centre, 0f, 90f, lens))
+        assertTrue(TileId(14, 3) in map.tilesCovered(7.5f, 15f, 0f, lens))
+        assertFalse(TileId(14, 3) in map.tilesCovered(7.5f, 15f, 90f, lens))
     }
 }

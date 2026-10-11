@@ -180,8 +180,9 @@ class PhotosphereMapSnapshot(
 }
 
 /**
- * An orientation-indexed photosphere of tiles over the viewable front region, tracking which tiles
- * still [needsUpdate]. It is the content-bearing successor to [SphereCoverage]: where that counts
+ * An orientation-indexed photosphere of tiles — by default the whole sphere, 24 × 6 tiles of
+ * 15° × 30° — tracking which tiles still [needsUpdate], and how far each is through its scan
+ * ([recordView], [scanProgress]). It is the content-bearing successor to [SphereCoverage]: where that counts
  * *that* a direction was observed, this remembers *per tile* whether its capture is current, lets a
  * re-check mark a tile (and, by the propagation rule, its neighbors) as needing an update again, and
  * hands a glow the directions still to cover.
@@ -223,6 +224,16 @@ class PhotosphereMap(
     /** Per-tile estimated range to the surface, metres; NaN = unknown. */
     private val rangeMeters = FloatArray(grid.tileCount) { Float.NaN }
 
+    // Scan progress ([recordView]): per tile, which of its sample directions have been in frame, and
+    // the area-weighted share seen. Transient (not in snapshots): a restored map restarts partial
+    // tiles from zero; current tiles stay current.
+    private val seenSamples = arrayOfNulls<BooleanArray>(grid.tileCount)
+    private val progressValue = FloatArray(grid.tileCount)
+    // Per tile: sample unit directions + area weights `x, y, z, w` for the current anchor.
+    private var sampleCache: Array<DoubleArray?> = arrayOfNulls(grid.tileCount)
+    private var sampleCacheAnchor = Float.NaN
+    private var sampleCacheStep = Float.NaN
+
     private var wallHeadingDeg: Float? = null
 
     /** Number of tiles in the lattice. */
@@ -237,6 +248,168 @@ class PhotosphereMap(
      */
     fun setWallHeading(headingDeg: Float) {
         if (headingDeg.isFinite()) wallHeadingDeg = SphereGrid.norm360(headingDeg)
+    }
+
+    /**
+     * The result of [recordView].
+     *
+     * @property progressed tiles whose scan progress grew (including those that completed).
+     * @property completed tiles that became current in this view.
+     * @property firstCompleted the subset of [completed] that had never been scanned before.
+     */
+    data class ScanUpdate(
+        val progressed: List<TileId>,
+        val completed: List<TileId>,
+        val firstCompleted: List<TileId>,
+    )
+
+    /** A tile still needing an update that is partly scanned: its extent and progress in `(0, 1)`. */
+    data class RegionProgress(val region: SphereCoverage.TileRegion, val progress: Float)
+
+    /**
+     * Fold one camera view into the per-tile **scan progress**: every tile accumulates the share of
+     * its area (sampled every [sampleStepDeg], weighted by `cos(elevation)`) that any view has had in
+     * frame, so a tile fills as the artist sweeps across it rather than only when one frame happens to
+     * hold most of it. A tile reaching [completeFraction] is marked current ([markUpdated], with
+     * [representativeOrientation]); until then [scanProgress] / [regionsInProgress] report how far it
+     * has come — what the coverage glow shows as a tile growing more opaque until it opens.
+     *
+     * Anchors the wall heading on the first call when unset (like [markUpdated]).
+     *
+     * @param headingDeg camera-axis compass heading, degrees (0 = north, clockwise).
+     * @param elevationDeg camera-axis elevation, degrees.
+     * @param rollDeg image-right axis angle above the horizon, degrees.
+     * @param lens the view's projection (`CoverageGlowProjection.Lens.fromIntrinsics`).
+     * @return what changed; empty when an input is non-finite or the axis is within ~0.006° of
+     *   vertical (heading and roll undefined there).
+     */
+    fun recordView(
+        headingDeg: Float,
+        elevationDeg: Float,
+        rollDeg: Float,
+        lens: CoverageGlowProjection.Lens,
+        nowMs: Long = 0L,
+        representativeOrientation: FloatArray? = null,
+        completeFraction: Float = DEFAULT_COMPLETE_FRACTION,
+        sampleStepDeg: Float = DEFAULT_COVERAGE_SAMPLE_STEP_DEG,
+    ): ScanUpdate {
+        require(completeFraction > 0f && completeFraction <= 1f) {
+            "completeFraction must be in (0, 1], was $completeFraction"
+        }
+        require(sampleStepDeg.isFinite() && sampleStepDeg > 0f) { "sampleStepDeg must be finite and > 0" }
+        val none = ScanUpdate(emptyList(), emptyList(), emptyList())
+        if (!headingDeg.isFinite() || !elevationDeg.isFinite() || !rollDeg.isFinite()) return none
+        val m = CoverageGlowProjection.worldFromCamera(headingDeg, elevationDeg, rollDeg) ?: return none
+        if (wallHeadingDeg == null) {
+            if (grid.bandOf(elevationDeg) == null) return none
+            wallHeadingDeg = SphereGrid.norm360(headingDeg)
+        }
+        val anchor = wallHeadingDeg!!
+        if (anchor != sampleCacheAnchor || sampleStepDeg != sampleCacheStep) {
+            sampleCache = arrayOfNulls(grid.tileCount)
+            sampleCacheAnchor = anchor
+            sampleCacheStep = sampleStepDeg
+            // Sample layouts changed: earlier masks no longer line up with them.
+            seenSamples.fill(null)
+            for (i in progressValue.indices) if (needsUpdateFlags[i]) progressValue[i] = 0f
+        }
+        val progressed = ArrayList<TileId>()
+        val completed = ArrayList<TileId>()
+        val firstCompleted = ArrayList<TileId>()
+        for (s in 0 until grid.sectorCount) {
+            for (b in 0 until grid.elevationBandCount) {
+                val i = grid.index(s, b)
+                if (!needsUpdateFlags[i]) continue
+                val samples = samplesOf(s, b, anchor, sampleStepDeg)
+                val n = samples.size / 4
+                val seen = seenSamples[i] ?: BooleanArray(n).also { seenSamples[i] = it }
+                var grew = false
+                for (k in 0 until n) {
+                    if (seen[k]) continue
+                    val vx = samples[4 * k]; val vy = samples[4 * k + 1]; val vz = samples[4 * k + 2]
+                    val depth = -(m[2] * vx + m[5] * vy + m[8] * vz)
+                    if (depth <= 1e-4) continue
+                    val x = lens.scaleX * (m[0] * vx + m[3] * vy + m[6] * vz) / depth + lens.offsetX
+                    val y = lens.scaleY * (m[1] * vx + m[4] * vy + m[7] * vz) / depth + lens.offsetY
+                    if (abs(x) <= 1.0 && abs(y) <= 1.0) {
+                        seen[k] = true
+                        grew = true
+                    }
+                }
+                if (!grew) continue
+                var seenW = 0.0
+                var totalW = 0.0
+                for (k in 0 until n) {
+                    totalW += samples[4 * k + 3]
+                    if (seen[k]) seenW += samples[4 * k + 3]
+                }
+                val p = if (totalW > 0.0) (seenW / totalW).toFloat() else 0f
+                progressValue[i] = p
+                val id = TileId(s, b)
+                progressed += id
+                if (p >= completeFraction) {
+                    if (!scannedFlags[i]) firstCompleted += id
+                    applyUpdated(id, nowMs, representativeOrientation, null)
+                    completed += id
+                }
+            }
+        }
+        return ScanUpdate(progressed, completed, firstCompleted)
+    }
+
+    /** Scan progress of [id] in `[0, 1]`: 1 when current, the share seen while it needs an update. */
+    fun scanProgress(id: TileId): Float {
+        if (!inRange(id)) return 0f
+        val i = grid.index(id.sector, id.band)
+        return if (needsUpdateFlags[i]) progressValue[i] else 1f
+    }
+
+    /**
+     * Tiles still needing an update that are partly scanned, as extents with their progress — the
+     * glow's "being scanned" overlay. Empty until anchored.
+     */
+    fun regionsInProgress(): List<RegionProgress> {
+        val anchor = wallHeadingDeg ?: return emptyList()
+        val out = ArrayList<RegionProgress>()
+        for (s in 0 until grid.sectorCount) {
+            for (b in 0 until grid.elevationBandCount) {
+                val i = grid.index(s, b)
+                if (needsUpdateFlags[i] && progressValue[i] > 0f) {
+                    out += RegionProgress(grid.regionOf(s, b, anchor), progressValue[i])
+                }
+            }
+        }
+        return out
+    }
+
+    private fun samplesOf(s: Int, b: Int, anchor: Float, step: Float): DoubleArray {
+        val i = grid.index(s, b)
+        sampleCache[i]?.let { return it }
+        val r = grid.regionOf(s, b, anchor)
+        val azSpan = r.azimuthEndDeg - r.azimuthStartDeg
+        val elSpan = r.elevationTopDeg - r.elevationBottomDeg
+        val nAz = kotlin.math.ceil(azSpan / step).toInt().coerceAtLeast(1)
+        val nEl = kotlin.math.ceil(elSpan / step).toInt().coerceAtLeast(1)
+        val out = DoubleArray(nAz * nEl * 4)
+        var k = 0
+        for (j in 0 until nEl) {
+            val el = Math.toRadians((r.elevationBottomDeg + elSpan * (j + 0.5f) / nEl).toDouble())
+            for (q in 0 until nAz) {
+                val az = Math.toRadians((r.azimuthStartDeg + azSpan * (q + 0.5f) / nAz).toDouble())
+                out[k++] = kotlin.math.cos(el) * kotlin.math.sin(az)
+                out[k++] = kotlin.math.cos(el) * kotlin.math.cos(az)
+                out[k++] = kotlin.math.sin(el)
+                out[k++] = kotlin.math.cos(el)
+            }
+        }
+        sampleCache[i] = out
+        return out
+    }
+
+    /** Forget [i]'s partial scan (it needs a fresh one). */
+    private fun clearProgress(i: Int) {
+        seenSamples[i] = null
+        progressValue[i] = 0f
     }
 
     /**
@@ -299,6 +472,7 @@ class PhotosphereMap(
         needsUpdateFlags[i] = false
         scannedFlags[i] = true
         lastUpdatedMs[i] = nowMs
+        clearProgress(i)
         if (orientationValue != null) orientation[i] = orientationValue.copyOf()
         if (rangeValue != null) rangeMeters[i] = rangeValue
     }
@@ -306,7 +480,9 @@ class PhotosphereMap(
     /** Flag a single tile as needing an update. Ignores an out-of-range id. */
     fun markNeedsUpdate(id: TileId) {
         if (!inRange(id)) return
-        needsUpdateFlags[grid.index(id.sector, id.band)] = true
+        val i = grid.index(id.sector, id.band)
+        if (!needsUpdateFlags[i]) clearProgress(i)
+        needsUpdateFlags[i] = true
     }
 
     /**
@@ -316,10 +492,8 @@ class PhotosphereMap(
      */
     fun recordStale(id: TileId) {
         if (!inRange(id)) return
-        needsUpdateFlags[grid.index(id.sector, id.band)] = true
-        for ((ns, nb) in grid.neighbors(id.sector, id.band)) {
-            needsUpdateFlags[grid.index(ns, nb)] = true
-        }
+        markNeedsUpdate(id)
+        for ((ns, nb) in grid.neighbors(id.sector, id.band)) markNeedsUpdate(TileId(ns, nb))
     }
 
     /** Whether [id] needs (re)scanning. An out-of-range id reads as not needing one. */
@@ -343,6 +517,7 @@ class PhotosphereMap(
         for (i in needsUpdateFlags.indices) {
             if (!needsUpdateFlags[i] && lastUpdatedMs[i] < cutoffMs) {
                 needsUpdateFlags[i] = true
+                clearProgress(i)
                 flipped++
             }
         }
@@ -605,6 +780,10 @@ class PhotosphereMap(
         orientation.fill(null)
         rangeMeters.fill(Float.NaN)
         wallHeadingDeg = null
+        seenSamples.fill(null)
+        progressValue.fill(0f)
+        sampleCache = arrayOfNulls(grid.tileCount)
+        sampleCacheAnchor = Float.NaN
     }
 
     /** A serialization-ready copy of the full map state (see [PhotosphereMapSnapshot]). */
@@ -631,7 +810,10 @@ class PhotosphereMap(
         /** [tilesCovered] default: a tile counts as seen when at least this share of it was in frame. */
         const val DEFAULT_MIN_COVERED_FRACTION: Float = 0.6f
 
-        /** [tilesCovered] default sampling pitch over a tile, degrees. */
+        /** [recordView] default: a tile is scanned once this share of its area has been in frame. */
+        const val DEFAULT_COMPLETE_FRACTION: Float = 0.9f
+
+        /** [tilesCovered] / [recordView] default sampling pitch over a tile, degrees. */
         const val DEFAULT_COVERAGE_SAMPLE_STEP_DEG: Float = 5f
 
         /**

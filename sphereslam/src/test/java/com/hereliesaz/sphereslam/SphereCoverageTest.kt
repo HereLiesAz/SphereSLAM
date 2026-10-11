@@ -29,7 +29,7 @@ class SphereCoverageTest {
 
     @Test
     fun `a fresh viewable sector grows coverage, a repeat does not`() {
-        val c = SphereCoverage(sectorCount = 12, viewableHalfAngleDeg = 85f)
+        val c = SphereCoverage(sectorCount = 12, viewableHalfAngleDeg = 85f, elevationBandCount = 1)
         c.setWallHeading(100f)
         assertTrue(c.observe(100f))
         assertFalse(c.observe(100f))
@@ -52,7 +52,7 @@ class SphereCoverageTest {
     fun `sweeping the whole viewable arc reaches full coverage`() {
         val sectors = 12
         val half = 85f
-        val c = SphereCoverage(sectorCount = sectors, viewableHalfAngleDeg = half)
+        val c = SphereCoverage(sectorCount = sectors, viewableHalfAngleDeg = half, elevationBandCount = 1)
         c.setWallHeading(90f)
         val step = (2f * half) / sectors
         for (s in 0 until sectors) {
@@ -70,6 +70,16 @@ class SphereCoverageTest {
         assertTrue(c.observe(10f))
         assertTrue(c.observe(330f))
         assertTrue(c.coverageFraction() > 0f)
+    }
+
+    @Test
+    fun `the defaults cover the whole sphere, poles and behind included`() {
+        val c = SphereCoverage()
+        c.setWallHeading(0f)
+        assertTrue(c.observe(180f, 0f)) // behind the start
+        assertTrue(c.observe(0f, 89f)) // the zenith band
+        assertTrue(c.observe(0f, -89f)) // the nadir band
+        assertEquals(3f / (24 * 6), c.coverageFraction(), 1e-6f)
     }
 
     @Test
@@ -93,8 +103,8 @@ class SphereCoverageTest {
     // ---- 2-D (azimuth x elevation) coverage ----
 
     @Test
-    fun `default single band preserves azimuth-only fraction`() {
-        val c = SphereCoverage(sectorCount = 12, viewableHalfAngleDeg = 85f)
+    fun `a single band preserves azimuth-only fraction`() {
+        val c = SphereCoverage(sectorCount = 12, viewableHalfAngleDeg = 85f, elevationBandCount = 1)
         c.setWallHeading(100f)
         assertTrue(c.observe(100f)) // elevation defaults to the horizon
         assertEquals(1f / 12f, c.coverageFraction(), 1e-6f)

@@ -3,12 +3,11 @@ package com.hereliesaz.sphereslam
 /**
  * Angular-coverage accumulator for the guided sweep that fills SphereSLAM's surrounding feature map.
  *
- * A surface (wall or canvas) can only be seen from in front of it, so coverage is tracked over the
- * **viewable front region** — an azimuth arc `±`[viewableHalfAngleDeg] and an elevation arc
+ * Coverage is tracked over an azimuth arc `±`[viewableHalfAngleDeg] and an elevation arc
  * `±`[viewableElevationHalfAngleDeg] around the direction the camera faces when the surface is
- * captured head-on ([setWallHeading]; the horizon at elevation 0). Directions outside that region
- * carry no surface and are ignored, so "100%" means the reachable region is mapped, not a full
- * sphere.
+ * captured head-on ([setWallHeading]; the horizon at elevation 0). The defaults are the **whole
+ * sphere** (±180° × ±90°): the photosphere around the artist, ceiling and floor included. Narrower
+ * arcs make a front-only target; directions outside them are ignored.
  *
  * **Two dimensions, one sensor.** Azimuth and elevation both come from a single magnetometer-fused
  * device attitude (`TYPE_ROTATION_VECTOR`): azimuth is the camera axis's compass bearing
@@ -206,24 +205,23 @@ class SphereCoverage(
     }
 
     companion object {
-        /** Sectors across the viewable azimuth arc — ~15° each at the default half-angle. */
-        const val DEFAULT_SECTORS = 12
-
         /**
-         * Half-width of the viewable front arc. 85° (≈170° total) keeps the near-grazing edges, where
-         * the surface is barely resolvable, out of the coverage target.
+         * Sectors around the azimuth — 15° each over the default full circle. The defaults describe a
+         * whole **sphere**: every heading and every elevation, ceiling and floor included. A
+         * photosphere that stops short of the poles or of what is behind the start can never be fully
+         * scanned, and its glow never clears there. Narrow the arcs only for a deliberate front-only
+         * coverage target.
          */
-        const val DEFAULT_VIEWABLE_HALF_ANGLE_DEG = 85f
+        const val DEFAULT_SECTORS = 24
 
-        /** Elevation bands. Default 1 collapses elevation (plain azimuth-ring behavior). */
-        const val DEFAULT_ELEVATION_BANDS = 1
+        /** Half-width of the viewable azimuth arc: 180° = the full circle (sectors wrap). */
+        const val DEFAULT_VIEWABLE_HALF_ANGLE_DEG = 180f
 
-        /**
-         * Half-height of the viewable elevation arc around the horizon. 60° covers the up/down range a
-         * standing artist realistically pans a wall or leans over a canvas, without targeting the
-         * straight-up/down directions that carry no surface.
-         */
-        const val DEFAULT_VIEWABLE_ELEVATION_HALF_ANGLE_DEG = 60f
+        /** Elevation bands from nadir to zenith — 30° each over the default full range. */
+        const val DEFAULT_ELEVATION_BANDS = 6
+
+        /** Half-height of the viewable elevation arc: 90° = straight down to straight up. */
+        const val DEFAULT_VIEWABLE_ELEVATION_HALF_ANGLE_DEG = 90f
 
         /** Normalize a heading to [0, 360). */
         internal fun norm360(deg: Float): Float = ((deg % 360f) + 360f) % 360f

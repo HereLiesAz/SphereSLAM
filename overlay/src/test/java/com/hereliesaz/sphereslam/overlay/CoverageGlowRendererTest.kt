@@ -1,6 +1,7 @@
 package com.hereliesaz.sphereslam.overlay
 
 import com.hereliesaz.sphereslam.CoverageGlowProjection
+import com.hereliesaz.sphereslam.PhotosphereMap
 import com.hereliesaz.sphereslam.SphereCoverage
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -223,5 +224,49 @@ class CoverageGlowRendererTest {
         r.setTriangles(tri)
         assertEquals(6, r.refreshGeometry(0L))
         assertArrayEquals(tri, r.resolvedGeometry(), 0f)
+    }
+
+    @Test
+    fun `scan progress is grouped into opacity steps and finished or untouched tiles are left out`() {
+        val a = SphereCoverage.TileRegion(0f, 15f, 0f, 30f)
+        val b = SphereCoverage.TileRegion(15f, 30f, 0f, 30f)
+        val c = SphereCoverage.TileRegion(30f, 45f, 0f, 30f)
+        val levels = CoverageGlowRenderer.progressLevels(
+            listOf(
+                PhotosphereMap.RegionProgress(a, 0.05f), // started: shows the first step
+                PhotosphereMap.RegionProgress(b, 0.42f),
+                PhotosphereMap.RegionProgress(c, 0.48f),
+                PhotosphereMap.RegionProgress(a, 0f), // untouched
+                PhotosphereMap.RegionProgress(b, 1f), // scanned: opens, not drawn
+            ),
+        )
+        assertEquals(listOf(listOf(a) to 0.1f, listOf(b, c) to 0.5f), levels)
+    }
+
+    @Test
+    fun `a tile grows from the wash toward progressAlpha as its scan progresses`() {
+        val haze = 0.2f
+        val peak = 0.85f
+        fun total(p: Float): Float {
+            val e = CoverageGlowRenderer.progressOverlayAlpha(CoverageGlowRenderer.FillMode.COMPLEMENT, haze, peak, p)
+            return haze + e * (1f - haze) // premultiplied overlay on the wash
+        }
+        assertEquals(haze, total(0f), 1e-6f)
+        assertEquals(haze + (peak - haze) * 0.5f, total(0.5f), 1e-6f)
+        assertEquals(peak, total(1f), 1e-6f)
+        assertTrue(total(0.3f) < total(0.6f))
+        // OUTLINE has no wash: the tile itself carries the progress.
+        assertEquals(peak * 0.5f, CoverageGlowRenderer.progressOverlayAlpha(CoverageGlowRenderer.FillMode.OUTLINE, haze, peak, 0.5f), 1e-6f)
+        // A peak below the wash draws nothing extra.
+        assertEquals(0f, CoverageGlowRenderer.progressOverlayAlpha(CoverageGlowRenderer.FillMode.TRIANGLES, 0.9f, 0.5f, 0.7f), 0f)
+    }
+
+    @Test
+    fun `progressAlpha is validated and region progress is accepted from any thread`() {
+        val r = CoverageGlowRenderer()
+        assertEquals(CoverageGlowRenderer.DEFAULT_PROGRESS_ALPHA, r.progressAlpha, 0f)
+        assertThrows(IllegalArgumentException::class.java) { r.progressAlpha = 1.5f }
+        r.setRegionProgress(listOf(PhotosphereMap.RegionProgress(regions[0], 0.5f)))
+        r.setRegionProgress(emptyList())
     }
 }

@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **The photosphere is a sphere.** `SphereCoverage` / `PhotosphereMap` defaulted to a front region —
+  12 sectors over ±85° and one band (±60° when banded) — so the ceiling, the floor and everything
+  behind the start lay outside the lattice: never scannable, glowing for good, and "100 %" meant a
+  front arc. The defaults are now the whole sphere: 24 sectors × 6 bands, 15° × 30° tiles, wrapping
+  in azimuth. Breaking for callers relying on the defaults (pass the old arcs explicitly to keep a
+  front-only target).
+- **Per-tile scan progress.** New `PhotosphereMap.recordView(heading, elevation, roll, lens)`: each
+  view adds the share of every tile's area it has in frame (5° samples, area-weighted, union across
+  views); a tile becomes current at `DEFAULT_COMPLETE_FRACTION` (90 %). `scanProgress(id)`,
+  `regionsInProgress()` (`RegionProgress`). Stale / expired / reset tiles start over.
+  `PhotosphereKeyframeStore.record` now scans through it: tiles complete as the artist sweeps across
+  them (`Recorded.progressedTiles`; `firstCaptureForTile` means the axis tile's scan completed).
+- **Glow shows the scan.** `CoverageGlowRenderer.setRegionProgress(regionsInProgress)`: a tile being
+  scanned is drawn more opaque as it fills — from the wash toward `progressAlpha` (0.85), ten steps,
+  every style — and opens to the camera once scanned.
+
+## 0.25.0
+
 - **The artwork stays on the wall while the wall is out of view.** Past `Config.maxBridgeMs` (400 ms)
   a miss used to return no pose, so the artwork vanished until a visual relock, although the gyro
   attitude was tracked every frame. New `Config.holdOffWall` (default `true`): the last lock is
