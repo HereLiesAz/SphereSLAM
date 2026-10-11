@@ -317,7 +317,8 @@ as `Frame.attitude`. Both are thread-safe and their `*Into` / `*At` reads alloca
 
 For a phone without ARCore, `PhotosphereTrackingSession` is the whole frame-in / pose-out runtime:
 a base photosphere pose from device attitude, a planar KPM precision layer rebased into it, a gyro
-bridge across short misses, and a self-growing multi-page atlas.
+bridge across short misses, a self-growing multi-page atlas, and photosphere localization that keeps
+the artwork placed with no wall in view.
 
 ~~~kotlin
 val tracking = PhotosphereTrackingSession(
@@ -392,6 +393,32 @@ Behaviour to expect:
 - **`updatePrecisionLayer(reference)` with no map keeps the map the session already solved for that
   same reference**; a host-supplied map overrides it, and a new reference re-solves on its first
   confirmed lock.
+- **The wall is one tile of the photosphere.** Keyframes become tiles of the current *station*
+  (standpoint). A tile recognised in the live frame fixes the camera rotation visually (correcting
+  gyro/compass drift); with `map_from_fingerprint` known that places the artwork off the wall
+  (`PoseSource.PHOTOSPHERE`; the gyro-carried last lock, `PoseSource.HELD`, only without tile
+  localization). The first wall lock relates the gyro frame to the map: nothing is captured or placed
+  from the photosphere before it. When the camera is more than `stationSpawnDistance` (metres for a
+  metric reference, reference widths otherwise) from every station a new station opens and the
+  earlier photospheres are kept: tiles looking the same way from two standpoints are triangulated
+  into landmarks and a plane per tile, giving a full 6-DoF fix from anywhere and predicting how each
+  tile looks as the device moves. Needs OpenCV (ORB); without it tile localization disables itself
+  once. Turn off with `Config(tileLocalization = false)`; `Config(holdOffWall = false)` restores "no
+  pose past the bridge".
+- **Monocular depth for tiles.** Pass a `TileDepthSource` (MiDaS through `:models`) so tiles get 3D
+  points from the first station on — calibrated to the wall plane, triangulated landmarks and
+  overlapping tiles:
+
+  ~~~kotlin
+  val tracking = PhotosphereTrackingSession(config, callbacks, tileDepthSource = TileDepthSource { luma, w, h ->
+      depth.estimateLuma(luma, w, h)?.let { TileDepthMap(it.width, it.height, it.data) }
+  })
+  ~~~
+
+  It is called on the session's tile worker once per new tile (after the spacing gate). The wall is a
+  depth reference only where a ray meets it within its pages' extent. A wall seen head-on has one depth, so
+  MiDaS's scale and shift can't both be solved from it: its wall-consistent features are placed on the
+  wall, and the full calibration follows once a reference with depth spread exists.
 - **`atlasPages` is the complete page set.** Pass `tracking.atlasPages` (or equal copies) back to keep
   the pages the session grew; any other set rebuilds the matcher from exactly those pages. Grown page
   numbers are never reused.
@@ -405,8 +432,11 @@ Every `metricsIntervalMs` (5 s) `Callbacks.onDiagnostic` receives a KPM line —
 window, as `mean/max` milliseconds:
 
 ~~~text
-SphereSLAM standalone KPM page=0 inliers=87 error=3.1 ageMs=41.2 matchMs=18.4 method=FLOW timing{frames=150 attempts=150 matched=141 convertMs=1.2/2.9 setupMs=0.3/1.1 matchMs=11.7/38.0 keyframeMs=0.4/6.2 growthMs=0.1/0.4}
+SphereSLAM standalone KPM page=0 inliers=87 error=3.1 ageMs=41.2 matchMs=18.4 method=FLOW timing{frames=150 attempts=150 matched=141 convertMs=1.2/2.9 setupMs=0.3/1.1 matchMs=11.7/38.0 keyframeMs=0.4/6.2 growthMs=0.1/0.4} tiles{stations=2 active=1 tiles=23 landmarks=412 depthPoints=3180 rotFixes=17 poseFixes=4}
 ~~~
+
+`tiles{…}` (with tile localization): stations opened, the active one, tiles, triangulated landmarks,
+monocular-depth points, and rotation / 6-DoF tile fixes adopted in the window.
 
 `attempts` frames ran the matcher and `matched` of them got a pose back (before gating). `error` is
 the mean squared reprojection error in pixels² of the image the pose was solved in (KPM: the

@@ -46,7 +46,22 @@ import kotlin.math.abs
  * rotation ([PoseSource.HELD]) while the wall is out of view or re-confirming, until a visual relock
  * replaces it or the precision layer changes — the artwork stays put on the wall instead of
  * vanishing. A held pose keeps the camera centre where it was locked, so walking (rather than
- * turning) drifts it until the relock corrects it. An accepted pose may grow a multi-page KPM atlas ([PhotosphereAtlasGrowth]):
+ * turning) drifts it until the relock corrects it.
+ *
+ * **Photosphere localization** ([Config.tileLocalization], default on). The wall is one tile of the
+ * photosphere; every other tile says where the camera is too. The first wall lock of a precision
+ * layer relates the gyro frame to the map; from then on keyframes become tiles of the current
+ * **station** (standpoint), each filed at the camera centre of the time, and a tile recognised in the
+ * live frame fixes the camera rotation visually (correcting gyro/compass drift). With
+ * `map_from_fingerprint` known that places the artwork with no wall in view ([PoseSource.PHOTOSPHERE],
+ * which replaces the gyro-only [PoseSource.HELD] once a lock exists). When a wall lock (or a landmark
+ * fix) puts the camera more than [Config.stationSpawnDistance] from every station, a new station opens
+ * there and the earlier photospheres are kept: tiles looking the same way from two standpoints are a
+ * stereo pair with a known baseline, triangulated into landmarks and a plane per tile, which give a
+ * full 6-DoF fix from any position and predict how each tile looks from wherever the device moves. A
+ * [TileDepthSource] (MiDaS) gives tiles 3D points from the first station on. Tile work runs on a
+ * background worker (OpenCV ORB; disabled once if OpenCV is missing); fixes are adopted on the next
+ * frame. Stations, tiles and the correction reset on a new reference or map (they are in its terms). An accepted pose may grow a multi-page KPM atlas ([PhotosphereAtlasGrowth]):
  * a perspective-rectified wall patch next to the existing pages, kept only when it passes
  * [TargetQuality] and the KPM feature floor ([Callbacks.onAtlasPageAdded]). The planar session is
  * rebuilt whenever the frame intrinsics change.
@@ -88,6 +103,9 @@ class PhotosphereTrackingSession internal constructor(
     // Where matcher builds and atlas growth run. Null = a private background thread (production);
     // tests pass a direct executor so builds complete synchronously.
     atlasExecutor: Executor? = Executor(Runnable::run),
+    // Photosphere tile features (OpenCV ORB in production); null disables tile localization.
+    tileBackend: TileFeatureBackend? = null,
+    tileDepthSource: TileDepthSource? = null,
 ) : AutoCloseable {
 
     constructor(
@@ -95,7 +113,11 @@ class PhotosphereTrackingSession internal constructor(
         callbacks: Callbacks = Callbacks(),
         correctAcceptedPose: ((FloatArray) -> FloatArray)? = null,
         elapsedRealtimeNanos: () -> Long = { SystemClock.elapsedRealtimeNanos() },
-    ) : this(config, callbacks, correctAcceptedPose, elapsedRealtimeNanos, PlanarFrontEndFactory.kpm(config.matchSpeed), null)
+        tileDepthSource: TileDepthSource? = null,
+    ) : this(
+        config, callbacks, correctAcceptedPose, elapsedRealtimeNanos, PlanarFrontEndFactory.kpm(config.matchSpeed), null,
+        OrbTileFeatureBackend(), tileDepthSource,
+    )
 
     /**
      * @property timestampSource the camera's timestamp source (Camera2 `SENSOR_INFO_TIMESTAMP_SOURCE`);
@@ -103,8 +125,15 @@ class PhotosphereTrackingSession internal constructor(
      * @property maxBridgeMs longest gyro bridge, measured from the last accepted frame, ms. This is
      *   the session's only bridge limit: it overrides [TrackingStateConfig.maxBridgeMs] in
      *   [trackingState]. Within it the tracking state is `IMU_BRIDGE` and a quick return blends.
-     * @property holdOffWall past [maxBridgeMs], keep rendering the last lock through the gyro rotation
-     *   ([PoseSource.HELD]) until a visual relock or a precision-layer change, instead of no pose.
+     * @property holdOffWall past [maxBridgeMs], keep rendering instead of no pose: the photosphere pose
+     *   once a lock has defined it ([PoseSource.PHOTOSPHERE]; it survives atlas-page changes and
+     *   `forceRebuild`, not a new reference or map), else the last lock through the gyro rotation
+     *   ([PoseSource.HELD], until a relock or any precision-layer change).
+     * @property tileLocalization recognise photosphere tiles to fix the camera pose (see the class doc).
+     * @property tileFixIntervalMs at most one tile localization attempt per this interval, ms (none
+     *   while the wall is locked).
+     * @property stationSpawnDistance camera distance from every station at which a new station opens:
+     *   metres for a physically metric reference, reference widths otherwise.
      * @property keyframeIntervalMs photosphere keyframe cadence, ms.
      * @property atlasGrowth whether accepted poses may grow the KPM atlas.
      * @property metricsIntervalMs cadence of the KPM match-metrics + per-stage timing diagnostic, ms.
@@ -120,6 +149,9 @@ class PhotosphereTrackingSession internal constructor(
         val targetQuality: TargetQualityConfig = TargetQualityConfig(),
         val maxBridgeMs: Long = 400L,
         val holdOffWall: Boolean = true,
+        val tileLocalization: Boolean = true,
+        val tileFixIntervalMs: Long = 250L,
+        val stationSpawnDistance: Float = 0.3f,
         val keyframeIntervalMs: Long = 250L,
         val atlasGrowth: Boolean = true,
         val metricsIntervalMs: Long = 5_000L,
@@ -127,6 +159,8 @@ class PhotosphereTrackingSession internal constructor(
     ) {
         init {
             require(maxBridgeMs >= 0L && keyframeIntervalMs >= 0L && metricsIntervalMs >= 0L)
+            require(tileFixIntervalMs >= 0L)
+            require(stationSpawnDistance.isFinite() && stationSpawnDistance > 0f)
         }
     }
 
@@ -258,6 +292,13 @@ class PhotosphereTrackingSession internal constructor(
          * ([Config.holdOffWall]): the wall is out of view or the relock is still confirming.
          */
         HELD,
+
+        /**
+         * Placed from the photosphere: the gyro/compass rotation corrected by the latest visual fix (a
+         * recognised tile, or the last wall lock) at the latest known camera centre
+         * ([Config.tileLocalization]); the wall is out of view or the relock is still confirming.
+         */
+        PHOTOSPHERE,
     }
 
     /**
@@ -363,6 +404,14 @@ class PhotosphereTrackingSession internal constructor(
     private var sessionKey: CameraIntrinsics? = null
     private var buildKey: CameraIntrinsics? = null
     private val atlasWorker = AtlasMatcherWorker(atlasExecutor)
+    private val stations: PhotosphereStationTracker? = tileBackend?.takeIf { config.tileLocalization }?.let {
+        PhotosphereStationTracker(
+            it,
+            tileDepthSource,
+            atlasExecutor,
+            PhotosphereStationTracker.Config(fixIntervalMs = config.tileFixIntervalMs),
+        )
+    }
     private var robustLoop: RobustTrackingLoop? = null
 
     private var imuBridge: AttitudeRotationBridge? = null
@@ -409,6 +458,9 @@ class PhotosphereTrackingSession internal constructor(
     /** The atlas pages beyond page 0 (supplied or grown), by page number. */
     val atlasPages: List<AtlasPage> @Synchronized get() = runtimeAtlasPages.values.toList()
 
+    /** Photosphere stations opened so far (1 until the camera moves; 0 without tile localization). */
+    val stationCount: Int @Synchronized get() = stations?.stationCount ?: 0
+
     /**
      * Swap the planar precision layer without touching the base photosphere (map orientation,
      * keyframe cadence and attitude reference survive).
@@ -445,12 +497,16 @@ class PhotosphereTrackingSession internal constructor(
             !(mapFromFingerprintValue == null && effectiveMap == null)
         val sortedPages = atlasPages.sortedBy { it.pageNo }
         val pagesChanged = !samePages(runtimeAtlasPages.values.toList(), sortedPages)
+        // The photosphere layer is in terms of the reference (units) and the map (the correction).
+        if (referenceChanged || mapChanged) stations?.reset()
         referenceImage = reference
         mapFromFingerprintValue = effectiveMap
         if (pagesChanged) {
             runtimeAtlasPages.clear()
             sortedPages.forEach { runtimeAtlasPages[it.pageNo] = it }
         }
+        reference?.let { stations?.setSpawnDistance(spawnUnits(it)) }
+        publishWall()
 
         if (referenceChanged || mapChanged || pagesChanged || forceRebuild) {
             dropPlanarSession()
@@ -516,6 +572,10 @@ class PhotosphereTrackingSession internal constructor(
         val keyframeStartNs = elapsedRealtimeNanos()
         captureKeyframe(frame, cameraFromMap, frameStartMs)
         timing.keyframe.add(elapsedRealtimeNanos() - keyframeStartNs)
+        stations?.let { tracker ->
+            tracker.onFrame(cameraFromMap?.let(PhotosphereStationTracker::rotationOfView), frame.luma, intrinsics, frameStartMs)
+            tracker.drainDiagnostics(callbacks.onDiagnostic)
+        }
         val reference = referenceImage
             ?: return FrameResult(null, stateMachine.state, cameraFromMap, false, null, null, null, projection)
         // A recoverable failure halted the precision layer; the base map keeps running.
@@ -541,7 +601,7 @@ class PhotosphereTrackingSession internal constructor(
                 lumaBytes = frame.luma,
                 timestampNs = frame.timestampNs,
                 nowMs = matchStartNs / 1_000_000L,
-                predictedCameraFromCanonical = predictedCameraFromCanonical(frame.attitude),
+                predictedCameraFromCanonical = predictedCameraFromCanonical(frame.attitude, cameraFromMap, frameStartMs),
             ),
         )
         val matchEndNs = elapsedRealtimeNanos()
@@ -569,7 +629,10 @@ class PhotosphereTrackingSession internal constructor(
             reportState(outcome.state)
             if (outcome.state != TrackingState.LOCKED) {
                 // Re-confirming a lock: keep the held pose on screen until it is confirmed.
-                return FrameResult(holdLastGood(frame, projection), outcome.state, cameraFromMap, true, null, null, null, projection)
+                return FrameResult(
+                    offWallPose(frame, projection, cameraFromMap, frameStartMs), outcome.state, cameraFromMap, true,
+                    null, null, null, projection,
+                )
             }
 
             lastAcceptedCameraFromCanonical = locked.cameraFromCanonical.copyOf()
@@ -613,6 +676,10 @@ class PhotosphereTrackingSession internal constructor(
             )
             lastGood = tracked
             lastGoodCanonical = precisionRenderView.copyOf()
+            // Only a pose in the map (map_from_fingerprint known) relates the gyro frame to it.
+            if (mapFromFp != null && cameraFromMap != null) {
+                stations?.onLock(renderView, PhotosphereStationTracker.rotationOfView(cameraFromMap), frameStartMs)
+            }
             lastKpmMetrics = tracked
             return FrameResult(
                 tracked, outcome.state, cameraFromMap, true, locked.cameraFromCanonical, acceptedRawMapView, null, projection,
@@ -638,7 +705,7 @@ class PhotosphereTrackingSession internal constructor(
         reportState(outcome.state)
         val bridged = when {
             outcome.state == TrackingState.IMU_BRIDGE -> bridgeLastGood(frame, projection, loop)
-            config.holdOffWall -> holdLastGood(frame, projection)
+            config.holdOffWall -> offWallPose(frame, projection, cameraFromMap, frameStartMs)
             else -> {
                 lastGood = null
                 lastGoodCanonical = null
@@ -671,6 +738,7 @@ class PhotosphereTrackingSession internal constructor(
         // Publish locally first so the very next precision pose is rebased even before the host persists it.
         mapFromFingerprintValue = solved.copyOf()
         solvedMapForReference = solved.copyOf()
+        publishWall()
         callbacks.onMapFromFingerprintSolved(solved)
         callbacks.onDiagnostic("SphereSLAM map_from_fingerprint solved from same-frame base+KPM pose")
     }
@@ -696,14 +764,20 @@ class PhotosphereTrackingSession internal constructor(
     }
 
     private fun captureKeyframe(frame: Frame, cameraFromMap: FloatArray?, nowMs: Long) {
-        val heading = frame.headingDeg?.takeIf { it.isFinite() } ?: return
-        val elevation = frame.elevationDeg?.takeIf { it.isFinite() } ?: return
         val mapPose = cameraFromMap ?: return
+        val heading = frame.headingDeg?.takeIf { it.isFinite() }
+        val elevation = frame.elevationDeg?.takeIf { it.isFinite() }
+        val forHost = heading != null && elevation != null
+        val forTile = stations?.wantsKeyframe(nowMs) == true
+        if (!forHost && !forTile) return
         if (lastKeyframeMs != Long.MIN_VALUE && nowMs - lastKeyframeMs < config.keyframeIntervalMs) return
         // The slot is consumed even when the quality gate rejects the frame.
         lastKeyframeMs = nowMs
         val i = frame.intrinsics
         if (!TargetQuality.analyze(frame.luma, i.width, i.height, config.targetQuality).acceptable) return
+        // A usable keyframe is also offered as a tile of the current station.
+        if (forTile) stations?.onKeyframe(PhotosphereStationTracker.rotationOfView(mapPose), frame.luma, i, nowMs)
+        if (heading == null || elevation == null) return
         callbacks.onKeyframe(
             PhotosphereKeyframe(
                 timestampNs = frame.timestampNs,
@@ -852,7 +926,11 @@ class PhotosphereTrackingSession internal constructor(
     }
 
     /** The last accepted camera-from-canonical carried through the gyro rotation since, or null. */
-    private fun predictedCameraFromCanonical(attitude: AttitudeSample?): FloatArray? {
+    private fun predictedCameraFromCanonical(attitude: AttitudeSample?, cameraFromMap: FloatArray?, nowMs: Long): FloatArray? {
+        // Lost (or never locked): where the photosphere says the wall is seeds the relock.
+        if (stateMachine.state != TrackingState.LOCKED && stateMachine.state != TrackingState.IMU_BRIDGE) {
+            photosphereCameraFromCanonical(cameraFromMap, nowMs)?.let { return it }
+        }
         val last = lastAcceptedCameraFromCanonical ?: return null
         val delta = imuBridge?.cameraRotationDelta(attitude?.quaternion) ?: return last
         return RotationMath.rotateAboutCameraCentre(last, delta)
@@ -875,6 +953,68 @@ class PhotosphereTrackingSession internal constructor(
         val delta = imuBridge?.cameraRotationDelta(frame.attitude?.quaternion) ?: return null
         lastGoodCanonical?.let { loop.synchronizeRendered(RotationMath.rotateAboutCameraCentre(it, delta)) }
         return held.bridged(delta, projection, frame.intrinsics, frame.timestampNs)
+    }
+
+    /**
+     * The pose to show with no accepted visual pose this frame ([Config.holdOffWall]): the photosphere
+     * pose once a lock has defined it, else the gyro-held last lock, else none.
+     */
+    private fun offWallPose(frame: Frame, projection: FloatArray, cameraFromMap: FloatArray?, nowMs: Long): TrackedPose? {
+        if (!config.holdOffWall) return null
+        return photospherePose(frame, projection, cameraFromMap, nowMs) ?: holdLastGood(frame, projection)
+    }
+
+    /** Hand the wall (its placement and its pages' extent) to the photosphere layer. */
+    private fun publishWall() {
+        val tracker = stations ?: return
+        val reference = referenceImage
+        val windows = if (reference == null) emptyList() else buildList {
+            add(floatArrayOf(0f, 0f, reference.referenceWidthUnits, reference.referenceWidthUnits * reference.height / reference.width))
+            runtimeAtlasPages.values.forEach { page ->
+                val m = page.canonicalFromPageRef()
+                add(floatArrayOf(m[12], m[13], page.referenceWidthUnits, page.referenceHeightUnits))
+            }
+        }
+        tracker.setWall(validMapFromFingerprint(), windows)
+    }
+
+    private fun validMapFromFingerprint(): FloatArray? =
+        mapFromFingerprintValue?.takeIf { it.size == 16 && it.all(Float::isFinite) }
+
+    /** The photosphere's camera_from_canonical (relock seed), or null. */
+    private fun photosphereCameraFromCanonical(cameraFromMap: FloatArray?, nowMs: Long): FloatArray? {
+        val tracker = stations ?: return null
+        val base = cameraFromMap ?: return null
+        val mapFromFp = validMapFromFingerprint() ?: return null
+        val view = tracker.pose(PhotosphereTrackingSession.rotationOf(base)) ?: return null
+        return RigidMath.multiply(view, mapFromFp)
+    }
+
+    /**
+     * [PoseSource.PHOTOSPHERE]: the base rotation corrected by the latest visual fix, at the latest
+     * known camera centre; needs `map_from_fingerprint` (else there is nothing to place).
+     */
+    private fun photospherePose(frame: Frame, projection: FloatArray, cameraFromMap: FloatArray?, nowMs: Long): TrackedPose? {
+        val tracker = stations ?: return null
+        val base = cameraFromMap ?: return null
+        val mapFromFp = validMapFromFingerprint() ?: return null
+        val view = tracker.pose(PhotosphereTrackingSession.rotationOf(base)) ?: return null
+        val precision = RigidMath.multiply(view, mapFromFp)
+        val held = lastGood
+        return TrackedPose(
+            cameraFromMap = view,
+            projection = projection,
+            intrinsics = frame.intrinsics,
+            timestampNs = frame.timestampNs,
+            pageNo = held?.pageNo ?: 0,
+            reprojectionError = held?.reprojectionError ?: 0f,
+            inlierCount = held?.inlierCount ?: 0,
+            unitsPerPixel = unitsPerPixel(precision, projection, frame.intrinsics.height),
+            observationAgeMs = null,
+            matchDurationMs = 0f,
+            source = PoseSource.PHOTOSPHERE,
+            matchMethod = held?.matchMethod ?: VisualMatchMethod.KPM_FULL,
+        )
     }
 
     /**
@@ -973,7 +1113,8 @@ class PhotosphereTrackingSession internal constructor(
         } else {
             "SphereSLAM standalone KPM no-lock"
         }
-        callbacks.onDiagnostic("$head ${timing.summaryAndReset()}")
+        val tiles = stations?.summary()?.let { " $it" } ?: ""
+        callbacks.onDiagnostic("$head ${timing.summaryAndReset()}$tiles")
     }
 
     private fun nowMs(): Long = elapsedRealtimeNanos() / 1_000_000L
@@ -997,6 +1138,7 @@ class PhotosphereTrackingSession internal constructor(
         displayPosePredictor?.clear()
         dropPlanarSession()
         atlasWorker.close()
+        stations?.close()
         stateMachine.reset()
         lastFailureReason = null
         lastReportedState = null
@@ -1056,6 +1198,14 @@ class PhotosphereTrackingSession internal constructor(
                 a.canonicalFromPageRef().contentEquals(b.canonicalFromPageRef()) &&
                 a.lumaRef().contentEquals(b.lumaRef())
             )
+
+        /** Station spacing in map units: [Config.stationSpawnDistance] metres, or reference widths. */
+        private fun PhotosphereTrackingSession.spawnUnits(reference: ReferenceImage): Double =
+            if (reference.physicallyMetric) config.stationSpawnDistance.toDouble()
+            else config.stationSpawnDistance.toDouble() * reference.referenceWidthUnits
+
+        /** Row-major rotation of a GL column-major view (Double, for the station tracker). */
+        internal fun rotationOf(view: FloatArray): DoubleArray = PhotosphereStationTracker.rotationOfView(view)
 
         private fun viewFromRotation(rotation: FloatArray): FloatArray {
             val out = RigidMath.identity()

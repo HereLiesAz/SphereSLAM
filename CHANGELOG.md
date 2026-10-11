@@ -11,6 +11,41 @@
   real loss corrects rather than being gated by a drifted hold. Walking instead of turning drifts the
   held pose until the relock. Breaking: `PoseSource` gained `HELD` (exhaustive `when`s need a branch).
   The `DisplayPosePredictor` is fed held poses too.
+- **Photosphere localization: the photosphere places the camera, not only the wall.** The wall is one
+  tile; every other tile now says where the camera is too (`Config.tileLocalization`, default on).
+  - *Frame.* The first wall lock of a precision layer relates the gyro frame to the map (a drift
+    correction of the gyro/compass base rotation); every later visual fix — a recognised tile or a
+    lock — re-solves it. Nothing is captured, fixed or rendered from the photosphere before that
+    lock, and a new reference or map resets it all.
+  - *Tiles.* Keyframes (one per 12° of view direction) become tiles of the current **station**, each
+    filed at the camera centre of the time (captured only within 3 s of a centre measurement). On a
+    background worker, at most every `tileFixIntervalMs` (250 ms) and never while the wall is locked,
+    the live frame is matched (ORB, behind a seam) against the tiles near the predicted view; a tile
+    from the camera's standpoint gives its rotation by robust rotation-only fitting. A fix measured
+    before a newer fix or lock is dropped.
+  - *Off the wall.* With `map_from_fingerprint` known, a miss renders the corrected rotation at the
+    latest known camera centre as new `PoseSource.PHOTOSPHERE` (taken from the rendered lock, so the
+    hand-over does not jump); without a lock in this layer, the gyro-held `HELD` pose. While lost, the
+    photosphere pose seeds the KPM relock prediction.
+  - *Stations.* A wall lock (or a 6-DoF tile fix) more than `stationSpawnDistance` (0.3 m for a
+    metric reference, 0.3 reference widths otherwise) from every station opens a new station there;
+    the earlier photospheres are kept, and returning within half that reactivates the old one. Tiles
+    from two standpoints looking the same way are a stereo pair with a known baseline: matched
+    features are triangulated into world landmarks and a plane is fitted per tile, giving a full
+    6-DoF fix from any position and the plane-induced homography that predicts how a tile looks from
+    wherever the device moves.
+  - *Monocular depth.* New `TileDepthSource` / `TileDepthMap` (public constructor parameter): a
+    MiDaS map per new tile (after the spacing gate; one keyframe job in flight), calibrated with
+    `DepthScaleFit` to the tile's landmarks, overlapping calibrated tiles from the same standpoint,
+    then the wall plane — only where a ray meets the wall within its pages' extent — turns its
+    features into 3D points from the first station on. A head-on wall (one depth) places its
+    wall-consistent features on the wall.
+  - Needs OpenCV (ORB): without the runtime, tile localization disables itself once with a
+    diagnostic. Worker diagnostics are delivered on the `onFrame` thread.
+  - Pure-Kotlin geometry (`PhotosphereGeometry`: rotation from bearings, RANSAC rotation, midpoint
+    triangulation, plane fitting, plane homography, pose refinement) and the localizer are JVM-tested
+    against synthetic scenes. `stationCount`; the periodic diagnostic gains `tiles{…}`.
+  - Breaking: `PoseSource` gained `PHOTOSPHERE`.
 
 ## 0.24.6
 

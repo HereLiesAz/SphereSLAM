@@ -145,6 +145,20 @@ class PhotosphereTrackingSessionTest {
         executor,
     )
 
+    /** A tile backend that never recognises anything: the photosphere layer runs on wall locks alone. */
+    private val blindTiles = object : TileFeatureBackend {
+        override fun extract(luma: ByteArray, width: Int, height: Int): TileFeatures? = null
+        override fun match(query: TileFeatures, train: TileFeatures) = IntArray(0)
+    }
+
+    private fun tileSession(config: PhotosphereTrackingSession.Config = PhotosphereTrackingSession.Config()) =
+        PhotosphereTrackingSession(
+            config, rec.callbacks, null, { nowNs },
+            PlanarFrontEndFactory { FakeFrontEnd(featuresFor, null).also { fronts += it } },
+            java.util.concurrent.Executor(Runnable::run),
+            blindTiles,
+        )
+
     private fun frame(
         attitude: AttitudeSample? = yaw(0.0),
         luma: ByteArray = textured,
@@ -292,6 +306,59 @@ class PhotosphereTrackingSessionTest {
         repeat(3) { relocked = s.onFrame(frame(yaw(0.0))) }
         assertEquals(TrackingState.LOCKED, relocked.state)
         assertEquals(PhotosphereTrackingSession.PoseSource.KPM, relocked.pose!!.source)
+    }
+
+    @Test
+    fun `off the wall the photosphere places the artwork from the last visual fix`() {
+        val s = tileSession()
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame(yaw(0.0)))
+        fronts.single().next = match(viewAt(0f, 0f, 2f))
+        repeat(2) { s.onFrame(frame(yaw(0.0))) }
+        val locked = s.onFrame(frame(yaw(0.0))).pose!!
+        assertEquals(1, s.stationCount)
+        fronts.single().next = null
+        advance(1_000) // past the bridge
+        val off = s.onFrame(frame(yaw(30.0)))
+        val pose = off.pose!!
+        assertEquals(PhotosphereTrackingSession.PoseSource.PHOTOSPHERE, pose.source)
+        assertEquals(30f, RigidMath.rotationDeltaDeg(locked.cameraFromMap, pose.cameraFromMap), 1e-2f)
+        assertArrayEquals(RigidMath.cameraCentre(locked.cameraFromMap), RigidMath.cameraCentre(pose.cameraFromMap), 1e-4f)
+        // Long after: still placed from the photosphere (gyro-carried since the last visual fix).
+        advance(5_000)
+        val later = s.onFrame(frame(yaw(50.0))).pose!!
+        assertEquals(PhotosphereTrackingSession.PoseSource.PHOTOSPHERE, later.source)
+        assertEquals(50f, RigidMath.rotationDeltaDeg(locked.cameraFromMap, later.cameraFromMap), 1e-2f)
+    }
+
+    @Test
+    fun `nothing is placed from the photosphere before the first lock`() {
+        val s = tileSession()
+        // A host-supplied map (e.g. persisted) but no lock in this session yet.
+        s.updatePrecisionLayer(reference, mapFromFingerprint = RigidMath.identity())
+        s.onFrame(frame(yaw(0.0)))
+        advance(1_000)
+        assertNull(s.onFrame(frame(yaw(10.0))).pose)
+    }
+
+    @Test
+    fun `a lock away from every station opens a new one and keeps the first`() {
+        val s = tileSession()
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame(yaw(0.0)))
+        fronts.single().next = match(viewAt(0f, 0f, 2f))
+        repeat(3) { s.onFrame(frame(yaw(0.0))) } // solves map_from_fingerprint at the origin station
+        assertEquals(1, s.stationCount)
+        // The artist steps 0.5 units sideways (> stationSpawnDistance 0.3).
+        fronts.single().next = match(viewAt(-0.5f, 0f, 2f))
+        repeat(3) { s.onFrame(frame(yaw(0.0))) }
+        assertEquals(2, s.stationCount)
+        assertTrue(rec.diagnostics.any { it.startsWith("SphereSLAM station 1 opened") })
+        // Back where it started: the first station is active again, no third one.
+        fronts.single().next = match(viewAt(0f, 0f, 2f))
+        repeat(3) { s.onFrame(frame(yaw(0.0))) }
+        assertEquals(2, s.stationCount)
+        assertTrue(rec.diagnostics.any { it == "SphereSLAM station 0 active again" })
     }
 
     @Test
