@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **The artwork stays on the wall while the wall is out of view.** Past `Config.maxBridgeMs` (400 ms)
+  a miss used to return no pose, so the artwork vanished until a visual relock, although the gyro
+  attitude was tracked every frame. New `Config.holdOffWall` (default `true`): the last lock is
+  carried through the gyro rotation as `PoseSource.HELD` (camera centre held) while the wall is away
+  and while a relock confirms, until a visual relock or a precision-layer change (reference, pages,
+  map, intrinsics, `forceRebuild`). It does not re-seed the smoothing baseline, so a relock after a
+  real loss corrects rather than being gated by a drifted hold. Walking instead of turning drifts the
+  held pose until the relock. Breaking: `PoseSource` gained `HELD` (exhaustive `when`s need a branch).
+  The `DisplayPosePredictor` is fed held poses too.
+
+## 0.24.6
+
 Seen tiles persist: the glow no longer returns over scanned areas, and tracking re-acquires after
 the wall leaves the screen.
 

@@ -240,8 +240,8 @@ class PhotosphereTrackingSessionTest {
     }
 
     @Test
-    fun `a brief miss is gyro bridged then dropped`() {
-        val s = session()
+    fun `a brief miss is gyro bridged then dropped when holding is off`() {
+        val s = session(PhotosphereTrackingSession.Config(holdOffWall = false))
         s.updatePrecisionLayer(reference)
         s.onFrame(frame(yaw(0.0)))
         fronts.single().next = match(viewAt(0f, 0f, 2f))
@@ -264,6 +264,48 @@ class PhotosphereTrackingSessionTest {
         assertNull(dropped.pose)
         assertEquals(TrackingState.REACQUIRING, dropped.state)
         assertEquals(TrackingFailureReason.NO_CURRENT_PAGE_MATCH, dropped.failure!!.reason)
+    }
+
+    @Test
+    fun `past the bridge the last lock is held through the gyro until a relock`() {
+        val s = session()
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame(yaw(0.0)))
+        fronts.single().next = match(viewAt(0f, 0f, 2f))
+        repeat(2) { s.onFrame(frame(yaw(0.0))) }
+        val locked = s.onFrame(frame(yaw(0.0))).pose!!
+        fronts.single().next = null
+        advance(100)
+        assertEquals(TrackingState.IMU_BRIDGE, s.onFrame(frame(yaw(3.0))).state)
+        advance(5_000) // wall long out of view
+        val held = s.onFrame(frame(yaw(40.0)))
+        assertEquals(TrackingState.REACQUIRING, held.state)
+        val pose = held.pose!!
+        assertEquals(PhotosphereTrackingSession.PoseSource.HELD, pose.source)
+        assertEquals(40f, RigidMath.rotationDeltaDeg(locked.cameraFromMap, pose.cameraFromMap), 1e-2f)
+        assertArrayEquals(RigidMath.cameraCentre(locked.cameraFromMap), RigidMath.cameraCentre(pose.cameraFromMap), 1e-5f)
+        // Back on the wall: held while the relock confirms, then the visual pose takes over.
+        fronts.single().next = match(viewAt(0f, 0f, 2f))
+        val confirming = s.onFrame(frame(yaw(0.0)))
+        assertEquals(PhotosphereTrackingSession.PoseSource.HELD, confirming.pose!!.source)
+        var relocked = confirming
+        repeat(3) { relocked = s.onFrame(frame(yaw(0.0))) }
+        assertEquals(TrackingState.LOCKED, relocked.state)
+        assertEquals(PhotosphereTrackingSession.PoseSource.KPM, relocked.pose!!.source)
+    }
+
+    @Test
+    fun `a precision-layer change ends the hold`() {
+        val s = session()
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame(yaw(0.0)))
+        fronts.single().next = match(viewAt(0f, 0f, 2f))
+        repeat(3) { s.onFrame(frame(yaw(0.0))) }
+        fronts.single().next = null
+        advance(1_000)
+        assertEquals(PhotosphereTrackingSession.PoseSource.HELD, s.onFrame(frame(yaw(10.0))).pose!!.source)
+        s.updatePrecisionLayer(reference, forceRebuild = true)
+        assertNull(s.onFrame(frame(yaw(10.0))).pose)
     }
 
     @Test
@@ -802,7 +844,24 @@ class PhotosphereTrackingSessionTest {
         val turned = predictor.predict(yaw(15.0).quaternion)!!
         assertEquals(5f, RigidMath.rotationDeltaDeg(rendered.cameraFromMap, turned), 1e-2f)
         assertArrayEquals(RigidMath.cameraCentre(rendered.cameraFromMap), RigidMath.cameraCentre(turned), 1e-5f)
-        // Lost past the bridge window: cleared.
+        // Lost past the bridge window: the held pose keeps feeding it.
+        fronts.single().next = null
+        advance(1_000)
+        val held = s.onFrame(frame(yaw(10.0))).pose!!
+        assertEquals(PhotosphereTrackingSession.PoseSource.HELD, held.source)
+        assertEquals(held.timestampNs, predictor.poseTimestampNs)
+    }
+
+    @Test
+    fun `without holding the display pose predictor is cleared past the bridge window`() {
+        val s = session(PhotosphereTrackingSession.Config(holdOffWall = false))
+        val predictor = DisplayPosePredictor()
+        s.displayPosePredictor = predictor
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame(yaw(0.0)))
+        fronts.single().next = match(viewAt(0f, 0f, 2f))
+        repeat(3) { s.onFrame(frame(yaw(10.0))) }
+        assertTrue(predictor.hasPose)
         fronts.single().next = null
         advance(1_000)
         s.onFrame(frame(yaw(10.0)))

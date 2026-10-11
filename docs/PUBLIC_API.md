@@ -126,7 +126,10 @@ layer and resets the tracking state, so the next lock needs `confirmationFrames`
 rotation is `C_now · ΔR · C_refᵀ` (each frame's own `cameraFromDevice`). `Config.maxBridgeMs`
 (measured from the last accepted frame) is the only gyro-bridge limit; it overrides
 `trackingState.maxBridgeMs`. After a bridge, the next visual pose is smoothed from the bridged pose
-that was shown. An exception while processing a frame enters `TrackingState.FATAL`
+that was shown. Past the bridge window, `Config.holdOffWall` (default true) keeps the last lock
+rendered through the gyro rotation (`PoseSource.HELD`, camera centre held) while the wall is out of
+view or the relock is confirming, until a visual relock or a precision-layer change; `false` restores
+no pose past the bridge. An exception while processing a frame enters `TrackingState.FATAL`
 (`Callbacks.onFatalError`): terminal for a `FATAL`-severity failure (native/internal); for the
 `RECOVERABLE` `ReferenceTooWeakException` (surfacing on the first frame after the background build
 finishes) only the precision layer halts — base pose and keyframes continue, `isRecoverable` is true,
