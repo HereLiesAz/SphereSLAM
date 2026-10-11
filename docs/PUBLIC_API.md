@@ -131,8 +131,8 @@ that was shown. An exception while processing a frame enters `TrackingState.FATA
 `RECOVERABLE` `ReferenceTooWeakException` (surfacing on the first frame after the background build
 finishes) only the precision layer halts — base pose and keyframes continue, `isRecoverable` is true,
 and an `updatePrecisionLayer` with another reference, changed pages or `forceRebuild` resumes.
-`TrackedPose.reprojectionError` is a mean squared error in full-frame pixels² for every match
-method. An exception inside a background
+`TrackedPose.reprojectionError` is a mean squared error in pixels² of the image the pose was solved
+in (KPM: the matcher's downscaled image; flow: the full frame). An exception inside a background
 atlas-growth attempt is **not** fatal: it is reported as an `atlas growth failed` diagnostic and the
 live matcher is kept. `PhotosphereAtlasGrowth`, `TargetQuality` and `TrackingFailureClassifier`
 are usable on their own.

@@ -12,8 +12,8 @@ import java.nio.ByteBuffer
  *
  * Every pose it returns is a GL column-major camera-from-canonical produced by
  * [SphereSlamStandaloneSession]'s own page→canonical conversion, whichever path solved it, and every
- * [PlanarMatchResult.reprojectionError] is a mean squared reprojection error in **full-frame** pixels²
- * (a downscaled KPM solve's error is scaled by `factor²`), so KPM and flow poses meet the same gates.
+ * [PlanarMatchResult.reprojectionError] is a mean squared reprojection error in the pixels the pose
+ * was solved in: the matcher's (downscaled) image for KPM, the full frame for flow.
  *
  * Focused matching costs at most one single-page solve per frame: when the predicted page misses, the
  * frame reports no match and the **next** full solve searches every page (instead of running a second,
@@ -159,9 +159,9 @@ internal class KpmPlanarFrontEnd(
         return PlanarMatchResult(
             pageNo = pose.pageNo,
             cameraFromCanonical = pose.cameraFromCanonical,
-            // KPM reports the mean squared error in the pixels it solved in; report it in full-frame
-            // pixels² like flow does, so every pose meets the same acceptance / growth gates.
-            reprojectionError = KpmMatchScale.errorToFramePixelsSq(pose.reprojectionError, factor),
+            // Kept in the pixels KPM solved in (its own ≤ 10 px² gate and PoseAcceptanceConfig's default
+            // were tuned on that scale); scaling by factor² would reject sound half-resolution locks.
+            reprojectionError = pose.reprojectionError,
             inlierCount = pose.inlierCount,
             method = method,
         )

@@ -459,6 +459,70 @@ class PhotosphereMap(
     }
 
     /**
+     * The tiles a camera frame actually covers: each tile whose solid angle lies inside the frame for
+     * at least [minCoveredFraction]. Where [tileAt] names only the tile under the view axis, this is
+     * what a keyframe really saw — so the area visible in a frame stays current after it leaves the
+     * screen. A tile is sampled every [sampleStepDeg] (cell centres, weighted by `cos(elevation)` for
+     * equal-area), each sample projected through the frame's attitude and [lens].
+     *
+     * @param headingDeg camera-axis compass heading, degrees (0 = north, clockwise).
+     * @param elevationDeg camera-axis elevation, degrees.
+     * @param rollDeg image-right axis angle above the horizon, degrees (see
+     *   [CameraAttitudeProvider.cameraRollDegrees]).
+     * @param lens the frame's projection, e.g. `CoverageGlowProjection.Lens.fromIntrinsics` of the
+     *   keyframe's intrinsics.
+     * @param minCoveredFraction share of a tile's area that must be in frame, `(0, 1]`.
+     * @param sampleStepDeg sampling pitch over a tile, degrees, `> 0`.
+     * @return covered tile ids; empty when unanchored, an input is non-finite, or the view axis is
+     *   within ~0.006° of vertical (heading/roll undefined there).
+     */
+    fun tilesCovered(
+        headingDeg: Float,
+        elevationDeg: Float,
+        rollDeg: Float,
+        lens: CoverageGlowProjection.Lens,
+        minCoveredFraction: Float = DEFAULT_MIN_COVERED_FRACTION,
+        sampleStepDeg: Float = DEFAULT_COVERAGE_SAMPLE_STEP_DEG,
+    ): List<TileId> {
+        require(minCoveredFraction > 0f && minCoveredFraction <= 1f) {
+            "minCoveredFraction must be in (0, 1], was $minCoveredFraction"
+        }
+        require(sampleStepDeg.isFinite() && sampleStepDeg > 0f) { "sampleStepDeg must be finite and > 0" }
+        val anchor = wallHeadingDeg ?: return emptyList()
+        val m = CoverageGlowProjection.worldFromCamera(headingDeg, elevationDeg, rollDeg) ?: return emptyList()
+        val out = ArrayList<TileId>()
+        for (s in 0 until grid.sectorCount) {
+            for (b in 0 until grid.elevationBandCount) {
+                val r = grid.regionOf(s, b, anchor)
+                val azSpan = r.azimuthEndDeg - r.azimuthStartDeg
+                val elSpan = r.elevationTopDeg - r.elevationBottomDeg
+                val nAz = kotlin.math.ceil(azSpan / sampleStepDeg).toInt().coerceAtLeast(1)
+                val nEl = kotlin.math.ceil(elSpan / sampleStepDeg).toInt().coerceAtLeast(1)
+                var inFrame = 0.0
+                var total = 0.0
+                for (j in 0 until nEl) {
+                    val el = Math.toRadians((r.elevationBottomDeg + elSpan * (j + 0.5f) / nEl).toDouble())
+                    val w = kotlin.math.cos(el)
+                    for (i in 0 until nAz) {
+                        val az = Math.toRadians((r.azimuthStartDeg + azSpan * (i + 0.5f) / nAz).toDouble())
+                        total += w
+                        val vx = kotlin.math.cos(el) * kotlin.math.sin(az)
+                        val vy = kotlin.math.cos(el) * kotlin.math.cos(az)
+                        val vz = kotlin.math.sin(el)
+                        val depth = -(m[2] * vx + m[5] * vy + m[8] * vz)
+                        if (depth <= 1e-4) continue
+                        val x = lens.scaleX * (m[0] * vx + m[3] * vy + m[6] * vz) / depth + lens.offsetX
+                        val y = lens.scaleY * (m[1] * vx + m[4] * vy + m[7] * vz) / depth + lens.offsetY
+                        if (abs(x) <= 1.0 && abs(y) <= 1.0) inFrame += w
+                    }
+                }
+                if (total > 0.0 && inFrame / total >= minCoveredFraction) out.add(TileId(s, b))
+            }
+        }
+        return out
+    }
+
+    /**
      * Reacquisition candidates, ordered: the tiles to re-match when tracking is lost and the live
      * heading can no longer be trusted to gate [tilesInView]. In place of a view cone this leans on
      * *where you last were* — recently recognized tiles and their scanned neighbors — because losing a
@@ -564,6 +628,12 @@ class PhotosphereMap(
         id.sector in 0 until grid.sectorCount && id.band in 0 until grid.elevationBandCount
 
     companion object {
+        /** [tilesCovered] default: a tile counts as seen when at least this share of it was in frame. */
+        const val DEFAULT_MIN_COVERED_FRACTION: Float = 0.6f
+
+        /** [tilesCovered] default sampling pitch over a tile, degrees. */
+        const val DEFAULT_COVERAGE_SAMPLE_STEP_DEG: Float = 5f
+
         /**
          * Absolute direction of image pixel ([u], [v]) for a pinhole camera ([fx], [fy], [cx], [cy];
          * OpenCV pixel convention, v down) whose optical axis points at ([cameraHeadingDeg],

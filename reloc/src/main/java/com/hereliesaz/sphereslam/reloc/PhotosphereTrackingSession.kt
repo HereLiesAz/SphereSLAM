@@ -252,8 +252,8 @@ class PhotosphereTrackingSession internal constructor(
      * @property cameraFromMap column-major GL camera-from-base-map view.
      * @property projection [ProjectionMatrix.buildFrom] of [intrinsics] (the full tracked frame).
      * @property unitsPerPixel wall units spanned by one vertical frame pixel at the target depth.
-     * @property reprojectionError mean squared reprojection error of the visual solve, full-frame
-     *   pixels² for every [matchMethod] (KPM solves at a downscale are converted).
+     * @property reprojectionError mean squared reprojection error of the visual solve, pixels² in the
+     *   image it was solved in (KPM: the matcher's downscaled image; flow: the full frame).
      * @property observationAgeMs trusted frame age, or null.
      * @property matchMethod how the visual pose was solved (full / focused KPM or flow tracking); for
      *   an [PoseSource.IMU_BRIDGE] pose, the method of the held pose.

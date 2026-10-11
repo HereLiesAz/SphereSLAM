@@ -99,7 +99,7 @@ class KpmPlanarFrontEndTest {
         PlanarFrameInput(frameBuffer.duplicate(), frameBytes, nowMs * 1_000_000L, nowMs, predicted)
 
     @Test
-    fun `KPM matches a half-resolution frame and reports its error in full-frame pixels squared`() {
+    fun `KPM matches a half-resolution frame and reports its error in the matcher's pixels`() {
         val fe = frontEnd()
         assertEquals(2, fe.factor)
         assertEquals(320, backend!!.intrinsics.width)
@@ -107,8 +107,10 @@ class KpmPlanarFrontEndTest {
         val r = fe.match(input(0))!!
         assertEquals(320 * 240, backend!!.calls.single().lumaBytes)
         assertEquals(VisualMatchMethod.KPM_FULL, r.method)
-        assertEquals(2f * 2 * 2, r.reprojectionError, 0f) // 2 px² at half resolution = 8 full-frame px²
-        // Full-resolution matching reports KPM's error unchanged.
+        // Unscaled: the acceptance (10) and growth (4) gates are tuned on the matcher's pixels; ×factor²
+        // made them 4× stricter at half resolution (no growth, rejected relocks).
+        assertEquals(2f, r.reprojectionError, 0f)
+        // Full-resolution matching reports KPM's error unchanged too.
         val full = frontEnd(KpmMatchSpeedConfig.FULL_KPM_EVERY_FRAME)
         assertEquals(2f, full.match(input(0))!!.reprojectionError, 0f)
     }
