@@ -129,7 +129,19 @@ rotation is `C_now · ΔR · C_refᵀ` (each frame's own `cameraFromDevice`). `C
 that was shown. Past the bridge window, `Config.holdOffWall` (default true) keeps the last lock
 rendered through the gyro rotation (`PoseSource.HELD`, camera centre held) while the wall is out of
 view or the relock is confirming, until a visual relock or a precision-layer change; `false` restores
-no pose past the bridge. An exception while processing a frame enters `TrackingState.FATAL`
+no pose past the bridge.
+
+Photosphere localization (`Config.tileLocalization`, default true; `tileFixIntervalMs`,
+`stationSpawnDistance` — metres for a metric reference, reference widths otherwise): after the first
+wall lock relates the gyro frame to the map, keyframes become tiles of the current station; a
+recognised tile fixes the camera rotation, and with `map_from_fingerprint` known the artwork is placed
+off the wall as `PoseSource.PHOTOSPHERE` (instead of `HELD`). A camera more than
+`stationSpawnDistance` from every station opens a new station (earlier ones kept); same-direction
+tiles from two standpoints are triangulated into landmarks and per-tile planes for 6-DoF fixes from
+any position. The public constructor takes an optional `TileDepthSource` (monocular inverse depth per
+new tile, `TileDepthMap`), calibrated to landmarks, overlapping tiles and the wall plane within its
+extent. Needs OpenCV (ORB): without it tile localization disables itself once. `stationCount` reports
+the stations. Stations, tiles and the correction reset on a new reference or map. An exception while processing a frame enters `TrackingState.FATAL`
 (`Callbacks.onFatalError`): terminal for a `FATAL`-severity failure (native/internal); for the
 `RECOVERABLE` `ReferenceTooWeakException` (surfacing on the first frame after the background build
 finishes) only the precision layer halts — base pose and keyframes continue, `isRecoverable` is true,
