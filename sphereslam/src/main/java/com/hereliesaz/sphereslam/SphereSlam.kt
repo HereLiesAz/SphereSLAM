@@ -27,8 +27,6 @@ import com.hereliesaz.sphereslam.nativebridge.KpmBridge
 object SphereSlam {
     fun isAvailable(): Boolean = KpmBridge.isAvailable()
 
-    internal fun smokeTest(width: Int, height: Int): Boolean = KpmBridge.smokeTest(width, height)
-
     /**
      * Fail-closed runtime capability probe, stronger than [isAvailable]: the native entry points must
      * be linked **and** a calibrated native KPM session must actually be creatable, ready, and

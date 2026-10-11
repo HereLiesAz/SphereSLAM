@@ -43,32 +43,125 @@ class KpmMatchSpeedTest {
     }
 
     @Test
-    fun `the same pose projects consistently at both scales, so the solved pose is unchanged`() {
-        // Any camera-from-page pose: a 3-D point projects with full K to x, and with scaled K to
-        // exactly the downscaled image of x. A calibrated PnP on the downscaled image therefore
-        // recovers the identical rigid transform — no pose correction is needed.
+    fun `a planar pose solved on the downscaled image with scaled intrinsics equals the full-resolution pose`() {
+        // Project wall points (z = 0) with full K, map each pixel into the f-downscaled image
+        // (x_s = (x + ½)/f − ½), then solve the planar pose from each image with its own intrinsics
+        // (homography DLT + decomposition). Both solves must recover the same rigid transform.
         val angle = 0.3
-        val r = floatArrayOf(
-            cos(angle).toFloat(), 0f, sin(angle).toFloat(),
-            0f, 1f, 0f,
-            -sin(angle).toFloat(), 0f, cos(angle).toFloat(),
+        val r = doubleArrayOf(
+            cos(angle), 0.0, sin(angle),
+            0.0, 1.0, 0.0,
+            -sin(angle), 0.0, cos(angle),
         )
-        val t = floatArrayOf(12f, -30f, 900f)
-        val points = listOf(floatArrayOf(0f, 0f, 0f), floatArrayOf(150f, -80f, 0f), floatArrayOf(-220f, 140f, 0f))
+        val t = doubleArrayOf(12.0, -30.0, 900.0)
+        val points = listOf(
+            doubleArrayOf(0.0, 0.0), doubleArrayOf(150.0, -80.0), doubleArrayOf(-220.0, 140.0),
+            doubleArrayOf(90.0, 160.0), doubleArrayOf(-120.0, -150.0),
+        )
+        val full = points.map { p ->
+            val x = r[0] * p[0] + r[1] * p[1] + t[0]
+            val y = r[3] * p[0] + r[4] * p[1] + t[1]
+            val z = r[6] * p[0] + r[7] * p[1] + t[2]
+            doubleArrayOf(k.fx * x / z + k.cx, k.fy * y / z + k.cy)
+        }
+        val reference = planarPose(points, full, k)
+        assertArrayEquals(r + t, reference, 1e-4)
         for (f in listOf(2, 3, 4)) {
             val ks = KpmMatchScale.scaleIntrinsics(k, f)
-            for (p in points) {
-                val x = r[0] * p[0] + r[1] * p[1] + r[2] * p[2] + t[0]
-                val y = r[3] * p[0] + r[4] * p[1] + r[5] * p[2] + t[1]
-                val z = r[6] * p[0] + r[7] * p[1] + r[8] * p[2] + t[2]
-                val u = k.fx * x / z + k.cx
-                val v = k.fy * y / z + k.cy
-                val us = ks.fx * x / z + ks.cx
-                val vs = ks.fy * y / z + ks.cy
-                assertEquals(u, KpmMatchScale.toFramePixel(us, f), 1e-3f)
-                assertEquals(v, KpmMatchScale.toFramePixel(vs, f), 1e-3f)
+            val small = full.map { doubleArrayOf((it[0] + 0.5) / f - 0.5, (it[1] + 0.5) / f - 0.5) }
+            assertArrayEquals("factor $f", reference, planarPose(points, small, ks), 1e-4)
+        }
+    }
+
+    /** `[r00..r22, tx, ty, tz]` of the camera-from-plane pose from ≥ 4 plane↔pixel pairs (exact data). */
+    private fun planarPose(plane: List<DoubleArray>, pixels: List<DoubleArray>, ki: CameraIntrinsics): DoubleArray {
+        // Normalized image coordinates remove K, so H = [r1 r2 t] up to scale.
+        val norm = pixels.map { doubleArrayOf((it[0] - ki.cx) / ki.fx, (it[1] - ki.cy) / ki.fy) }
+        val a = Array(2 * plane.size) { DoubleArray(9) }
+        for (i in plane.indices) {
+            val (x, y) = plane[i][0] to plane[i][1]
+            val (u, v) = norm[i][0] to norm[i][1]
+            a[2 * i] = doubleArrayOf(x, y, 1.0, 0.0, 0.0, 0.0, -u * x, -u * y, -u)
+            a[2 * i + 1] = doubleArrayOf(0.0, 0.0, 0.0, x, y, 1.0, -v * x, -v * y, -v)
+        }
+        // Least squares with h22 = 1: normal equations of the 8 unknowns.
+        val ata = Array(8) { DoubleArray(9) }
+        for (row in a) for (i in 0 until 8) {
+            for (j in 0 until 8) ata[i][j] += row[i] * row[j]
+            ata[i][8] += -row[i] * row[8]
+        }
+        for (c in 0 until 8) {
+            val p = (c until 8).maxByOrNull { kotlin.math.abs(ata[it][c]) }!!
+            val tmp = ata[c]; ata[c] = ata[p]; ata[p] = tmp
+            for (rr in 0 until 8) if (rr != c) {
+                val m = ata[rr][c] / ata[c][c]
+                for (kk in c until 9) ata[rr][kk] -= m * ata[c][kk]
             }
         }
+        val h = DoubleArray(9) { if (it == 8) 1.0 else ata[it][8] / ata[it][it] }
+        val col = { c: Int -> doubleArrayOf(h[c], h[3 + c], h[6 + c]) }
+        val n = kotlin.math.sqrt(col(0).sumOf { it * it })
+        val sign = if (h[8] / n > 0) 1.0 else -1.0 // keep the plane in front of the camera
+        val r1 = col(0).map { sign * it / n }
+        val r2 = col(1).map { sign * it / n }
+        val tt = col(2).map { sign * it / n }
+        val r3 = listOf(r1[1] * r2[2] - r1[2] * r2[1], r1[2] * r2[0] - r1[0] * r2[2], r1[0] * r2[1] - r1[1] * r2[0])
+        return doubleArrayOf(
+            r1[0], r2[0], r3[0],
+            r1[1], r2[1], r3[1],
+            r1[2], r2[2], r3[2],
+            tt[0], tt[1], tt[2],
+        )
+    }
+
+    @Test
+    fun `correspondences and errors convert to full-frame pixels`() {
+        val corr = floatArrayOf(0f, 1f, 5f, 6f, 10f, 20f, 7f, 8f)
+        val out = KpmMatchScale.correspondencesToFramePixels(corr, 2)
+        assertArrayEquals(floatArrayOf(0.5f, 2.5f, 5f, 6f, 20.5f, 40.5f, 7f, 8f), out, 0f)
+        assertEquals(0f, corr[1] - 1f, 0f) // input untouched
+        assertEquals(3f * 9f, KpmMatchScale.errorToFramePixelsSq(3f, 3), 0f)
+        assertEquals(3f, KpmMatchScale.errorToFramePixelsSq(3f, 1), 0f)
+    }
+
+    // ---- flow pose rules ------------------------------------------------------------------------
+
+    @Test
+    fun `seed rows outside the frame or non-finite are dropped`() {
+        val corr = floatArrayOf(
+            0f, 0f, 1f, 1f,
+            639f, 479f, 1f, 1f,
+            -0.1f, 5f, 1f, 1f,
+            5f, 479.5f, 1f, 1f,
+            Float.NaN, 5f, 1f, 1f,
+            320f, 240f, 1f, 1f,
+        )
+        assertEquals(listOf(0, 1, 5), FlowPoseMath.usableSeedRows(corr, 640, 480))
+    }
+
+    @Test
+    fun `forward-backward check keeps points that track both ways, in frame, and return close`() {
+        val prev = doubleArrayOf(10.0, 10.0, 20.0, 20.0, 30.0, 30.0, 40.0, 40.0, 50.0, 50.0)
+        val next = doubleArrayOf(12.0, 10.0, 22.0, 20.0, 700.0, 30.0, 42.0, 40.0, 52.0, 50.0)
+        val back = doubleArrayOf(10.5, 10.0, 20.0, 20.0, 30.0, 30.0, 41.5, 40.0, 50.0, 50.0)
+        val ok = byteArrayOf(1, 1, 1, 1, 0)
+        val backOk = byteArrayOf(1, 1, 1, 1, 1)
+        // 0: returns 0.5 px → kept; 1: exact → kept; 2: leaves the frame; 3: returns 1.5 px; 4: lost forward.
+        assertEquals(listOf(0, 1), FlowPoseMath.forwardBackwardSurvivors(prev, next, back, ok, backOk, 640, 480, 1.0))
+    }
+
+    @Test
+    fun `point floors, outlier pass and RMS limit`() {
+        val cfg = KpmMatchSpeedConfig(minFlowInliers = 12, minFlowInlierFraction = 0.4f, maxFlowRmsErrorPx = 2f)
+        assertTrue(FlowPoseMath.enoughPoints(12, 20, cfg))
+        assertFalse(FlowPoseMath.enoughPoints(11, 20, cfg)) // absolute floor
+        assertFalse(FlowPoseMath.enoughPoints(15, 40, cfg)) // fraction floor (16 of 40)
+        assertTrue(FlowPoseMath.enoughPoints(16, 40, cfg))
+        assertEquals(listOf(0, 2), FlowPoseMath.inlierIndices(doubleArrayOf(1.0, 9.5, 9.0), 3.0))
+        assertEquals(3f, FlowPoseMath.acceptedMeanSquaredError(doubleArrayOf(2.0, 4.0), cfg)!!, 1e-6f)
+        assertNull(FlowPoseMath.acceptedMeanSquaredError(doubleArrayOf(4.0, 5.0), cfg)) // RMS 2.12 > 2
+        assertNull(FlowPoseMath.acceptedMeanSquaredError(doubleArrayOf(), cfg))
+        assertNull(FlowPoseMath.acceptedMeanSquaredError(doubleArrayOf(Double.NaN), cfg))
     }
 
     @Test

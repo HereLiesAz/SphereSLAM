@@ -26,14 +26,13 @@ import java.nio.ByteBuffer
  */
 @InternalSphereSlamApi
 object KpmBridge {
-    /** Whether libsphereslam loaded. Never throws; see [NativeLibLoader.loadAll]. */
-    private val nativeLoaded: Boolean = NativeLibLoader.loadAll()
-
+    /**
+     * Whether libsphereslam is loaded and was built with KPM. Never throws. Each call asks
+     * [NativeLibLoader.loadAll], which returns at once after a successful load and retries a failed
+     * one, so a load that failed earlier is attempted again here.
+     */
     fun isAvailable(): Boolean =
-        nativeLoaded && runCatching { nativeKpmAvailable() }.getOrDefault(false)
-
-    fun smokeTest(width: Int, height: Int): Boolean =
-        width > 0 && height > 0 && nativeKpmSmokeTest(width, height)
+        NativeLibLoader.loadAll() && runCatching { nativeKpmAvailable() }.getOrDefault(false)
 
     /**
      * Creates an independent calibrated KPM session. Distortion is currently treated as zero; the
@@ -150,7 +149,6 @@ object KpmBridge {
     }
 
     private external fun nativeKpmAvailable(): Boolean
-    private external fun nativeKpmSmokeTest(width: Int, height: Int): Boolean
     private external fun nativeCreateCalibratedSession(
         width: Int,
         height: Int,

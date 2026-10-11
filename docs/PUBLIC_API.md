@@ -2,8 +2,9 @@
 
 This document defines what downstream applications should treat as SphereSLAM's supported API.
 
-The current development version is **0.23.3** and remains pre-1.0. The supported surface is being
-hardened now so that a future 1.0 can actually carry a meaningful compatibility guarantee.
+SphereSLAM is pre-1.0; released versions are the repository's git tags, and `CHANGELOG.md` records
+what each one changed. The supported surface is being hardened now so that a future 1.0 can actually
+carry a meaningful compatibility guarantee.
 
 ## 1. Module boundaries
 
@@ -116,12 +117,22 @@ intrinsics, timestampNs, attitude, cameraFromDevice, headingDeg, elevationDeg, r
 convertDurationNs))` from the camera-analysis worker and render `FrameResult.pose?.cameraFromMap` (column-major GL
 camera-from-base-map) with `pose.projection`. The base map is defined by the first attitude sample and
 is rotation-only; the planar KPM pose (camera-from-fingerprint) is rebased through
-`map_from_fingerprint`, solved once per reference on the first lock
-(`Callbacks.onMapFromFingerprintSolved`) or supplied to `updatePrecisionLayer`. Hand the solved
-transform back on the next `updatePrecisionLayer` call (a different transform rebuilds the planar
-layer). Any exception while processing a frame is terminal (`TrackingState.FATAL`,
-`Callbacks.onFatalError`); a failed matcher build (for example `ReferenceTooWeakException`) surfaces
-on the first frame after the background build finishes. An exception inside a background
+`map_from_fingerprint`, solved once per reference on the first confirmed lock
+(`Callbacks.onMapFromFingerprintSolved`) or supplied to `updatePrecisionLayer`. Passing no map with
+the same reference keeps the map the session solved for it; a host map overrides it; a new reference
+re-solves. Any change of reference, effective map, atlas page set (`atlasPages` is the complete set —
+pass `atlasPages` back to keep grown pages), `forceRebuild` or frame intrinsics rebuilds the planar
+layer and resets the tracking state, so the next lock needs `confirmationFrames` again. The base map
+rotation is `C_now · ΔR · C_refᵀ` (each frame's own `cameraFromDevice`). `Config.maxBridgeMs`
+(measured from the last accepted frame) is the only gyro-bridge limit; it overrides
+`trackingState.maxBridgeMs`. After a bridge, the next visual pose is smoothed from the bridged pose
+that was shown. An exception while processing a frame enters `TrackingState.FATAL`
+(`Callbacks.onFatalError`): terminal for a `FATAL`-severity failure (native/internal); for the
+`RECOVERABLE` `ReferenceTooWeakException` (surfacing on the first frame after the background build
+finishes) only the precision layer halts — base pose and keyframes continue, `isRecoverable` is true,
+and an `updatePrecisionLayer` with another reference, changed pages or `forceRebuild` resumes.
+`TrackedPose.reprojectionError` is a mean squared error in full-frame pixels² for every match
+method. An exception inside a background
 atlas-growth attempt is **not** fatal: it is reported as an `atlas growth failed` diagnostic and the
 live matcher is kept. `PhotosphereAtlasGrowth`, `TargetQuality` and `TrackingFailureClassifier`
 are usable on their own.
@@ -129,7 +140,8 @@ are usable on their own.
 Per-frame matching cost is set by `Config.matchSpeed` (`KpmMatchSpeedConfig`): KPM matches a
 half-resolution luma by default (intrinsics scaled to match, same pose convention), poses between full
 solves come from Lucas–Kanade flow + PnP against the KPM inlier correspondences (full solve on loss
-and at least every 10 frames / 500 ms), and a multi-page atlas is matched predicted-page-first.
+and at least every 10 frames / 500 ms), and a multi-page atlas is matched predicted-page-first (a
+focused miss defers the all-pages search to the next frame).
 `TrackedPose.matchMethod` (`VisualMatchMethod`) says which path produced a pose. Flow tracking needs
 OpenCV's native library (`opencv_java5`) loaded, as for `Relocalizer`; without it flow switches itself
 off and every frame is a full KPM solve. Flow poses never grow the atlas.
@@ -147,13 +159,15 @@ lands (and briefly after an intrinsics change) a frame carries only the base pos
 (`LumaFrameBufferPool`) may be reused for the next frame.
 
 `displayPosePredictor` (a `:sphereslam` `DisplayPosePredictor`), when set, receives every rendered
-pose with its frame's `attitude` and `cameraFromDevice` and is cleared when a frame yields no pose;
+pose (bridged ones included) with its frame's `attitude` and `cameraFromDevice` and is cleared when a
+frame yields no pose, on a fatal or recoverable failure and on `close()`;
 the GL thread then calls `predictInto(extrapolator, now, out)` per draw. Use the same attitude sensor
 for `Frame.attitude` and the extrapolator.
 
 Every `Config.metricsIntervalMs` (5 s) `Callbacks.onDiagnostic` receives the last accepted KPM match
 (`page inliers error ageMs matchMs method=`) or `KPM no-lock`, followed by
-`timing{frames matched convertMs setupMs matchMs keyframeMs growthMs}` (`mean/max` ms over the
+`timing{frames attempts matched convertMs setupMs matchMs keyframeMs growthMs}` (`attempts` frames
+ran the matcher, `matched` got a pose back; `mean/max` ms over the
 window; `convertMs` comes from `Frame.convertDurationNs`, `growthMs` is only the analyzer-side cost of
 starting a growth attempt). The line is a diagnostic, not a stable format.
 
@@ -271,7 +285,9 @@ world frame works, but the frame and current attitude must come from the same se
 ### Pixel directions
 
 `PhotosphereMap.directionOfPixel` rotates a pinhole ray through heading, elevation and roll
-(`CameraAttitudeProvider.latestRollDegrees` / `cameraRollDegrees`). Do not add `atan` pixel offsets
+(`CameraAttitudeProvider.cameraRollDegrees(latestDeviceToWorldMatrix(), cameraFromDevice)` for the
+image you track; `latestRollDegrees()` is the roll of the device's natural +x axis and equals it only
+at display rotation 0). Do not add `atan` pixel offsets
 to heading/elevation: that ignores roll and is wrong off-axis.
 
 ### Deprecated pose names
@@ -361,8 +377,9 @@ checks and closes a calibrated native engine. It never throws.
 The native engine ships for `arm64-v8a` and `armeabi-v7a` only. On any other ABI (for example
 x86/x86_64 emulators), or on any other native load failure, `SphereSlam.isAvailable()` reports
 false; neither it nor `KpmBridge` throws. The real KPM engine is compiled only when the pinned
-artoolkitX submodule (`third_party/artoolkitx`) is checked out; a build without it ships stub entry
-points and reports KPM unavailable. Building the native code requires CMake 4.4.4, and JitPack builds
+artoolkitX submodule (`third_party/artoolkitx`) is checked out; without it the native build fails
+unless stubs are requested explicitly (`-Psphereslam.allowKpmStubs=true`), which ship stub entry
+points that report KPM unavailable. `libsphereslam.so` links libc++ statically. Building the native code requires CMake 4.4.4, and JitPack builds
 must check the submodule out (see `jitpack.yml` and the README's *Building from source*). `:core:common` and `:core:nativebridge` neither depend on
 nor load OpenCV.
 
@@ -409,8 +426,15 @@ nor load OpenCV.
 
 `CoverageGlowRenderer` can draw inside a host renderer: call `createGlResources()` from the host's
 `onSurfaceCreated` and `drawEmbedded()` from its `onDrawFrame` (for example before drawing artwork).
-`drawEmbedded` never clears, blends premultiplied into the bound framebuffer and viewport, and
-restores the GL state it touches. `FillMode.COMPLEMENT` draws a wash with holes:
+`drawEmbedded` never clears and blends premultiplied into the bound framebuffer and viewport. It
+restores the GL state it touches (program, framebuffer, viewport, blend enable/function/equation,
+depth/stencil/scissor/cull, colour mask, clear colour, array buffer, texture unit 0). Vertex data
+comes from the renderer's own buffers; on an ES 3 context it draws in its own VAO and restores the
+host's VAO binding, so host vertex-attribute state is untouched. On ES 2 it restores the enable flag
+and format of the attribute locations it uses, but GLES20 cannot read back an attribute's pointer
+offset — re-specify any pointer you keep on those locations (normally location 0) after the call.
+After a GL context loss call `onGlContextLost()` (names are forgotten, never deleted);
+`createGlResources()` in the new context's `onSurfaceCreated` starts a fresh generation. `FillMode.COMPLEMENT` draws a wash with holes:
 
 ~~~kotlin
 renderer.fillMode = CoverageGlowRenderer.FillMode.COMPLEMENT

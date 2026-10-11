@@ -186,6 +186,18 @@ class RobustTrackingLoop(
         return Outcome(renderPose = bridged, state = state, accepted = false)
     }
 
+    /**
+     * Record a pose the caller rendered itself during an [TrackingState.IMU_BRIDGE] miss (its own gyro
+     * bridge, when no [bridgeRotatedPose] is supplied) as the smoothing baseline, so the next visual
+     * pose blends from what the user actually saw instead of swinging back from the pre-bridge pose.
+     * Same frame and units as [Outcome.renderPose].
+     */
+    fun synchronizeRendered(renderedPose: FloatArray) {
+        require(renderedPose.size == 16) { "pose must be a length-16 column-major matrix" }
+        stabilizer.synchronize(renderedPose)
+        lastRendered = renderedPose.copyOf()
+    }
+
     /** Clear all state for a new reference / session. */
     fun reset() {
         lastAccepted = null

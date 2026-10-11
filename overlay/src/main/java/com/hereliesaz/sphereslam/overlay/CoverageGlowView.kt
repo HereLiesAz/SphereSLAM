@@ -48,25 +48,34 @@ class CoverageGlowView @JvmOverloads constructor(
     }
 
     /**
-     * Haze [map]'s tiles that still need an update ([PhotosphereMap.regionsNeedingUpdate]) through the
-     * renderer's live projection, and redraw. Call per keyframe (whenever the map changes); the view
-     * re-projects every frame from [trackAtDisplayRate]'s source, or from the last
-     * [update]`(map, worldFromCamera, lens)` rotation. Nothing is drawn until the map is anchored,
-     * a lens is set ([CoverageGlowRenderer.setLens]) and a rotation is known.
+     * Feed [map]'s tiles to the renderer's live projection in the form its current
+     * [CoverageGlowRenderer.fillMode] expects ([regionsFor]: the tiles needing an update for
+     * TRIANGLES, the current tiles for the COMPLEMENT / OUTLINE styles), and redraw. Call per keyframe
+     * (whenever the map changes) and after changing the fill mode; the view re-projects every frame
+     * from [trackAtDisplayRate]'s source, or from the last [update]`(map, worldFromCamera, lens)`
+     * rotation. Nothing is drawn until the map is anchored, a lens is set
+     * ([CoverageGlowRenderer.setLens]) and a rotation is known.
      */
     fun updateRegions(map: PhotosphereMap) {
-        renderer.setRegions(map.regionsNeedingUpdate())
+        renderer.setRegions(regionsFor(map, renderer.fillMode))
         requestRender()
     }
 
+    /** Set the renderer's [fillMode] and re-feed [map]'s regions in the form that mode needs. */
+    fun setFillMode(fillMode: CoverageGlowRenderer.FillMode, map: PhotosphereMap) {
+        renderer.fillMode = fillMode
+        updateRegions(map)
+    }
+
     /**
-     * Haze [map]'s tiles that still need an update for a full camera rotation and redraw.
+     * Glow [map]'s tiles (in the form the current fill mode expects, see [updateRegions]) for a full
+     * camera rotation and redraw.
      *
      * @param worldFromCamera row-major 3×3, see [CoverageGlowProjection.worldFromCamera].
      * @param lens the view's projection ([CoverageGlowProjection.Lens]).
      */
     fun update(map: PhotosphereMap, worldFromCamera: FloatArray, lens: CoverageGlowProjection.Lens) {
-        renderer.setRegions(map.regionsNeedingUpdate())
+        renderer.setRegions(regionsFor(map, renderer.fillMode))
         renderer.setLens(lens)
         renderer.setWorldFromCamera(worldFromCamera)
         requestRender()
@@ -93,6 +102,7 @@ class CoverageGlowView @JvmOverloads constructor(
      * @param verticalFovDeg preview vertical field of view, degrees, inside `(0, 180)`.
      */
     @Deprecated("Ignores roll; use update(map, worldFromCamera, lens) or updateRegions + trackAtDisplayRate.")
+    @Suppress("DEPRECATION")
     fun update(
         map: PhotosphereMap,
         cameraHeadingDeg: Float,
@@ -100,10 +110,9 @@ class CoverageGlowView @JvmOverloads constructor(
         horizontalFovDeg: Float,
         verticalFovDeg: Float,
     ) {
-        @Suppress("DEPRECATION")
         renderer.setTriangles(
             CoverageGlowProjection.projectRegions(
-                regions = map.regionsNeedingUpdate(),
+                regions = regionsFor(map, renderer.fillMode),
                 cameraHeadingDeg = cameraHeadingDeg,
                 cameraElevationDeg = cameraElevationDeg,
                 horizontalFovDeg = horizontalFovDeg,
@@ -111,5 +120,20 @@ class CoverageGlowView @JvmOverloads constructor(
             ),
         )
         requestRender()
+    }
+
+    companion object {
+        /**
+         * The regions [fillMode] draws from: [PhotosphereMap.regionsNeedingUpdate] for
+         * [CoverageGlowRenderer.FillMode.TRIANGLES] (haze over what needs scanning), and
+         * [PhotosphereMap.currentRegions] for COMPLEMENT, OUTLINE and COMPLEMENT_OUTLINED (a wash with
+         * holes / an edge around what is current).
+         */
+        fun regionsFor(map: PhotosphereMap, fillMode: CoverageGlowRenderer.FillMode) = when (fillMode) {
+            CoverageGlowRenderer.FillMode.TRIANGLES -> map.regionsNeedingUpdate()
+            CoverageGlowRenderer.FillMode.COMPLEMENT,
+            CoverageGlowRenderer.FillMode.OUTLINE,
+            CoverageGlowRenderer.FillMode.COMPLEMENT_OUTLINED -> map.currentRegions()
+        }
     }
 }

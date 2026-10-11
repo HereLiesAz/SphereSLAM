@@ -53,13 +53,13 @@ class SphereCoverage(
 ) {
     init {
         require(sectorCount >= 2) { "sectorCount must be >= 2, was $sectorCount" }
-        require(viewableHalfAngleDeg in 1f..180f) {
+        require(viewableHalfAngleDeg > 0f && viewableHalfAngleDeg <= 180f) {
             "viewableHalfAngleDeg must be in (0, 180], was $viewableHalfAngleDeg"
         }
         require(elevationBandCount >= 1) {
             "elevationBandCount must be >= 1, was $elevationBandCount"
         }
-        require(viewableElevationHalfAngleDeg in 1f..90f) {
+        require(viewableElevationHalfAngleDeg > 0f && viewableElevationHalfAngleDeg <= 90f) {
             "viewableElevationHalfAngleDeg must be in (0, 90], was $viewableElevationHalfAngleDeg"
         }
     }

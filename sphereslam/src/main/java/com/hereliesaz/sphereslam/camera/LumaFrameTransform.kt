@@ -28,7 +28,8 @@ class RotatedLuma(
  *
  * Per frame, the allocating functions create one output array; for a camera loop prefer
  * [LumaFrameBufferPool] (pooled output arrays) or the `…Into` variants (caller-owned output). All
- * variants read the plane a row at a time and rotate in cache-sized bands.
+ * variants read the plane a row at a time and rotate in cache-sized bands; the band / row scratch is
+ * kept per calling thread (or per pool) and reused, so it is allocated once, not per frame.
  */
 object LumaFrameTransform {
 
@@ -116,11 +117,15 @@ object LumaFrameTransform {
                 "destination must be exactly ${cropWidth * cropHeight} bytes, was ${it.size}"
             }
         } ?: ByteArray(cropWidth * cropHeight)
-        val bandBytes = BAND_ROWS * cropWidth
-        val band = scratch?.band?.takeIf { it.size >= bandBytes } ?: ByteArray(bandBytes).also { scratch?.band = it }
+        val work = scratch ?: threadScratch.get()!!
+        // The band is only needed to rotate; an unrotated pack reads rows straight into the output.
+        val band = if (rotation == 0) EMPTY else {
+            val bandBytes = BAND_ROWS * cropWidth
+            work.band?.takeIf { it.size >= bandBytes } ?: ByteArray(bandBytes).also { work.band = it }
+        }
         val span = (cropWidth - 1) * pixelStride + 1
         val rowSpan = if (pixelStride == 1) null else {
-            scratch?.rowSpan?.takeIf { it.size >= span } ?: ByteArray(span).also { scratch?.rowSpan = it }
+            work.rowSpan?.takeIf { it.size >= span } ?: ByteArray(span).also { work.rowSpan = it }
         }
 
         packRotate(source.duplicate(), base, rowStride, pixelStride, cropWidth, cropHeight, rotation, out, band, rowSpan)
@@ -128,8 +133,9 @@ object LumaFrameTransform {
     }
 
     /**
-     * [packCropAndRotate] into a caller-owned [destination] of exactly `cropWidth * cropHeight` bytes,
-     * allocating nothing per frame but a buffer view. The returned [RotatedLuma.bytes] **is**
+     * [packCropAndRotate] into a caller-owned [destination] of exactly `cropWidth * cropHeight` bytes.
+     * Allocates nothing frame-sized: per call only a buffer view and the small [RotatedLuma] wrapper
+     * (the band / row scratch is reused per calling thread). The returned [RotatedLuma.bytes] **is**
      * [destination]: reuse it for the next frame only once nothing still reads the previous one.
      */
     fun packCropAndRotateInto(
@@ -165,11 +171,19 @@ object LumaFrameTransform {
     /** Rows packed per band: big enough to amortise the strided writes of a quarter turn, small enough for L1. */
     internal const val BAND_ROWS = 16
 
-    /** Per-caller scratch for [LumaFrameBufferPool]. */
+    /** Reusable band / row scratch (per [LumaFrameBufferPool], or per thread for the other calls). */
     internal class Scratch {
         var band: ByteArray? = null
         var rowSpan: ByteArray? = null
     }
+
+    private val EMPTY = ByteArray(0)
+
+    /** Scratch for calls without their own, one per thread so concurrent callers never share it. */
+    private val threadScratch: ThreadLocal<Scratch> = ThreadLocal.withInitial { Scratch() }
+
+    /** The calling thread's scratch (tests). */
+    internal fun threadScratchForTest(): Scratch = threadScratch.get()!!
 
     /**
      * Band-tiled pack + rotate. Up to [BAND_ROWS] source rows are bulk-read (one `ByteBuffer.get` per

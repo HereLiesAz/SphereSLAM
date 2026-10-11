@@ -195,4 +195,36 @@ class CameraIntrinsicsEstimatorTest {
         assertEquals(CameraIntrinsics(750f, 750f, 500f, 375f, 1000, 750), raw.intrinsicsFor(1000, 750))
         assertNull(raw.intrinsicsFor(0, 750))
     }
+
+    @Test
+    fun `streams are cropped from the active array, not the full pixel or calibration array`() {
+        // Pinhole fallback: principal point at the pixel-array centre (2016, 1512); the active array
+        // starts at (16, 12) and is 4000x3000, so a full-active 4:3 stream sees it at (2000, 1500).
+        val pinhole = CameraIntrinsicsEstimator.computeIntrinsics(
+            calibration = null, pixelArrayWidth = 4032, pixelArrayHeight = 3024,
+            focalLengthMm = 4f, sensorWidthMm = 6.4f, sensorHeightMm = 4.8f,
+            targetWidth = 1000, targetHeight = 750,
+            activeArrayLeft = 16, activeArrayTop = 12, activeArrayWidth = 4000, activeArrayHeight = 3000,
+        )!!
+        assertEquals(4f * 4032f / 6.4f * 0.25f, pinhole.fx, 1e-2f) // scale 1000/4000, not 1000/4032
+        assertEquals(500f, pinhole.cx, 1e-3f)
+        assertEquals(375f, pinhole.cy, 1e-3f)
+
+        // Calibration relative to a pre-correction array at (8, 6); active array at (16, 12).
+        val raw = CameraIntrinsicsEstimator.RawCalibration(
+            calibration = floatArrayOf(3000f, 3000f, 2008f, 1506f, 0f),
+            pixelArrayWidth = 4032, pixelArrayHeight = 3024,
+            focalLengthMm = null, sensorWidthMm = null, sensorHeightMm = null,
+            calibrationArrayWidth = 4016, calibrationArrayHeight = 3012,
+            calibrationArrayLeft = 8, calibrationArrayTop = 6,
+            activeArrayLeft = 16, activeArrayTop = 12, activeArrayWidth = 4000, activeArrayHeight = 3000,
+        )
+        // (2008 + 8 − 16, 1506 + 6 − 12) = (2000, 1500) in active coordinates → centre of the stream.
+        assertEquals(CameraIntrinsics(750f, 750f, 500f, 375f, 1000, 750), raw.intrinsicsFor(1000, 750))
+        // 16:9 from the active array: crop 4000x2250 at y offset 375.
+        val wide = raw.intrinsicsFor(1600, 900)!!
+        assertEquals(1200f, wide.fx, 1e-3f)
+        assertEquals(800f, wide.cx, 1e-3f)
+        assertEquals(450f, wide.cy, 1e-3f)
+    }
 }

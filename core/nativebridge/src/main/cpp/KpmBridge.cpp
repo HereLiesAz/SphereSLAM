@@ -5,11 +5,16 @@
 //
 // IMPORTANT: artoolkitX 1.1.23's BINARY_FEATURE/FREAK matching path unconditionally runs its
 // calibrated pose solve. kpmCreateHandleHomography() therefore leaves a null cparamLT that the
-// matcher later dereferences. Runtime sessions here use kpmCreateHandle() with explicit intrinsics;
-// the homography constructor is retained only for the link-only smoke test.
+// matcher later dereferences. Sessions here always use kpmCreateHandle() with explicit intrinsics.
+//
+// Exceptions: every JNI entry point catches all C++ exceptions (std::bad_alloc from make_shared /
+// map inserts / vectors, or anything artoolkitX's FREAK code throws) and returns its error value, so
+// none unwinds through JNI. What cannot be caught: artoolkitX's own arMalloc() calls exit(1) when
+// malloc fails, which terminates the process; that is upstream behaviour this bridge cannot change.
 
 #include <jni.h>
 #include <android/log.h>
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -69,12 +74,20 @@ struct KpmSession {
     }
 };
 
+// artoolkitX logs an INFO line for every successful match (kpmMatching's "Page[n] pre: aft: error");
+// at camera rate that floods logcat. Keep warnings and errors only.
+void quietArtoolkitLogs() {
+    static std::once_flag once;
+    std::call_once(once, [] { arLogLevel = AR_LOG_LEVEL_WARN; });
+}
+
 // Lifetime guard. Sessions are addressed by a monotonically increasing id (never a raw pointer, so a
 // freed-and-reused address can never alias a live session). A work function looks its session up
 // under the briefly held registry lock, keeps the shared_ptr for the whole call and then takes only
 // that session's `work` lock. nativeDestroySession unregisters the id; the native objects are freed
-// by ~KpmSession when the last in-flight call drops its reference. No use-after-free, no
-// double-free, and no cross-session serialization.
+// by ~KpmSession when the last in-flight call drops its reference, so a destroy racing a call does
+// not free objects that call is using (exercised by the instrumented KpmBridgeInstrumentedTest; the
+// JVM tests cannot load this library), and different sessions are never serialized against each other.
 std::mutex gKpmRegistryMutex;
 std::unordered_map<jlong, std::shared_ptr<KpmSession>> gKpmSessions;
 jlong gKpmNextId = 1;
@@ -182,6 +195,45 @@ ARParamLT *makeCameraParams(
     return arParamLTCreate(&param, AR_PARAM_LT_DEFAULT_OFFSET);
 }
 
+
+// Keep at most maxFeatures of a freshly generated single-page set. Upstream kpmGenRefDataSet honours
+// maxFeatureNum only on the SURF path (the FREAK path keeps every detected point), and the FREAK
+// points carry no detector response in KpmRefData, so the cap keeps a spatially even subset: points
+// are bucketed on an 8x8 grid over the page image and taken round-robin across buckets (in detector
+// order within a bucket), then kept in their original order. Returns the number kept.
+int capFeatures(KpmRefDataSet *set, int maxFeatures) {
+    if (!set || maxFeatures <= 0 || set->num <= maxFeatures || !set->refPoint) return set ? set->num : 0;
+    constexpr int kGrid = 8;
+    float width = 1.0f;
+    float height = 1.0f;
+    if (set->pageNum > 0 && set->pageInfo && set->pageInfo[0].imageNum > 0 && set->pageInfo[0].imageInfo) {
+        width = std::max(1, set->pageInfo[0].imageInfo[0].width);
+        height = std::max(1, set->pageInfo[0].imageInfo[0].height);
+    }
+    std::vector<std::vector<int>> buckets(kGrid * kGrid);
+    for (int i = 0; i < set->num; ++i) {
+        const int bx = std::min(kGrid - 1, std::max(0, static_cast<int>(set->refPoint[i].coord2D.x / width * kGrid)));
+        const int by = std::min(kGrid - 1, std::max(0, static_cast<int>(set->refPoint[i].coord2D.y / height * kGrid)));
+        buckets[by * kGrid + bx].push_back(i);
+    }
+    std::vector<int> keep;
+    keep.reserve(maxFeatures);
+    for (size_t round = 0; static_cast<int>(keep.size()) < maxFeatures; ++round) {
+        bool any = false;
+        for (const auto &bucket : buckets) {
+            if (round < bucket.size()) {
+                any = true;
+                keep.push_back(bucket[round]);
+                if (static_cast<int>(keep.size()) == maxFeatures) break;
+            }
+        }
+        if (!any) break;
+    }
+    std::sort(keep.begin(), keep.end());
+    for (size_t k = 0; k < keep.size(); ++k) set->refPoint[k] = set->refPoint[keep[k]];
+    set->num = static_cast<int>(keep.size());
+    return set->num;
+}
 
 void deletePageHandles(KpmSession *session) {
     for (auto &entry : session->pageHandles) {
@@ -336,27 +388,6 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeKpmAvailable(JNIEnv 
 #endif
 }
 
-JNIEXPORT jboolean JNICALL
-Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeKpmSmokeTest(
-        JNIEnv *, jobject, jint width, jint height) {
-#ifdef HAVE_ARX_KPM
-    if (width <= 0 || height <= 0) return JNI_FALSE;
-    KpmHandle *h = kpmCreateHandleHomography(static_cast<int>(width), static_cast<int>(height));
-    if (!h) {
-        LOGE("nativeKpmSmokeTest: kpmCreateHandleHomography returned null");
-        return JNI_FALSE;
-    }
-    kpmDeleteHandle(&h);
-    LOGI("nativeKpmSmokeTest: KPM symbols linked OK (%dx%d)", width, height);
-    return JNI_TRUE;
-#else
-    (void) width;
-    (void) height;
-    LOGI("nativeKpmSmokeTest: built without HAVE_ARX_KPM (submodule absent)");
-    return JNI_FALSE;
-#endif
-}
-
 JNIEXPORT jlong JNICALL
 Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeCreateCalibratedSession(
         JNIEnv *,
@@ -369,7 +400,8 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeCreateCalibratedSess
         jfloat cy) {
 #ifdef HAVE_ARX_KPM
     if (width <= 0 || height <= 0 || fx <= 0.0f || fy <= 0.0f) return 0;
-
+    quietArtoolkitLogs();
+    try {
     auto session = std::make_shared<KpmSession>();
     session->cameraParams = makeCameraParams(
         static_cast<int>(width),
@@ -393,6 +425,10 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeCreateCalibratedSess
     session->frameWidth = static_cast<int>(width);
     session->frameHeight = static_cast<int>(height);
     return registerSession(session);
+    } catch (...) {
+        LOGE("nativeCreateCalibratedSession: native exception");
+        return 0;
+    }
 #else
     (void) width;
     (void) height;
@@ -412,6 +448,8 @@ JNIEXPORT jlong JNICALL
 Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeCloneSession(
         JNIEnv *, jobject, jlong sourceValue) {
 #ifdef HAVE_ARX_KPM
+    quietArtoolkitLogs();
+    try {
     std::shared_ptr<KpmSession> source = findSession(sourceValue);
     if (!source) return 0;
     auto clone = std::make_shared<KpmSession>();
@@ -439,6 +477,10 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeCloneSession(
         return 0;
     }
     return registerSession(clone);
+    } catch (...) {
+        LOGE("nativeCloneSession: native exception");
+        return 0;
+    }
 #else
     (void) sourceValue;
     return 0;
@@ -472,9 +514,12 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeAddPlanarPage(
     ARUint8 *luma = nullptr;
     if (!directBuffer(env, lumaBuffer, requiredBytes, &luma)) return -3;
 
+    KpmRefDataSet *page = nullptr;
     try {
-        const int before = session->atlas ? session->atlas->num : 0;
-        const int addResult = kpmAddRefDataSet(
+        // Generate the page on its own first (kpmAddRefDataSet would merge it unconditionally), so a
+        // failed or featureless page never enters the atlas (or the clones copied from it), and the
+        // FREAK path's missing maxFeatures cap can be applied before merging.
+        const int genResult = kpmGenRefDataSet(
             luma,
             static_cast<int>(width),
             static_cast<int>(height),
@@ -484,17 +529,24 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeAddPlanarPage(
             static_cast<int>(maxFeatures),
             static_cast<int>(pageNo),
             static_cast<int>(imageNo),
-            &session->atlas
+            &page
         );
-        if (addResult < 0 || !session->atlas) {
-            LOGE("nativeAddPlanarPage: kpmAddRefDataSet failed (%d)", addResult);
+        if (genResult < 0 || !page) {
+            LOGE("nativeAddPlanarPage: kpmGenRefDataSet failed (%d)", genResult);
+            if (page) kpmDeleteRefDataSet(&page);
             return -4;
         }
-
-        const int generated = session->atlas->num - before;
+        const int generated = capFeatures(page, static_cast<int>(maxFeatures));
         if (generated <= 0) {
             LOGE("nativeAddPlanarPage: no features generated");
+            kpmDeleteRefDataSet(&page);
             return -5;
+        }
+        const int mergeResult = kpmMergeRefDataSet(&session->atlas, &page); // consumes `page`
+        if (page) kpmDeleteRefDataSet(&page);
+        if (mergeResult < 0 || !session->atlas) {
+            LOGE("nativeAddPlanarPage: kpmMergeRefDataSet failed (%d)", mergeResult);
+            return -4;
         }
 
         if (session->indexed) {
@@ -527,6 +579,7 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeAddPlanarPage(
         return generated;
     } catch (...) {
         // Never let a C++ exception unwind through JNI (that aborts the process).
+        if (page) kpmDeleteRefDataSet(&page);
         LOGE("nativeAddPlanarPage: KPM threw");
         return -7;
     }
@@ -552,6 +605,7 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeMatchPlanar(
         jobject lumaBuffer,
         jfloatArray outArray) {
 #ifdef HAVE_ARX_KPM
+    try {
     std::shared_ptr<KpmSession> session = findSession(sessionValue);
     if (!session || !outArray) return -1;
     std::lock_guard<std::mutex> workLock(session->work);
@@ -568,6 +622,10 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeMatchPlanar(
     if (pageNo < 0) return -1;
     env->SetFloatArrayRegion(outArray, 0, 14, out);
     return static_cast<jint>(pageNo);
+    } catch (...) {
+        LOGE("nativeMatchPlanar: native exception");
+        return -1;
+    }
 #else
     (void) env;
     (void) sessionValue;
@@ -592,6 +650,7 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeMatchPlanarEx(
         jfloatArray outArray,
         jfloatArray corrArray) {
 #ifdef HAVE_ARX_KPM
+    try {
     std::shared_ptr<KpmSession> session = findSession(sessionValue);
     if (!session || !outArray) return -1;
     std::lock_guard<std::mutex> workLock(session->work);
@@ -616,7 +675,12 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeMatchPlanarEx(
                 built = nullptr;
             }
             if (!built) return -1;
-            it = session->pageHandles.emplace(static_cast<int>(pageNo), built).first;
+            try {
+                it = session->pageHandles.emplace(static_cast<int>(pageNo), built).first;
+            } catch (...) {
+                kpmDeleteHandle(&built); // not owned by the map: free it here
+                throw;
+            }
         }
         handle = it->second;
         skip = &noSkip;
@@ -632,6 +696,10 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeMatchPlanarEx(
     const int written = static_cast<int>(out[14]);
     if (corrArray && written > 0) env->SetFloatArrayRegion(corrArray, 0, written * 4, corr.data());
     return static_cast<jint>(matched);
+    } catch (...) {
+        LOGE("nativeMatchPlanarEx: native exception");
+        return -1;
+    }
 #else
     (void) env;
     (void) sessionValue;
@@ -649,6 +717,7 @@ JNIEXPORT jboolean JNICALL
 Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeClearPages(
         JNIEnv *, jobject, jlong sessionValue) {
 #ifdef HAVE_ARX_KPM
+    try {
     std::shared_ptr<KpmSession> session = findSession(sessionValue);
     if (!session) return JNI_FALSE;
     std::lock_guard<std::mutex> workLock(session->work);
@@ -665,6 +734,10 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeClearPages(
         return JNI_FALSE;
     }
     return JNI_TRUE;
+    } catch (...) {
+        LOGE("nativeClearPages: native exception");
+        return JNI_FALSE;
+    }
 #else
     (void) sessionValue;
     return JNI_FALSE;
@@ -677,15 +750,19 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeDestroySession(
 #ifdef HAVE_ARX_KPM
     // Unregister atomically; an unknown or already-destroyed id finds nothing (double-free guard).
     // In-flight calls hold their own shared_ptr, so ~KpmSession runs after the last of them returns.
-    std::shared_ptr<KpmSession> session;
-    {
-        std::lock_guard<std::mutex> registryLock(gKpmRegistryMutex);
-        auto it = gKpmSessions.find(sessionValue);
-        if (it == gKpmSessions.end()) return;
-        session = std::move(it->second);
-        gKpmSessions.erase(it);
+    try {
+        std::shared_ptr<KpmSession> session;
+        {
+            std::lock_guard<std::mutex> registryLock(gKpmRegistryMutex);
+            auto it = gKpmSessions.find(sessionValue);
+            if (it == gKpmSessions.end()) return;
+            session = std::move(it->second);
+            gKpmSessions.erase(it);
+        }
+        // Dropping `session` here frees the native objects unless another thread is mid-call.
+    } catch (...) {
+        LOGE("nativeDestroySession: native exception");
     }
-    // Dropping `session` here frees the native objects unless another thread is mid-call.
 #else
     (void) sessionValue;
 #endif

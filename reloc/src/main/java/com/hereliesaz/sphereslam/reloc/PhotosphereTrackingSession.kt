@@ -26,7 +26,8 @@ import kotlin.math.abs
  *
  * - **Base photosphere map.** The first usable attitude sample defines the map orientation; every
  *   later frame gets a rotation-only GL `camera_from_map` from the attitude change
- *   ([FrameResult.baseCameraFromMap]). Translation stays exactly zero (fixed-standpoint model; never
+ *   ([FrameResult.baseCameraFromMap]), expressed in the frame's own camera axes (so a display
+ *   rotation since the first frame is honoured: `C_now · ΔR_body · C_firstᵀ`). Translation stays exactly zero (fixed-standpoint model; never
  *   integrated from the accelerometer). Quality-gated [PhotosphereKeyframe]s are emitted at a fixed
  *   cadence through [Callbacks.onKeyframe], before any wall reference exists.
  * - **Planar precision layer.** With a wall [ReferenceImage] (plus optional atlas pages) set through
@@ -35,10 +36,12 @@ import kotlin.math.abs
  *   [correctAcceptedPose] → smoothing → state hysteresis). The KPM pose lives in the fingerprint
  *   (canonical wall) frame and is rebased into the base map through `map_from_fingerprint`, solved
  *   once per reference from a same-frame base + KPM pair (`inverse(camera_from_map) ·
- *   camera_from_fingerprint`, [Callbacks.onMapFromFingerprintSolved]) or supplied by the host.
+ *   camera_from_fingerprint`, [Callbacks.onMapFromFingerprintSolved]) or supplied by the host. Every
+ *   lock — the first, and the first after any precision-layer change — needs the normal
+ *   [TrackingStateConfig.confirmationFrames] before a pose is rendered or the map bridge is solved.
  *
  * A brief visual miss after a lock is held for at most [Config.maxBridgeMs] by a gyro rotation bridge
- * (camera centre held). An accepted pose may grow a multi-page KPM atlas ([PhotosphereAtlasGrowth]):
+ * (camera centre held); the next visual pose blends from the bridged pose that was shown. An accepted pose may grow a multi-page KPM atlas ([PhotosphereAtlasGrowth]):
  * a perspective-rectified wall patch next to the existing pages, kept only when it passes
  * [TargetQuality] and the KPM feature floor ([Callbacks.onAtlasPageAdded]). The planar session is
  * rebuilt whenever the frame intrinsics change.
@@ -50,9 +53,13 @@ import kotlin.math.abs
  * matcher is swapped in at the start of a later frame, and a rejected page simply drops the fork.
  * Until the first build lands, frames return the base pose only ([FrameResult.pose] null).
  *
- * Failures are classified ([TrackingFailureClassifier]) and reported once per change of reason. Any
- * exception thrown while processing a frame (for example [ReferenceTooWeakException] or a native
- * failure) is terminal: the session reports it, enters [TrackingState.FATAL] and ignores later frames.
+ * Failures are classified ([TrackingFailureClassifier]) and reported once per change of reason. An
+ * exception thrown while processing a frame enters [TrackingState.FATAL] (reported through
+ * [Callbacks.onFailure] and [Callbacks.onFatalError]). A [TrackingFailureSeverity.FATAL] one (a native
+ * or internal failure) is terminal: later frames are ignored. A [TrackingFailureSeverity.RECOVERABLE]
+ * one — a [ReferenceTooWeakException] from a matcher build — only halts the precision layer: frames
+ * keep producing the base pose and keyframes, and the next [updatePrecisionLayer] with a different
+ * reference (or `forceRebuild`, or changed atlas pages) clears it and rebuilds, keeping the base map.
  *
  * Camera plumbing (CameraX `ImageProxy`, Camera2 characteristics), relocalizer/feature-map feeds,
  * depth inference and UI belong to the host: it reads [FrameResult] after each call.
@@ -88,7 +95,9 @@ class PhotosphereTrackingSession internal constructor(
     /**
      * @property timestampSource the camera's timestamp source (Camera2 `SENSOR_INFO_TIMESTAMP_SOURCE`);
      *   frame age is only checked for [CameraTimestampSource.REALTIME].
-     * @property maxBridgeMs longest gyro bridge after the last accepted frame, ms.
+     * @property maxBridgeMs longest gyro bridge, measured from the last accepted frame, ms. This is
+     *   the session's only bridge limit: it overrides [TrackingStateConfig.maxBridgeMs] in
+     *   [trackingState].
      * @property keyframeIntervalMs photosphere keyframe cadence, ms.
      * @property atlasGrowth whether accepted poses may grow the KPM atlas.
      * @property metricsIntervalMs cadence of the KPM match-metrics + per-stage timing diagnostic, ms.
@@ -243,6 +252,8 @@ class PhotosphereTrackingSession internal constructor(
      * @property cameraFromMap column-major GL camera-from-base-map view.
      * @property projection [ProjectionMatrix.buildFrom] of [intrinsics] (the full tracked frame).
      * @property unitsPerPixel wall units spanned by one vertical frame pixel at the target depth.
+     * @property reprojectionError mean squared reprojection error of the visual solve, full-frame
+     *   pixels² for every [matchMethod] (KPM solves at a downscale are converted).
      * @property observationAgeMs trusted frame age, or null.
      * @property matchMethod how the visual pose was solved (full / focused KPM or flow tracking); for
      *   an [PoseSource.IMU_BRIDGE] pose, the method of the held pose.
@@ -313,13 +324,20 @@ class PhotosphereTrackingSession internal constructor(
 
     private val agePolicy = ObservationAgePolicy(config.observationAge)
     private val acceptancePolicy = PoseAcceptancePolicy(config.acceptance)
-    private val stabilizer = PoseStabilizer()
-    private val stateMachine = TrackingStateMachine(config.trackingState)
+    // Recreated per matcher build with the reference's units (snap distance); reset on every rebuild.
+    private var stabilizer = PoseStabilizer()
+    // Config.maxBridgeMs is the one bridge limit (see Config); the state machine gets the same value.
+    private val stateMachine = TrackingStateMachine(config.trackingState.copy(maxBridgeMs = config.maxBridgeMs))
 
     private var referenceImage: ReferenceImage? = null
     private var mapFromFingerprintValue: FloatArray? = null
+    // The map_from_fingerprint this session solved for the current reference, if any.
+    private var solvedMapForReference: FloatArray? = null
     private val runtimeAtlasPages = linkedMapOf<Int, AtlasPage>()
-    private var emittedMapBridgeForReference: ReferenceImage? = null
+    // Highest page number any live / pending matcher holds, so growth never reuses one.
+    private var highestMatcherPageNo = 0
+    // Set while a RECOVERABLE failure (a too-weak reference) has halted the precision layer.
+    private var suspendedFailure: TrackingFailureEvent? = null
 
     private var frontEnd: PlanarFrontEnd? = null
     private var sessionKey: CameraIntrinsics? = null
@@ -330,6 +348,8 @@ class PhotosphereTrackingSession internal constructor(
     private var imuBridge: AttitudeRotationBridge? = null
     private var imuBridgeReferenceAtMs = -1L
     private var lastGood: TrackedPose? = null
+    // lastGood's render pose in the fingerprint (precision) frame — the stabilizer's frame.
+    private var lastGoodCanonical: FloatArray? = null
     private var lastAcceptedCameraFromCanonical: FloatArray? = null
 
     private var photosphereReferenceQuaternion: FloatArray? = null
@@ -350,8 +370,15 @@ class PhotosphereTrackingSession internal constructor(
     /** Current tracking state. */
     val trackingState: TrackingState @Synchronized get() = stateMachine.state
 
-    /** True after a frame failed terminally. */
-    val isFatal: Boolean @Synchronized get() = fatal
+    /**
+     * True while the session is in [TrackingState.FATAL]: for good after a
+     * [TrackingFailureSeverity.FATAL] failure, or until [updatePrecisionLayer] recovers a
+     * [TrackingFailureSeverity.RECOVERABLE] one (see [isRecoverable]).
+     */
+    val isFatal: Boolean @Synchronized get() = fatal || suspendedFailure != null
+
+    /** True when [isFatal] was caused by a recoverable failure that [updatePrecisionLayer] can clear. */
+    val isRecoverable: Boolean @Synchronized get() = !fatal && suspendedFailure != null
 
     /** Whether a wall reference is set. */
     val hasReference: Boolean @Synchronized get() = referenceImage != null
@@ -366,12 +393,21 @@ class PhotosphereTrackingSession internal constructor(
      * Swap the planar precision layer without touching the base photosphere (map orientation,
      * keyframe cadence and attitude reference survive).
      *
-     * The planar session, smoothing and gyro bridge are rebuilt when [reference] is a different
-     * object, when [mapFromFingerprint] differs (beyond 1e-5), or when [forceRebuild] is set (e.g. the
-     * host's relocalizer seed changed). A new [reference] also re-arms the one-shot
-     * `map_from_fingerprint` solve.
+     * The planar session, smoothing, gyro bridge and tracking state are rebuilt — the next lock needs
+     * the normal confirmation again — when [reference] is a different object, when the effective
+     * `map_from_fingerprint` changes (beyond 1e-5), when [atlasPages] differs from [atlasPages]'s
+     * current value, or when [forceRebuild] is set (e.g. the host's relocalizer seed changed).
+     * Otherwise the call changes nothing.
      *
-     * @param mapFromFingerprint column-major map-from-fingerprint, or null to solve it on the next lock.
+     * A rebuild also clears a [isRecoverable] failure: after a [ReferenceTooWeakException], pass a
+     * different reference (or the previous one), new pages, or `forceRebuild = true` to resume.
+     *
+     * @param atlasPages the complete set of pages beyond page 0. Pages the session grew are reported
+     *   through [Callbacks.onAtlasPageAdded] and [atlasPages]; pass them back (the same objects or
+     *   equal copies) to keep them. Any other set rebuilds the matcher from exactly these pages.
+     * @param mapFromFingerprint column-major map-from-fingerprint supplied by the host, or null for the
+     *   session's own: with the same [reference], a map this session already solved for it is kept;
+     *   otherwise it is solved on the next confirmed lock.
      */
     @Synchronized
     fun updatePrecisionLayer(
@@ -383,19 +419,30 @@ class PhotosphereTrackingSession internal constructor(
         if (closed) return
         require(atlasPages.map { it.pageNo }.distinct().size == atlasPages.size) { "duplicate atlas page numbers" }
         val referenceChanged = referenceImage !== reference
-        val mapChanged = !sameTransform(mapFromFingerprintValue, mapFromFingerprint) &&
-            !(mapFromFingerprintValue == null && mapFromFingerprint == null)
+        if (referenceChanged) solvedMapForReference = null
+        val effectiveMap = mapFromFingerprint?.copyOf() ?: solvedMapForReference?.copyOf()
+        val mapChanged = !sameTransform(mapFromFingerprintValue, effectiveMap) &&
+            !(mapFromFingerprintValue == null && effectiveMap == null)
+        val sortedPages = atlasPages.sortedBy { it.pageNo }
+        val pagesChanged = !samePages(runtimeAtlasPages.values.toList(), sortedPages)
         referenceImage = reference
-        mapFromFingerprintValue = mapFromFingerprint?.copyOf()
-        runtimeAtlasPages.clear()
-        atlasPages.sortedBy { it.pageNo }.forEach { runtimeAtlasPages[it.pageNo] = it }
+        mapFromFingerprintValue = effectiveMap
+        if (pagesChanged) {
+            runtimeAtlasPages.clear()
+            sortedPages.forEach { runtimeAtlasPages[it.pageNo] = it }
+        }
 
-        if (referenceChanged || mapChanged || forceRebuild) {
-            if (referenceChanged) emittedMapBridgeForReference = null
+        if (referenceChanged || mapChanged || pagesChanged || forceRebuild) {
             dropPlanarSession()
+            if (suspendedFailure != null) {
+                suspendedFailure = null
+                lastFailureReason = null
+                callbacks.onDiagnostic("SphereSLAM precision layer recovered from a recoverable failure")
+            }
+            if (lastReportedState != null) reportState(stateMachine.state)
             callbacks.onDiagnostic(
                 "SphereSLAM precision layer updated reference=${reference != null} " +
-                    "mapFromFingerprint=${mapFromFingerprint != null}; base photosphere preserved",
+                    "mapFromFingerprint=${effectiveMap != null} pages=${runtimeAtlasPages.size}; base photosphere preserved",
             )
         }
     }
@@ -403,7 +450,7 @@ class PhotosphereTrackingSession internal constructor(
     /**
      * Optional display-rate pose hook. When set, every rendered pose is published to it together with
      * its frame's attitude and `cameraFromDevice` ([DisplayPosePredictor.update]), and it is cleared
-     * whenever a frame yields no pose — so a GL thread can call
+     * whenever a frame yields no pose, on a fatal (or recoverable) failure and on [close] — so a GL thread can call
      * `predictInto(attitudeExtrapolator, now, out)` every draw and get the latest vision pose rotated
      * by the attitude change since its frame. Use the same attitude sensor as [Frame.attitude].
      * Safe to set from any thread.
@@ -411,7 +458,10 @@ class PhotosphereTrackingSession internal constructor(
     @Volatile
     var displayPosePredictor: DisplayPosePredictor? = null
 
-    /** Process one frame. After [close] or a fatal failure this returns an empty result. */
+    /**
+     * Process one frame. After [close] or a terminal ([TrackingFailureSeverity.FATAL]) failure this
+     * returns an empty result; during a recoverable failure it returns the base pose only.
+     */
     @Synchronized
     fun onFrame(frame: Frame): FrameResult {
         if (closed || fatal) return FrameResult(null, stateMachine.state, null, false, null, null, null, null)
@@ -423,6 +473,7 @@ class PhotosphereTrackingSession internal constructor(
         } catch (t: Throwable) {
             if (t is VirtualMachineError) throw t
             fatal = true
+            displayPosePredictor?.clear()
             val event = TrackingFailureClassifier.fromThrowable(t)
             reportFailure(event)
             val state = stateMachine.onFatal()
@@ -447,10 +498,20 @@ class PhotosphereTrackingSession internal constructor(
         timing.keyframe.add(elapsedRealtimeNanos() - keyframeStartNs)
         val reference = referenceImage
             ?: return FrameResult(null, stateMachine.state, cameraFromMap, false, null, null, null, projection)
+        // A recoverable failure halted the precision layer; the base map keeps running.
+        if (suspendedFailure != null) {
+            return FrameResult(null, stateMachine.state, cameraFromMap, false, null, null, null, projection)
+        }
 
         val setupStartNs = elapsedRealtimeNanos()
-        val active = ensureSession(intrinsics, reference)
-            ?: return FrameResult(null, stateMachine.state, cameraFromMap, false, null, null, null, projection)
+        val active = try {
+            ensureSession(intrinsics, reference)
+        } catch (t: Throwable) {
+            if (t is VirtualMachineError) throw t
+            val event = TrackingFailureClassifier.fromThrowable(t)
+            if (event.severity != TrackingFailureSeverity.RECOVERABLE) throw t
+            return suspendPrecisionLayer(t, event, cameraFromMap, projection)
+        } ?: return FrameResult(null, stateMachine.state, cameraFromMap, false, null, null, null, projection)
         val direct = directFrame(frame.luma)
         val matchStartNs = elapsedRealtimeNanos()
         timing.setup.add(matchStartNs - setupStartNs)
@@ -465,6 +526,7 @@ class PhotosphereTrackingSession internal constructor(
         )
         val matchEndNs = elapsedRealtimeNanos()
         timing.match.add(matchEndNs - matchStartNs)
+        if (pose != null) timing.matched++
         val matchDurationMs = (matchEndNs - matchStartNs).toFloat() / 1_000_000f
         val observationAge = agePolicy.evaluate(frame.timestampNs, matchEndNs, config.timestampSource)
 
@@ -490,7 +552,7 @@ class PhotosphereTrackingSession internal constructor(
             }
 
             lastAcceptedCameraFromCanonical = locked.cameraFromCanonical.copyOf()
-            maybeEmitMapFromFingerprint(reference, cameraFromMap, locked.cameraFromCanonical)
+            maybeEmitMapFromFingerprint(cameraFromMap, locked.cameraFromCanonical)
 
             // The fingerprint never becomes the world: rebase the precision pose into the base map.
             val mapFromFp = mapFromFingerprintValue?.takeIf { it.size == 16 && it.all(Float::isFinite) }
@@ -529,6 +591,7 @@ class PhotosphereTrackingSession internal constructor(
                 matchMethod = locked.method,
             )
             lastGood = tracked
+            lastGoodCanonical = precisionRenderView.copyOf()
             lastKpmMetrics = tracked
             return FrameResult(
                 tracked, outcome.state, cameraFromMap, true, locked.cameraFromCanonical, acceptedRawMapView, null, projection,
@@ -553,9 +616,10 @@ class PhotosphereTrackingSession internal constructor(
         reportFailure(failure)
         reportState(outcome.state)
         val bridged = if (outcome.state == TrackingState.IMU_BRIDGE) {
-            bridgeLastGood(frame, projection)
+            bridgeLastGood(frame, projection, loop)
         } else {
             lastGood = null
+            lastGoodCanonical = null
             null
         }
         return FrameResult(bridged, outcome.state, cameraFromMap, false, null, null, failure, projection)
@@ -570,25 +634,42 @@ class PhotosphereTrackingSession internal constructor(
             photosphereCameraFromDevice = cameraFromDevice.copyOf()
             return RigidMath.identity()
         }
-        // Body-frame delta since the map reference, in the camera frame the reference was captured
-        // under (fixed for the map's life, like the gyro bridge's reference).
-        val delta = DeviceCameraRotation.cameraDelta(refCameraFromDevice, RotationMath.cameraRotationDelta(qRef, qNow))
-        return viewFromRotation(delta)
+        return viewFromRotation(baseCameraRotation(refCameraFromDevice, qRef, cameraFromDevice, qNow))
     }
 
+    /** Solve `map_from_fingerprint` on a confirmed lock when no map is known (host-supplied or solved). */
     private fun maybeEmitMapFromFingerprint(
-        reference: ReferenceImage,
         cameraFromMap: FloatArray?,
         cameraFromFingerprint: FloatArray,
     ) {
-        if (cameraFromMap == null || emittedMapBridgeForReference === reference) return
+        if (cameraFromMap == null || mapFromFingerprintValue != null) return
         if (cameraFromMap.any { !it.isFinite() } || cameraFromFingerprint.any { !it.isFinite() }) return
         val solved = solveMapFromFingerprint(cameraFromMap, cameraFromFingerprint) ?: return
         // Publish locally first so the very next precision pose is rebased even before the host persists it.
         mapFromFingerprintValue = solved.copyOf()
-        emittedMapBridgeForReference = reference
+        solvedMapForReference = solved.copyOf()
         callbacks.onMapFromFingerprintSolved(solved)
         callbacks.onDiagnostic("SphereSLAM map_from_fingerprint solved from same-frame base+KPM pose")
+    }
+
+    /**
+     * A RECOVERABLE failure while (re)building the matcher: halt only the precision layer, report it
+     * like a fatal error, and keep the base map running until [updatePrecisionLayer] recovers it.
+     */
+    private fun suspendPrecisionLayer(
+        error: Throwable,
+        event: TrackingFailureEvent,
+        cameraFromMap: FloatArray?,
+        projection: FloatArray,
+    ): FrameResult {
+        dropPlanarSession()
+        suspendedFailure = event
+        displayPosePredictor?.clear()
+        reportFailure(event)
+        val state = stateMachine.onFatal()
+        reportState(state)
+        callbacks.onFatalError(error)
+        return FrameResult(null, state, cameraFromMap, false, null, null, event, projection)
     }
 
     private fun captureKeyframe(frame: Frame, cameraFromMap: FloatArray?, nowMs: Long) {
@@ -626,13 +707,19 @@ class PhotosphereTrackingSession internal constructor(
         if (existing != null && intrinsics == sessionKey) return existing
 
         if (existing != null) {
-            // Intrinsics changed: the old matcher's calibration is wrong for this frame.
+            // Intrinsics changed: the old matcher's calibration is wrong for this frame. The rebuilt
+            // matcher starts a fresh continuity baseline, so the next lock must be confirmed again.
             atlasWorker.retire(existing)
             frontEnd = null
             sessionKey = null
+            robustLoop = null
             clearImuReference()
             lastGood = null
+            lastGoodCanonical = null
+            lastAcceptedCameraFromCanonical = null
             stabilizer.reset()
+            stateMachine.reset()
+            if (lastReportedState != null) reportState(stateMachine.state)
         }
         if (buildKey == intrinsics && atlasWorker.isBuilding) return null
 
@@ -651,8 +738,12 @@ class PhotosphereTrackingSession internal constructor(
                 buildKey = null
                 frontEnd?.let(atlasWorker::retire)
                 outcome.diagnostics.forEach(callbacks.onDiagnostic)
-                // referenceWidthUnits scales the acceptance translation-jump limit; grown pages share the
-                // wall's scale. The stabilizer and state machine are shared across rebuilds.
+                // referenceWidthUnits scales the acceptance translation-jump limit and the smoothing
+                // snap distance; grown pages share the wall's scale. Every rebuild starts unconfirmed.
+                highestMatcherPageNo = maxOf(highestMatcherPageNo, runtimeAtlasPages.keys.maxOrNull() ?: 0)
+                stabilizer = PoseStabilizer(
+                    snapDistance = PoseBlend.snapDistanceFor(outcome.root.geometry.widthMeters, outcome.root.physicallyMetric),
+                )
                 robustLoop = RobustTrackingLoop(
                     referenceWidthUnits = outcome.root.geometry.widthMeters,
                     acceptancePolicy = acceptancePolicy,
@@ -682,6 +773,7 @@ class PhotosphereTrackingSession internal constructor(
                 frontEnd = outcome.frontEnd
                 atlasWorker.retire(live)
                 runtimeAtlasPages[outcome.page.pageNo] = outcome.page
+                highestMatcherPageNo = maxOf(highestMatcherPageNo, outcome.page.pageNo)
                 callbacks.onDiagnostic(outcome.diagnostic)
                 callbacks.onAtlasPageAdded(outcome.page, outcome.attitude)
             }
@@ -723,7 +815,8 @@ class PhotosphereTrackingSession internal constructor(
         // runs on the worker against a fork of the live matcher. Only the frame is copied here (the
         // caller may reuse its buffer once onFrame returns).
         val kept = runtimeAtlasPages.values.toList()
-        val pageNo = (runtimeAtlasPages.keys.maxOrNull() ?: 0) + 1
+        // Never a number the live matcher (or an earlier build of this session) already holds.
+        val pageNo = maxOf(runtimeAtlasPages.keys.maxOrNull() ?: 0, highestMatcherPageNo) + 1
         val luma = frame.luma.copyOf()
         val attitude = frame.attitude
         val targetQuality = config.targetQuality
@@ -749,9 +842,15 @@ class PhotosphereTrackingSession internal constructor(
         return imuBridge?.cameraRotationDelta(attitude?.quaternion) != null
     }
 
-    private fun bridgeLastGood(frame: Frame, projection: FloatArray): TrackedPose? {
+    /**
+     * The last good pose carried through the gyro rotation since it was accepted. The same rotation
+     * of its precision-frame render pose becomes [loop]'s smoothing baseline, so the next visual pose
+     * blends from what was shown during the bridge instead of swinging back.
+     */
+    private fun bridgeLastGood(frame: Frame, projection: FloatArray, loop: RobustTrackingLoop): TrackedPose? {
         val held = lastGood ?: return null
         val delta = imuBridge?.cameraRotationDelta(frame.attitude?.quaternion) ?: return null
+        lastGoodCanonical?.let { loop.synchronizeRendered(RotationMath.rotateAboutCameraCentre(it, delta)) }
         return held.bridged(delta, projection, frame.intrinsics, frame.timestampNs)
     }
 
@@ -773,8 +872,12 @@ class PhotosphereTrackingSession internal constructor(
         buildKey = null
         robustLoop = null
         lastGood = null
+        lastGoodCanonical = null
         lastAcceptedCameraFromCanonical = null
         stabilizer.reset()
+        // A new or rebuilt precision layer has no continuity baseline: the next lock is confirmed
+        // from scratch (and only then may solve map_from_fingerprint). A terminal failure stays FATAL.
+        if (!fatal) stateMachine.reset()
         clearImuReference()
     }
 
@@ -854,6 +957,7 @@ class PhotosphereTrackingSession internal constructor(
     override fun close() {
         if (closed) return
         closed = true
+        displayPosePredictor?.clear()
         dropPlanarSession()
         atlasWorker.close()
         stateMachine.reset()
@@ -884,6 +988,37 @@ class PhotosphereTrackingSession internal constructor(
             val m = RigidMath.multiply(RigidMath.rigidInverse(cameraFromMap), cameraFromFingerprint)
             return m.takeIf { r -> r.all { it.isFinite() } }
         }
+
+        /**
+         * The base map's camera rotation `camera_now_from_camera_ref = C_now · ΔR · C_refᵀ`, where
+         * `ΔR = R(qNow)ᵀ · R(qRef)` is the body-frame rotation since the reference and `C` the
+         * camera-from-device of each frame (row-major 3×3). Using `C_ref` on both sides would leave
+         * every pose after a display rotation off by the roll between the two camera frames.
+         */
+        internal fun baseCameraRotation(
+            refCameraFromDevice: FloatArray,
+            qRef: FloatArray,
+            nowCameraFromDevice: FloatArray,
+            qNow: FloatArray,
+        ): FloatArray {
+            val deltaBody = RotationMath.cameraRotationDelta(qRef, qNow)
+            return RotationMath.multiplyMat3(
+                RotationMath.multiplyMat3(nowCameraFromDevice, deltaBody),
+                RotationMath.transposeMat3(refCameraFromDevice),
+            )
+        }
+
+        private fun samePages(a: List<AtlasPage>, b: List<AtlasPage>): Boolean {
+            if (a.size != b.size) return false
+            return a.indices.all { i -> samePage(a[i], b[i]) }
+        }
+
+        private fun samePage(a: AtlasPage, b: AtlasPage): Boolean = a === b || (
+            a.pageNo == b.pageNo && a.width == b.width && a.height == b.height &&
+                a.referenceWidthUnits == b.referenceWidthUnits && a.physicallyMetric == b.physicallyMetric &&
+                a.canonicalFromPageRef().contentEquals(b.canonicalFromPageRef()) &&
+                a.lumaRef().contentEquals(b.lumaRef())
+            )
 
         private fun viewFromRotation(rotation: FloatArray): FloatArray {
             val out = RigidMath.identity()
@@ -992,6 +1127,9 @@ internal class StageTiming {
     }
 
     var frames = 0
+
+    /** Frames whose matcher returned a pose (before gating); `match.count` is the attempts. */
+    var matched = 0
     val convert = Stage("convertMs")
     val setup = Stage("setupMs")
     val match = Stage("matchMs")
@@ -999,10 +1137,14 @@ internal class StageTiming {
     val growth = Stage("growthMs")
     private val stages = listOf(convert, setup, match, keyframe, growth)
 
-    /** `timing{frames=N matched=M convertMs=mean/max setupMs=… matchMs=… keyframeMs=… growthMs=…}`; resets. */
+    /**
+     * `timing{frames=N attempts=A matched=M convertMs=mean/max setupMs=… matchMs=… keyframeMs=… growthMs=…}`
+     * — `attempts` frames ran the matcher, `matched` of them got a pose back; resets.
+     */
     fun summaryAndReset(): String {
-        val out = "timing{frames=$frames matched=${match.count} ${stages.joinToString(" ") { it.describe() }}}"
+        val out = "timing{frames=$frames attempts=${match.count} matched=$matched ${stages.joinToString(" ") { it.describe() }}}"
         frames = 0
+        matched = 0
         stages.forEach { it.reset() }
         return out
     }

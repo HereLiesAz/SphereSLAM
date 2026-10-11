@@ -1,13 +1,39 @@
 # Bundled models (`:models`)
 
 All three models ship as assets inside the `:models` AAR and are extracted to the app's
-`filesDir/sphereslam-models/` on first load (re-extracted when the bundled size changes).
+`filesDir/sphereslam-models/` on first load, and re-extracted whenever the bundled asset's content
+changes (its SHA-256 is compared with a `<file>.sha256` stamp written next to the extracted copy).
+Licensing of everything bundled is summarised in the repository's `NOTICE`.
 
 | Asset | Used by | Runtime | Size |
 | --- | --- | --- | --- |
 | `midas_v21_small_256_fp16.tflite` | `DepthEstimator` | LiteRT 1.4.2, **GPU delegate** (CPU/XNNPACK fallback) | 33,248,432 B |
-| `superpoint.onnx` | `SuperPointDetector` | ONNX Runtime (CPU) | 5,208,885 B |
+| `superpoint.onnx` | `SuperPointDetector` | ONNX Runtime (CPU) | 5,236,740 B |
 | `zerodce.onnx` | `LowLightEnhancer` | ONNX Runtime (CPU) | 320,693 B |
+
+## SuperPoint — `superpoint.onnx`
+
+- **Source:** rpautrat/SuperPoint (<https://github.com/rpautrat/SuperPoint>), weights
+  `weights/superpoint_v6_from_tf.pth`, model code `superpoint_pytorch.py` at
+  `ccf30088721dba97a9612d1bdd9b8d1bb49ac642`. This is **not** Magic Leap's SuperPoint release.
+- **Export:** `models/tools/export_superpoint_rpautrat.py` reproduces the reference forward exactly
+  (conv→ReLU→BN, BatchNorm left unfolded, raw `semi` logits, L2-normalised `desc`); max abs error vs
+  PyTorch 5.7e-5 (`semi`) / 1.1e-6 (`desc`). It replaces an earlier asset (sha256 `f78be883…`) that
+  folded BN through the ReLU and added two ReLUs — 5.6% vs 72.8% homography accuracy @3 px on
+  HPatches. Details: `docs/SUPERPOINT_PROVENANCE.md`.
+- **License:** MIT, © 2018 Paul-Edouard Sarlin & Rémi Pautrat. The notice ships next to the model
+  as `assets/superpoint.LICENSE.txt`.
+- bundled file: 5,236,740 B, sha256 `a95d3b7ae1e21833e5eb5cc7e7a99b07b04a9be0ed628f173171d82ec92a7107`
+- Descriptors from the previous asset (e.g. persisted wall feature maps) don't match the new ones.
+
+## Zero-DCE — `zerodce.onnx`
+
+- **Source:** independently trained by HereLiesAz; DCE-Net architecture after Guo et al.,
+  "Zero-Reference Deep Curve Estimation for Low-Light Image Enhancement" (CVPR 2020). It is not the
+  authors' released checkpoint (CC BY-NC) and not a fine-tune of it. The training script and data
+  are not recorded in this repository.
+- **License:** part of SphereSLAM, Apache License 2.0.
+- bundled file: 320,693 B, sha256 `34abf0c9154d8a30861f9558ac47459c170a18fa88c6dfb492e027261f65f0c1`
 
 ## MiDaS v2.1 Small 256 — `midas_v21_small_256_fp16.tflite`
 

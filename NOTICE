@@ -1,0 +1,49 @@
+SphereSLAM
+Copyright 2026 HereLiesAz
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It includes or is distributed with the following third-party components. Their license texts are
+in third_party_licenses/ (shipped inside every published AAR under META-INF/sphereslam/<module>/).
+
+-------------------------------------------------------------------------------
+artoolkitX (KPM / AR subset) — statically linked into libsphereslam.so (:core:nativebridge)
+-------------------------------------------------------------------------------
+  License: GNU Lesser General Public License v3 (or later), with the artoolkitX additional
+  permission that allows static linking (see third_party_licenses/artoolkitx-LICENSE.txt, which
+  carries the exception, the full LGPLv3 text and the GPLv3 text it incorporates, verbatim from
+  upstream).
+  Source: https://github.com/artoolkitx/artoolkitx at commit
+  9d487c9fa02d2ae9cef986d2698e829c2dcfbd25 (the third_party/artoolkitx submodule of this
+  repository; the exact files compiled are listed in core/nativebridge/src/main/cpp/CMakeLists.txt).
+  Copyright (c) the artoolkitX contributors; portions Copyright DAQRI LLC and ARToolworks, Inc.,
+  as stated in the individual source files.
+
+-------------------------------------------------------------------------------
+MiDaS v2.1 Small — bundled model (:models, midas_v21_small_256_fp16.tflite, fp16 weights)
+-------------------------------------------------------------------------------
+  License: MIT. Copyright (c) 2019 Intel ISL (Intel Intelligent Systems Lab).
+  Source: https://github.com/isl-org/MiDaS (release v2_1). See third_party_licenses/midas-MIT.txt.
+
+-------------------------------------------------------------------------------
+SuperPoint (rpautrat/SuperPoint) — bundled model weights (:models, superpoint.onnx)
+-------------------------------------------------------------------------------
+  License: MIT. Copyright (c) 2018 Paul-Edouard Sarlin & Rémi Pautrat.
+  Source: https://github.com/rpautrat/SuperPoint, weights superpoint_v6_from_tf.pth (exported by
+  models/tools/export_superpoint_rpautrat.py). Not the Magic Leap SuperPoint release. See third_party_licenses/superpoint-MIT.txt.
+
+-------------------------------------------------------------------------------
+Zero-DCE network — bundled model (:models, zerodce.onnx)
+-------------------------------------------------------------------------------
+  Independently trained by HereLiesAz (DCE-Net architecture after Guo et al., "Zero-Reference
+  Deep Curve Estimation for Low-Light Image Enhancement", CVPR 2020); not the authors' released
+  checkpoint. Part of SphereSLAM under the Apache License, Version 2.0.
+
+-------------------------------------------------------------------------------
+Runtime dependencies (not bundled in the AARs; resolved from Maven by the consumer)
+-------------------------------------------------------------------------------
+  OpenCV (org.opencv:opencv, used by :reloc) — Apache License 2.0. https://opencv.org
+  LiteRT (com.google.ai.edge.litert, used by :models) — Apache License 2.0.
+    https://github.com/google-ai-edge/LiteRT
+  ONNX Runtime (com.microsoft.onnxruntime:onnxruntime-android, used by :models) — MIT,
+    Copyright (c) Microsoft Corporation. See third_party_licenses/onnxruntime-MIT.txt.

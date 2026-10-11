@@ -22,7 +22,14 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags("-std=c++17")
-                arguments("-DANDROID_STL=c++_shared")
+                // Static libc++: only JNI crosses libsphereslam's boundary, and a c++_shared build would
+                // ship its own libc++_shared.so that collides with OpenCV's (exposed through :reloc's
+                // api dependency) in a consumer's mergeNativeLibs.
+                arguments("-DANDROID_STL=c++_static")
+                // Opt-in only (see CMakeLists.txt): build KPM stubs when the artoolkitX submodule is absent.
+                if (providers.gradleProperty("sphereslam.allowKpmStubs").orNull == "true") {
+                    arguments("-DSPHERESLAM_ALLOW_KPM_STUBS=ON")
+                }
             }
         }
     }
@@ -48,6 +55,10 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     api(project(":core:common"))
     testImplementation(libs.junit)
+    // On-device tests of the JNI session lifecycle (src/androidTest); need an arm64/armv7 device.
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
 }
 
 tasks.withType<KotlinCompile>().configureEach {

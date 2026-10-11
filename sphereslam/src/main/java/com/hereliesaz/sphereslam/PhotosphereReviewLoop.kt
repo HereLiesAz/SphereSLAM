@@ -9,13 +9,14 @@ package com.hereliesaz.sphereslam
  * fingerprints), then hands back the verdict ([onFrame]); the loop folds that into the map's single
  * `needsUpdate` state.
  *
- * The three freshness forces, in order each frame:
+ * The three freshness forces each frame:
  * 1. **Age (TTL).** Tiles last updated longer than [ReviewConfig.ttlMs] ago flip back to needing an
  *    update, so a sweep is re-verified over time. A [ReviewConfig.ttlMs] of 0 disables age expiry.
- * 2. **Confirm.** A tile recognized this frame is marked current.
- * 3. **Change.** A tile that was current but is now looked-at-and-unrecognized is deemed changed:
+ * 2. **Change.** A tile that was current but is now looked-at-and-unrecognized is deemed changed:
  *    it, **and its neighbors**, go back to needing an update (the propagation rule). A tile that was
  *    never scanned failing to match is expected, not a change, so it does not propagate.
+ * 3. **Confirm.** A tile recognized this frame is marked current — applied last, so a tile confirmed
+ *    this frame stays current even when a changed neighbour propagates staleness onto it.
  *
  * Pure Kotlin, no sensor or matcher dependency; feed it absolute (heading, elevation) degrees. Not
  * thread-safe; drive it and its map from one worker.
@@ -91,8 +92,10 @@ class PhotosphereReviewLoop(
             .filter { map.hasBeenScanned(it) && !map.needsUpdate(it) }
             .toList()
 
-        for (id in confirmedSet) map.markUpdated(id, nowMs)
+        // Staleness first, confirmations last: what was recognized this frame is current, whatever a
+        // changed neighbour propagates.
         for (id in staleEligible) map.recordStale(id)
+        for (id in confirmedSet) map.markUpdated(id, nowMs)
         return Outcome(
             candidates = candidates(headingDeg, elevationDeg),
             directionsNeedingUpdate = map.directionsNeedingUpdate(),

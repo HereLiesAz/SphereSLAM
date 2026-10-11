@@ -32,10 +32,19 @@ class ModelHelpersTest {
     }
 
     @Test
-    fun `extracted copy is reused only when it matches the asset size`() {
-        assertTrue(ModelAssets.isUpToDate(true, 100L, 100L))
-        assertFalse(ModelAssets.isUpToDate(true, 90L, 100L))
-        assertTrue(ModelAssets.isUpToDate(true, 90L, -1L))
-        assertFalse(ModelAssets.isUpToDate(false, 0L, 100L))
+    fun `extracted copy is reused only when its recorded content hash matches the asset`() {
+        val h = ModelAssets.sha256Hex("abc".byteInputStream())
+        assertEquals("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", h)
+        assertTrue(ModelAssets.isUpToDate(true, 100L, h, h))
+        assertTrue(ModelAssets.isUpToDate(true, 100L, h.uppercase(), h))
+        // Same size, different content: re-extract (the old size-only check reused it).
+        val other = ModelAssets.sha256Hex("abd".byteInputStream())
+        assertFalse(ModelAssets.isUpToDate(true, 100L, other, h))
+        assertFalse(ModelAssets.isUpToDate(true, 100L, null, h)) // copied by an older version: no stamp
+        assertFalse(ModelAssets.isUpToDate(true, 0L, h, h))
+        assertFalse(ModelAssets.isUpToDate(false, 100L, h, h))
+        val f = java.io.File.createTempFile("model", ".bin").apply { writeText("abc"); deleteOnExit() }
+        assertEquals(h, ModelAssets.sha256Hex(f))
+        assertEquals(java.io.File(f.parentFile, f.name + ".sha256"), ModelAssets.stampFile(f))
     }
 }

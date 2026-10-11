@@ -118,6 +118,19 @@ class PhotosphereKeyframeTest {
     }
 
     @Test
+    fun `an out-of-band keyframe never anchors the wall heading`() {
+        val map = PhotosphereMap(sectorCount = 4, viewableHalfAngleDeg = 90f, elevationBandCount = 3, viewableElevationHalfAngleDeg = 60f)
+        val store = PhotosphereKeyframeStore(map)
+        assertNull(store.record(keyframe(200f, 85f), nowMs = 1L)) // looking at the ceiling
+        assertFalse(map.hasWallHeading())
+        assertNull(store.latest)
+        // The first in-band keyframe anchors (and is a first capture).
+        val first = store.record(keyframe(10f, 0f), nowMs = 2L)!!
+        assertTrue(first.firstCaptureForTile)
+        assertEquals(10f, map.snapshot().wallHeadingDeg!!, 1e-6f)
+    }
+
+    @Test
     fun `view prefers the tile's own keyframe and otherwise pairs session intrinsics with the current attitude`() {
         val map = PhotosphereMap(sectorCount = 4, viewableHalfAngleDeg = 180f, elevationBandCount = 3, viewableElevationHalfAngleDeg = 60f)
         val store = PhotosphereKeyframeStore(map)

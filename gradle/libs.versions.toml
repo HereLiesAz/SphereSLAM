@@ -1,14 +1,18 @@
 # SphereSLAM standalone version catalog.
-# Policy: every declared dependency/tool version is pinned to the latest stable release or newer.
+# Policy: every version is pinned exactly (no ranges or dynamic versions), normally to the latest
+# stable release when last updated; deliberate exceptions are commented where they are declared.
 [versions]
 agp = "9.4.1"
 coreKtx = "1.19.1"
 onnxruntime = "1.30.0"
-# LiteRT classic Interpreter + GPU delegate line (litert-gpu has no 2.x release older than 2 weeks;
-# 2.x litert drops org.tensorflow.lite.Delegate). Do not mix with litert 2.x in the same app.
+# Exception: LiteRT stays on the 1.x classic Interpreter + GPU delegate line, because litert 2.x
+# removes org.tensorflow.lite.Delegate (an API break for DepthRuntime's GPU delegate). Do not mix
+# with litert 2.x in the same app.
 litert = "1.4.2"
 opencv = "5.0.0.1"
 junit = "4.13.2"
+androidxTestRunner = "1.7.0"
+androidxTestExtJunit = "1.3.0"
 ndk = "30.0.16248370"
 cmake = "4.4.4"
 jdk = "21"
@@ -22,6 +26,8 @@ litert = { group = "com.google.ai.edge.litert", name = "litert", version.ref = "
 litert-gpu = { group = "com.google.ai.edge.litert", name = "litert-gpu", version.ref = "litert" }
 litert-gpu-api = { group = "com.google.ai.edge.litert", name = "litert-gpu-api", version.ref = "litert" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTestRunner" }
+androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExtJunit" }
 
 [plugins]
 android-library = { id = "com.android.library", version.ref = "agp" }

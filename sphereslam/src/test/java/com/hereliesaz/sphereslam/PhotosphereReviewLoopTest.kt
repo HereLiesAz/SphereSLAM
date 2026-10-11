@@ -49,6 +49,18 @@ class PhotosphereReviewLoopTest {
     }
 
     @Test
+    fun `a tile confirmed this frame stays current when a changed neighbour goes stale`() {
+        val m = anchoredMap()
+        val l = loop(m)
+        l.onFrame(0f, 0f, nowMs = 10L, confirmed = listOf(TileId(1, 1), TileId(2, 1)))
+        // (1,1) changed; its neighbour (2,1) is recognized in the same frame.
+        l.onFrame(0f, 0f, nowMs = 20L, confirmed = listOf(TileId(2, 1)), checkedButUnmatched = listOf(TileId(1, 1)))
+        assertTrue(m.needsUpdate(TileId(1, 1)))
+        assertFalse(m.needsUpdate(TileId(2, 1)))
+        assertTrue(m.needsUpdate(TileId(0, 1))) // the other neighbour still propagates
+    }
+
+    @Test
     fun `a never-scanned miss does not spread to neighbors`() {
         val m = anchoredMap()
         val l = loop(m)

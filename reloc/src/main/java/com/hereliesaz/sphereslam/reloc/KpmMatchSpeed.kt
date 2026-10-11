@@ -17,8 +17,11 @@ import kotlin.math.sqrt
  * 1. **Downscaled matching** ([matchDownscale]): KPM runs on a box-filtered `1/matchDownscale` luma
  *    with intrinsics scaled to match ([KpmMatchScale.scaleIntrinsics]). The 3-D pose a calibrated
  *    PnP/ICP recovers does not depend on image resolution, so the result is the same
- *    camera-from-wall transform. Reprojection errors stay in the pixels of the image each solve ran
- *    on (KPM: the downscaled image, as KPM's own ≤ 10 px² gate assumes; flow: the full frame).
+ *    camera-from-wall transform. Reported reprojection errors are mean squared errors in
+ *    **full-frame** pixels² whichever path solved the pose (a downscaled KPM solve's error is scaled
+ *    by `factor²`), so one [PoseAcceptanceConfig.maxReprojectionError] gates KPM and flow poses alike.
+ *    KPM's own internal ≤ 10 px² gate still applies in the image it solved, i.e. ≤ `10·factor²`
+ *    full-frame px², so at a downscale the session's acceptance gate is the binding one.
  * 2. **Frame-to-frame flow tracking** ([flowTracking]): after a full solve, the KPM inlier
  *    correspondences (frame pixel ↔ page millimetre) are tracked with pyramidal Lucas–Kanade at full
  *    resolution and the pose is re-solved by PnP against the page's own reference coordinates
@@ -26,7 +29,8 @@ import kotlin.math.sqrt
  *    inliers, and at least every [fullSolveEveryFrames] frames / [fullSolveIntervalMs] ms.
  * 3. **Focused page matching** ([focusedPageMatching]): with a multi-page atlas, while a lock is
  *    recent, the full solve first matches only the page under the predicted optical axis (or the last
- *    locked page) and falls back to all pages when that misses.
+ *    locked page). When that page misses, the frame reports no match and the next full solve
+ *    matches all pages — a frame never pays for both a focused and an all-pages solve.
  *
  * Flow tracking needs the OpenCV Java native library loaded by the host (as [Relocalizer] does); when
  * it is not, flow tracking switches itself off and every frame takes the full KPM path.
@@ -128,6 +132,25 @@ internal object KpmMatchScale {
 
     /** A downscaled-image coordinate in full-frame pixels. */
     fun toFramePixel(value: Float, factor: Int): Float = (value + 0.5f) * factor - 0.5f
+
+    /**
+     * KPM correspondence rows `(x, y, page x mm, page y mm)` with `x, y` in the [factor]-downscaled
+     * image, as a new array with `x, y` in full-frame pixels (page coordinates unchanged).
+     */
+    fun correspondencesToFramePixels(correspondences: FloatArray, factor: Int): FloatArray {
+        val out = correspondences.copyOf()
+        for (i in 0 until out.size / 4) {
+            out[i * 4] = toFramePixel(out[i * 4], factor)
+            out[i * 4 + 1] = toFramePixel(out[i * 4 + 1], factor)
+        }
+        return out
+    }
+
+    /**
+     * A mean squared reprojection error measured in the [factor]-downscaled image, in full-frame
+     * pixels²: a residual of `d` downscaled pixels spans `d · factor` frame pixels.
+     */
+    fun errorToFramePixelsSq(meanSquaredErrorPx: Float, factor: Int): Float = meanSquaredErrorPx * factor * factor
 
     /**
      * Box-filter downscale of tightly packed [src] (`width × height`) by [factor] into [dst]

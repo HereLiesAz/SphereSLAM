@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
 import java.io.File
-import java.util.zip.CRC32
 
 /** A single monocular depth map, relative (unitless) unless the model is a metric variant. */
 @ExperimentalSphereSlamModelsApi
@@ -279,7 +278,7 @@ class DepthEstimator internal constructor(
         return try {
             val base = appContext.codeCacheDir ?: return null
             val dir = File(base, GPU_CACHE_DIR).apply { mkdirs() }
-            DepthRuntime.GpuCache(dir, gpuModelToken(model.name, model.length(), crc32(model)))
+            DepthRuntime.GpuCache(dir, gpuModelToken(model.name, model.length(), ModelAssets.sha256Hex(model)))
         } catch (t: Throwable) {
             Log.w(TAG, "GPU program cache unavailable", t)
             null
@@ -526,23 +525,11 @@ class DepthEstimator internal constructor(
         }
 
         /**
-         * GPU program-cache token: unique per model content, filename-safe (the delegate uses it as a
+         * GPU program-cache token: unique per model content (the same SHA-256 that decides whether an
+         * extracted asset is current, first 16 hex digits), filename-safe (the delegate uses it as a
          * file name), so a replaced model never reuses a stale compiled program. Pure.
          */
-        internal fun gpuModelToken(name: String, length: Long, crc: Long): String =
-            "${name.replace(Regex("[^A-Za-z0-9._-]"), "_")}-$length-${crc.toString(16)}"
-
-        private fun crc32(file: File): Long {
-            val crc = CRC32()
-            file.inputStream().use { input ->
-                val buf = ByteArray(1 shl 16)
-                while (true) {
-                    val r = input.read(buf)
-                    if (r < 0) break
-                    crc.update(buf, 0, r)
-                }
-            }
-            return crc.value
-        }
+        internal fun gpuModelToken(name: String, length: Long, sha256Hex: String): String =
+            "${name.replace(Regex("[^A-Za-z0-9._-]"), "_")}-$length-${sha256Hex.take(16).lowercase()}"
     }
 }

@@ -130,9 +130,14 @@ class SphereSlamTrackerTest {
             calls += "add:$pageNo"
             return true
         }
+        val matchedArrays = java.util.Collections.synchronizedList(mutableListOf<ByteArray>())
         override fun match(
             handle: Long, luma: ByteArray, timestampNs: Long,
-        ): SphereSlamTracker.Observation? = null
+        ): SphereSlamTracker.Observation? {
+            matchedArrays += luma
+            calls += "match:${luma[0]}"
+            return null
+        }
         override fun clear(handle: Long): Boolean {
             calls += "clear"
             return true
@@ -166,6 +171,25 @@ class SphereSlamTrackerTest {
                 listOf("create", "clear", "add:1", "clear", "clear", "add:2"),
                 native.calls.toList(),
             )
+        }
+    }
+
+    @Test
+    fun `submitted frames reuse their packed arrays instead of allocating one per frame`() {
+        val native = RecordingNative()
+        val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
+        SphereSlamTracker(native, worker).use { tracker ->
+            tracker.configure(SphereSlamTracker.CameraModel(2, 2, 500f, 500f, 1f, 1f))
+            tracker.setReference(ByteBuffer.wrap(ByteArray(4)), 2, 2, 2)
+            drain(worker)
+            for (i in 1..6) {
+                // Row stride 3: the pack must still produce the tight 2x2 frame.
+                tracker.submitFrame(ByteBuffer.wrap(byteArrayOf(i.toByte(), 0, 9, 0, 0, 9)), 2, 2, 3, timestampNs = i.toLong())
+                drain(worker)
+            }
+            assertEquals((1..6).map { "match:$it" }, native.calls.filter { it.startsWith("match") })
+            assertEquals(1, native.matchedArrays.map { System.identityHashCode(it) }.distinct().size)
+            assertEquals(listOf<Byte>(6, 0, 0, 0), native.matchedArrays.last().toList())
         }
     }
 

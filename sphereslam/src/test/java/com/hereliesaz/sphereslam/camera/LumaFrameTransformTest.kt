@@ -136,6 +136,19 @@ class LumaFrameTransformTest {
     }
 
     @Test
+    fun intoVariants_reuseTheirScratch_acrossFrames() {
+        val dst = ByteArray(6)
+        LumaFrameTransform.packAndRotateInto(stridedSource(), 3, 2, 8, 2, 90, dst)
+        val scratch = LumaFrameTransform.threadScratchForTest()
+        val band = scratch.band!!
+        val row = scratch.rowSpan!!
+        repeat(3) { LumaFrameTransform.packAndRotateInto(stridedSource(), 3, 2, 8, 2, 90, dst) }
+        assertSame(band, scratch.band)
+        assertSame(row, scratch.rowSpan)
+        assertArrayEquals(byteArrayOf(4, 1, 5, 2, 6, 3), dst)
+    }
+
+    @Test
     fun intoRejectsAWronglySizedDestination() {
         assertThrows(IllegalArgumentException::class.java) {
             LumaFrameTransform.packAndRotateInto(stridedSource(), 3, 2, 8, 2, 90, ByteArray(7))

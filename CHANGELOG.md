@@ -2,6 +2,123 @@
 
 ## Unreleased
 
+Fixes from a full audit of 0.24.3. No version bump yet.
+
+### `:reloc` `PhotosphereTrackingSession`
+
+- **Fix — `updatePrecisionLayer(sameReference)` without a map deleted the solved
+  `map_from_fingerprint` for good** (the one-shot solve never re-armed, so later poses were the
+  gyro-only base pose labelled `KPM`). With the same reference and no map, the map the session solved
+  for that reference is kept; a host map overrides it; a new reference re-solves.
+- **Fix — a reference swap kept the tracking state `LOCKED`**: the new wall locked on one unconfirmed
+  frame and the map bridge was solved from it; dropping the reference left `LOCKED` behind. Every
+  precision-layer rebuild (reference / map / page-set change, `forceRebuild`, intrinsics change) now
+  resets the state machine and needs `confirmationFrames` again.
+- **Fix — `REFERENCE_TOO_WEAK` was reported `RECOVERABLE` but killed the session.** It now halts only
+  the precision layer (`TrackingState.FATAL`, `onFatalError`, new `isRecoverable`); the base pose and
+  keyframes continue, and `updatePrecisionLayer` with another reference, changed pages or
+  `forceRebuild` resumes with the base map intact.
+- **Fix — overlay swung back after a gyro bridge.** The bridged pose that was shown becomes the
+  smoothing baseline (new `RobustTrackingLoop.synchronizeRendered`); the `DisplayPosePredictor`
+  receives it and is now also cleared on fatal errors and `close()`.
+- **Fix — page table drift.** `atlasPages` is the complete page set: a different set rebuilds the
+  matcher from exactly those pages (the same objects or equal copies change nothing), and grown page
+  numbers are never reused, so growth can no longer fail forever on a duplicate page number.
+- **Fix — base map after a display rotation** used the first frame's `cameraFromDevice`; it is now
+  `C_now · ΔR · C_refᵀ`.
+- **Units — KPM reprojection error is reported in full-frame pixels²** (multiplied by `factor²` at a
+  downscale), the same unit as flow poses, so `PoseAcceptanceConfig.maxReprojectionError` and
+  `PhotosphereAtlasGrowth.MAX_GROW_REPROJECTION_ERROR` mean the same for every match method. At the
+  default 2× downscale this tightens the acceptance gate on KPM poses from an effective 40 to 10
+  full-frame px² (KPM's own ≤ 10 px² gate applies in the downscaled image); raise
+  `maxReprojectionError` if half-resolution locks are now rejected on device.
+- A focused-page miss no longer runs a second, all-pages solve in the same frame: the frame reports
+  no match and the next full solve searches every page.
+- `Config.maxBridgeMs` (from the last accepted frame) is the only bridge limit; it overrides
+  `trackingState.maxBridgeMs`.
+- Timing diagnostic: `timing{frames attempts matched …}` — `matched` now counts frames whose matcher
+  returned a pose (it counted attempts).
+- `PoseStabilizer(snapDistance)` / `PoseBlend.diverged(…, snapDistance)` / `snapDistanceFor`: the
+  0.2 m snap applies only to metric poses; non-metric poses snap at 0.2 reference widths.
+- `PlanarFingerprint.fromReference` releases its mask `Mat`.
+- Tests: `KpmPlanarFrontEnd` (behind a backend/flow seam: downscale, correspondence scaling, flow
+  scheduling and fallback, OpenCV-missing path, focused-miss deferral) and `FlowPoseMath` (the flow
+  tracker's point-selection rules); the downscale test now solves and compares planar poses.
+
+### `:sphereslam`
+
+- `PhotosphereKeyframeStore.record` anchors the wall heading only from keyframes inside the viewable
+  elevation arc (as `PhotosphereMap.markUpdated` does).
+- `PhotosphereReviewLoop`: a tile confirmed in a frame stays current even when a changed neighbour
+  propagates staleness in the same frame.
+- Hybrid sidecar: `HybridKpmCorrection` gates on the confidence `HybridAnchorFusion` requires
+  (`MIN_CONFIDENCE` 0.5, new `Reject.LOW_CONFIDENCE` / `HybridKpmOutcome.LOW_CONFIDENCE`), so a
+  refused observation is never reported `ACCEPTED`; `Reject` is declared in gate order;
+  `HybridAnchorFusion.MIN_INLIER_RATIO` / `COLD_SNAP_INLIER_RATIO` renamed `MIN_CONFIDENCE` /
+  `COLD_SNAP_MIN_CONFIDENCE` (deprecated aliases kept). Effective acceptance is unchanged.
+- `MetricPageRectification`: the page's corners map to the output's pixel edges and the page is cut
+  to whole square pixels, so the warp, the DPI and the page geometry agree (was off by `W/(W−1)`).
+- `CameraIntrinsicsEstimator` crops streams from `SENSOR_INFO_ACTIVE_ARRAY_SIZE` (Camera2's stream
+  source), re-expressing the principal point from the pre-correction / pixel array.
+- `CameraAttitudeProvider.latestSample().accuracy` carries the reported sensor accuracy; it and
+  `GameRotationAttitudeSource` hold the application context's `SensorManager` (no pinned Activity).
+- `SphereCoverage` / `SphereGrid` accept the documented `(0, 180]` / `(0, 90]` ranges (sub-degree
+  values were rejected).
+- `SphereSlamTracker` reuses its packed-frame arrays and JNI direct buffer;
+  `LumaFrameTransform`'s `…Into` calls reuse band/row scratch per thread.
+- Docs: `DeviceCameraRotation.toOpenCv` described correctly; README examples pass the roll of the
+  tracked image (`cameraRollDegrees(latestDeviceToWorldMatrix(), cameraFromDisplay)`), not
+  `latestRollDegrees()`.
+- `KpmSphereSlamEngineTest`'s fake follows the native contract (a clone matches nothing until its
+  first add).
+
+### Native (`:core:nativebridge`)
+
+- `maxFeatures` now caps the FREAK path (upstream honours it only for SURF): a spatially even subset
+  is kept. A failed or featureless page is no longer merged into the atlas (nor copied into clones).
+- Every JNI entry point catches all C++ exceptions and returns its error value. Not catchable:
+  artoolkitX's `arMalloc` calls `exit(1)` when `malloc` fails.
+- artoolkitX logs at WARN (no INFO line per match). Dead smoke test / homography constructor removed;
+  `KpmBridge.isAvailable()` retries a failed library load.
+- libc++ is linked statically (`c++_static`): no `libc++_shared.so` clash with OpenCV in consumers.
+- A missing artoolkitX submodule fails the native build unless `-Psphereslam.allowKpmStubs=true`.
+- Instrumented tests (`connectedAndroidTest`) for clone, destroy-while-matching, single-page
+  matching, the feature cap and featureless pages. They need an arm device; CI does not run them.
+
+### `:overlay`
+
+- `CoverageGlowRenderer.drawEmbedded` draws from its own buffers and, on ES 3, its own VAO (host VAO
+  restored); it sets and restores the blend equation. On ES 2 the attribute pointer offset cannot be
+  read back — documented. Context loss: resource generations, `onGlContextLost()`, names never
+  deleted on a suspected loss. Wash/edge shaders use highp where available.
+- `CoverageGlowView` feeds `currentRegions()` to the COMPLEMENT / OUTLINE styles (`regionsFor`,
+  `setFillMode`).
+
+### `:models`
+
+- Extracted models are refreshed on a SHA-256 content change (was: size only); the GPU program-cache
+  token uses the same hash.
+
+### Licensing, build and release
+
+- SphereSLAM is licensed under Apache-2.0: `LICENSE`, `NOTICE` (artoolkitX LGPLv3 + static-linking
+  exception with its source commit, MiDaS / SuperPoint MIT, OpenCV / LiteRT Apache-2.0, ONNX Runtime
+  MIT) and `third_party_licenses/` ship in every AAR under `META-INF/sphereslam/<module>/`; the POM
+  declares the license.
+- Model provenance recorded in `docs/MODELS.md`: `superpoint.onnx` is rpautrat/SuperPoint
+  `superpoint_v6_from_tf.pth` (MIT; `assets/superpoint.LICENSE.txt` added); `zerodce.onnx` was
+  trained independently by HereLiesAz.
+- CI workflow (`.github/workflows/ci.yml`): `./gradlew assemble test` with the submodule on PRs into
+  and pushes to `main`.
+- Consumers need `compileSdk` 37 (required by `androidx.core` 1.19.x, documented in the README).
+- Corrected comments: version catalog pinning policy / LiteRT exception; JitPack builds the version
+  in `version.properties` (it does not substitute the tag).
+
+## 0.24.3
+
+Everything below shipped in tag `0.24.3` (tags `0.24.0` and `0.24.1` were cut along the way without
+sections of their own).
+
 ### Display-rate coverage glow, attitude extrapolation and pose prediction (additive)
 
 Why the glow felt loosely attached to the scene (diagnosis):
@@ -71,7 +188,8 @@ KPM call; and every frame allocated a fresh ~300 KB rotated luma array through a
   on a box-filtered luma with intrinsics scaled in the pixel-centre convention
   (`fx' = fx/f`, `cx' = (cx + ½)/f − ½`). The calibrated pose is resolution-independent, so the
   returned camera-from-wall transform has the same convention; the reprojection error stays in the
-  pixels KPM solved in (its own ≤ 10 px² gate and `PoseAcceptanceConfig` were tuned on that scale).
+  pixels KPM solved in. (Corrected in Unreleased: errors are now reported in full-frame pixels²; the
+  claim made here that `PoseAcceptanceConfig` had been tuned on the downscaled scale was unsupported.)
   artoolkitX's own `kpmSetProcMode` is deliberately not used: in the pinned FREAK path the pose solve
   consumes unscaled query coordinates against full-size calibration, giving wrong poses for any
   reduced mode.
@@ -145,8 +263,9 @@ growthMs}` as `mean/max` ms, and is also emitted without a lock (`KPM no-lock`).
   only for the copy).
 - `matchPlanarEx`: single-page matchers built lazily from the already-extracted atlas features,
   inlier correspondence export, and the redundant per-page-slot ICP pose solves in the FREAK path
-  skipped (`kpmSetMatchingSkipPage` on every slot but the first — same pose, N−1 fewer solves). C++
-  exceptions no longer cross JNI.
+  skipped (`kpmSetMatchingSkipPage` on every slot but the first — same pose, N−1 fewer solves). The
+  match and add paths catch C++ exceptions. (This originally read "C++ exceptions no longer cross
+  JNI", which overclaimed: session creation, clone and map inserts were unguarded until Unreleased.)
 
 ### `:models` depth
 

@@ -17,6 +17,9 @@ enum class HybridKpmOutcome {
     STALE,
     TOO_FEW_INLIERS,
     BAD_REPROJECTION,
+
+    /** Passed the inlier and error gates individually, but their combined confidence is below the bar. */
+    LOW_CONFIDENCE,
     NON_FINITE,
 
     /** No primary pose sample within the timestamp pairing window. */

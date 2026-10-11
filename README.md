@@ -47,6 +47,10 @@ The complete contract, pose conventions, ownership rules, threading and migratio
 - compileSdk 37
 - minSdk 26
 
+**Consumers need `compileSdk` 37 too.** The AARs' metadata require it, and that requirement comes
+from their dependency on `androidx.core:core` 1.19.x (whose own AAR metadata demands compileSdk 37),
+so it would apply even if SphereSLAM's modules declared a lower value.
+
 ### Building from source
 
 The native KPM engine is compiled from the **artoolkitX submodule** (`third_party/artoolkitx`, pinned
@@ -58,13 +62,22 @@ git clone --recurse-submodules https://github.com/HereLiesAz/SphereSLAM.git
 git submodule update --init third_party/artoolkitx
 ~~~
 
-Without the submodule the build still succeeds, but `libsphereslam` contains stub KPM entry points:
-`SphereSlam.isAvailable()` / `isOperational()` report false and nothing ever matches. Always check
-the submodule before debugging "KPM never locks".
+Without the submodule the native build **fails** (CMake `FATAL_ERROR`) rather than shipping a library
+whose KPM never works. For host/JVM-only work that does not need KPM, opt in to stub entry points with
+`-Psphereslam.allowKpmStubs=true`: `SphereSlam.isAvailable()` / `isOperational()` then report false
+and nothing ever matches.
 
 The Android SDK must provide CMake 4.4.4 (`sdkmanager "cmake;4.4.4"`), or point `cmake.dir` in
-`local.properties` at a standalone 4.4.4 install. JVM unit tests (`./gradlew test`) do not need the
-submodule.
+`local.properties` at a standalone 4.4.4 install. JVM unit tests never load the native library, but
+`./gradlew test` still configures the native build, so it needs the submodule (or
+`-Psphereslam.allowKpmStubs=true`).
+
+`libsphereslam.so` links libc++ statically (`ANDROID_STL=c++_static`) and ships no
+`libc++_shared.so`, so it never collides with OpenCV's (which `:reloc` brings in) when a consumer
+merges native libraries. The native session lifecycle (clone, destroy while matching, single-page
+matching, feature cap) is covered by instrumented tests,
+`./gradlew :core:nativebridge:connectedAndroidTest` on an arm64-v8a / armeabi-v7a device; the JVM
+tests use fakes.
 
 **JitPack** must build with the submodule checked out. `jitpack.yml` does this explicitly: it
 materializes the exact gitlink commit into a clean checkout (JitPack's cached submodule gitdirs are
@@ -249,7 +262,9 @@ Defaults: hot pink `#FF69B4` at 0.2, `TRIANGLES`.
   `drawEmbedded()` (or `drawEmbedded(frameTimeNanos)`) in `onDrawFrame`, `releaseGlResources()` on the
   GL thread when done. It never clears, blends premultiplied into the bound framebuffer/viewport and
   restores the GL state it touches; complement/outline styles use a private offscreen mask, so no
-  stencil or depth buffer is needed.
+  stencil or depth buffer is needed. On ES 3 it draws in its own VAO (host vertex state untouched);
+  on ES 2, re-specify any vertex-attribute pointer you keep on the glow's attribute location after the
+  call (GLES20 cannot read pointers back). After a context loss call `onGlContextLost()`.
 - **As a drop-in view** above the preview, `:overlay`'s `CoverageGlowView`:
 
 ~~~kotlin
@@ -257,8 +272,12 @@ val haze = CoverageGlowView(context)
 parent.addView(haze) // above the camera preview
 haze.renderer.setLens(lens)
 haze.trackAtDisplayRate { t, out -> attitude.attitudeExtrapolator.worldFromCameraAt(t, cameraFromDisplay, out) }
-haze.updateRegions(map) // per keyframe
+haze.updateRegions(map) // per keyframe; feeds the regions the current fillMode draws from
 ~~~
+
+  Change the style with `haze.setFillMode(mode, map)` (or set `renderer.fillMode` and call
+  `updateRegions` again): TRIANGLES takes `regionsNeedingUpdate()`, the COMPLEMENT / OUTLINE styles
+  `currentRegions()`.
 
 ### Pure projection
 
@@ -305,20 +324,22 @@ val tracking = PhotosphereTrackingSession(
     PhotosphereTrackingSession.Config(timestampSource = CameraTimestampSource.REALTIME),
     PhotosphereTrackingSession.Callbacks(
         onKeyframe = { keyframe -> mapLock.withLock { keyframeStore.record(keyframe, nowMs) } },
-        onMapFromFingerprintSolved = { persist(it) },
+        onMapFromFingerprintSolved = { persist(it) }, // hand it back via updatePrecisionLayer(…, mapFromFingerprint = it)
         onDiagnostic = { Log.d("SphereSLAM", it) },
     ),
 )
 tracking.displayPosePredictor = predictor
 tracking.updatePrecisionLayer(PhotosphereTrackingSession.ReferenceImage(luma, w, h))
 // per display-upright analysis frame:
+val cameraFromDisplay = DeviceCameraRotation.cameraFromDeviceForDisplayFrame(displayRotationDeg)
 val result = tracking.onFrame(
     PhotosphereTrackingSession.Frame(
         luma = packedLuma, intrinsics = frameIntrinsics, timestampNs = image.imageInfo.timestamp,
         attitude = attitude.latestSample(),
-        cameraFromDevice = DeviceCameraRotation.cameraFromDeviceForDisplayFrame(displayRotationDeg),
+        cameraFromDevice = cameraFromDisplay,
         headingDeg = attitude.latestHeadingDegrees(), elevationDeg = attitude.latestElevationDegrees(),
-        rollDeg = attitude.latestRollDegrees(), convertDurationNs = convertNs,
+        rollDeg = attitude.latestDeviceToWorldMatrix()?.let { CameraAttitudeProvider.cameraRollDegrees(it, cameraFromDisplay) },
+        convertDurationNs = convertNs,
     ),
 )
 result.pose?.let { draw(it.cameraFromMap, it.projection) }
@@ -335,7 +356,8 @@ result.pose?.let { draw(it.cameraFromMap, it.projection) }
   reference coordinates (no chained drift). A full KPM solve runs on flow loss or weakness, a gate
   rejection, and at least every 10 frames / 500 ms. Flow poses never grow the atlas.
 - **Focused pages** — with a multi-page atlas and a recent lock, the page under the gyro-predicted
-  optical axis is matched alone first, falling back to all pages on a miss.
+  optical axis is matched alone first. If it misses, that frame reports no match and the next full
+  solve searches all pages (a frame never pays for both).
 
 `TrackedPose.matchMethod` (`VisualMatchMethod.KPM_FULL`, `KPM_FOCUSED`, `FLOW`) says which path
 produced a pose. `KpmMatchSpeedConfig.FULL_KPM_EVERY_FRAME` restores a full-resolution all-pages
@@ -359,7 +381,20 @@ Behaviour to expect:
 - **`result.pose == null` until the first build lands** (and briefly after an intrinsics change);
   frames meanwhile carry the base pose (`FrameResult.baseCameraFromMap`) only.
 - **A too-weak reference fails on the frame after its build**, not the frame that requested it
-  (`ReferenceTooWeakException` → `TrackingState.FATAL`, `Callbacks.onFatalError`).
+  (`ReferenceTooWeakException` → `TrackingState.FATAL`, `Callbacks.onFatalError`, failure severity
+  `RECOVERABLE`). Only the precision layer stops: frames keep returning the base pose and keyframes,
+  `isRecoverable` is true, and the next `updatePrecisionLayer` with a different reference (or changed
+  pages, or `forceRebuild = true`) resumes with the base map intact.
+- **Every precision-layer rebuild starts unconfirmed.** A new or dropped reference, a different
+  `map_from_fingerprint`, a changed page set, `forceRebuild` or an intrinsics change resets the
+  tracking state to `INITIALIZING`; the next lock needs `confirmationFrames` accepted frames before a
+  pose is drawn or `map_from_fingerprint` is solved.
+- **`updatePrecisionLayer(reference)` with no map keeps the map the session already solved for that
+  same reference**; a host-supplied map overrides it, and a new reference re-solves on its first
+  confirmed lock.
+- **`atlasPages` is the complete page set.** Pass `tracking.atlasPages` (or equal copies) back to keep
+  the pages the session grew; any other set rebuilds the matcher from exactly those pages. Grown page
+  numbers are never reused.
 - **A growth attempt that throws is a diagnostic** (`atlas growth failed …`), not a fatal error.
 - `Frame.luma` is not retained after `onFrame` returns, so the host may reuse a pooled buffer.
 
@@ -370,10 +405,13 @@ Every `metricsIntervalMs` (5 s) `Callbacks.onDiagnostic` receives a KPM line —
 window, as `mean/max` milliseconds:
 
 ~~~text
-SphereSLAM standalone KPM page=0 inliers=87 error=3.1 ageMs=41.2 matchMs=18.4 method=FLOW timing{frames=150 matched=150 convertMs=1.2/2.9 setupMs=0.3/1.1 matchMs=11.7/38.0 keyframeMs=0.4/6.2 growthMs=0.1/0.4}
+SphereSLAM standalone KPM page=0 inliers=87 error=3.1 ageMs=41.2 matchMs=18.4 method=FLOW timing{frames=150 attempts=150 matched=141 convertMs=1.2/2.9 setupMs=0.3/1.1 matchMs=11.7/38.0 keyframeMs=0.4/6.2 growthMs=0.1/0.4}
 ~~~
 
-`convertMs` is whatever the host reports through `Frame(convertDurationNs = …)` (its Y-plane
+`attempts` frames ran the matcher and `matched` of them got a pose back (before gating). `error` is
+the mean squared reprojection error in **full-frame** pixels² for every match method (a downscaled
+KPM solve's error is multiplied by `factor²`), the unit `PoseAcceptanceConfig.maxReprojectionError`
+gates. `convertMs` is whatever the host reports through `Frame(convertDurationNs = …)` (its Y-plane
 pack/rotate); `setupMs` is matcher adoption plus the frame copy; `growthMs` is the analyzer-side
 cost of starting a growth attempt (the work itself runs on the worker).
 
@@ -496,7 +534,9 @@ fun analyze(image: ImageProxy) {
     val convertNs = SystemClock.elapsedRealtimeNanos() - t0
     val result = tracking.onFrame(PhotosphereTrackingSession.Frame(luma.bytes, frameIntrinsics,
         image.imageInfo.timestamp, attitude.latestSample(), cameraFromDisplay,
-        attitude.latestHeadingDegrees(), attitude.latestElevationDegrees(), attitude.latestRollDegrees(),
+        attitude.latestHeadingDegrees(), attitude.latestElevationDegrees(),
+        // Roll of the tracked (display-upright) image, not of the device's natural +x axis:
+        attitude.latestDeviceToWorldMatrix()?.let { CameraAttitudeProvider.cameraRollDegrees(it, cameraFromDisplay) },
         convertDurationNs = convertNs))
     image.close()
 }
@@ -555,14 +595,19 @@ Photosphere capture: `PhotosphereKeyframeStore`, `PhotosphereMap.directionOfPixe
 [docs/PUBLIC_API.md](docs/PUBLIC_API.md#device--camera-rotation).
 
 ~~~kotlin
+// Hold a vision pose through a short dropout with the gyro (:sphereslam only).
 val attitude = GameRotationAttitudeSource(context).apply { start() }
 val bridge = AttitudeRotationBridge(
     DeviceCameraRotation.cameraFromDevice(sensorOrientation, imageRotationAppliedDeg = rotationDegrees)
 )
-val loop = RobustTrackingLoop(bridgeRotatedPose = bridge.bridgeFunction { attitude.latestSample() })
-// after each accepted frame:
+// after each frame whose pose you drew from vision:
 bridge.markReference(attitude.latestSample())
+// on a frame with no vision pose: rotate the last drawn pose about its camera centre
+lastPose = bridge.advance(lastPose, attitude.latestSample()?.quaternion) ?: lastPose
 ~~~
+
+(`:reloc`'s `RobustTrackingLoop` accepts `bridge.bridgeFunction { attitude.latestSample() }` as its
+`bridgeRotatedPose` to do this inside its tracking-state machine.)
 
 ## Native availability
 
@@ -630,6 +675,15 @@ deprecated aliases.
 - Photosphere freshness/relock loop: built, experimental API
 - Depth-backed tile triangulation/corroboration: building blocks (not yet wired), experimental API
 - Full omnidirectional production map-growth pipeline: still evolving
+
+## License
+
+SphereSLAM is licensed under the [Apache License 2.0](LICENSE). Third-party components and their
+licenses (artoolkitX — LGPLv3 with a static-linking exception, statically linked into
+`libsphereslam.so`; the bundled MiDaS and SuperPoint model weights — MIT; OpenCV, LiteRT — Apache
+2.0; ONNX Runtime — MIT) are listed in [NOTICE](NOTICE), with their texts in
+[third_party_licenses/](third_party_licenses). Every published AAR carries LICENSE, NOTICE and those
+texts under `META-INF/sphereslam/<module>/`.
 
 Provenance: the planar engine originated in HereLiesAz/GraffitiXR and is maintained here as a
 standalone reusable library.
