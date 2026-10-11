@@ -809,7 +809,9 @@ class PhotosphereTrackingSession internal constructor(
      * Every [Config.metricsIntervalMs] (and on the first lock): the last accepted KPM match in the
      * window, or `no-lock`, followed by per-stage timing — `mean/max` ms of convert (host-reported via
      * [Frame.convertDurationNs]), setup (matcher (re)build + frame copy), match, keyframe (quality
-     * gate + callback) and inline atlas growth — over the frames since the previous line.
+     * gate + callback) and atlas growth (only the analyzer-side cost of starting an attempt: the frame
+     * copy and hand-off; the work itself runs on the background worker) — over the frames since the
+     * previous line.
      */
     private fun emitMetricsIfDue() {
         val now = nowMs()

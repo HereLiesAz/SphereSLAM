@@ -1,123 +1,8 @@
 # Changelog
 
-## Unreleased — audit fixes
+## Unreleased
 
-### Standalone frame rate: background atlas growth, pooled luma, depth session options
-
-Why standalone tracking felt low frame-rate (diagnosis): atlas growth ran on the analyzer thread
-(rectify + page quality gate + `kpmAddRefDataSet` feature extraction + `kpmSetRefDataSet` index
-rebuild, ~100–400 ms per attempt, every ≥ 3 s while locked); a page that failed the KPM feature floor
-closed the live matcher, so the *next* frame rebuilt KPM and re-added every page inline (a
-multi-second hitch); the native bridge held one global lock across every KPM call, so no matcher
-could be built while another matched; and every frame allocated a fresh ~300 KB rotated luma array
-through a per-pixel `ByteBuffer.get` loop.
-
-- **`:reloc` `PhotosphereTrackingSession`: matcher builds run off the analyzer thread.** The
-  initial build, rebuilds after a reference/intrinsics change and every atlas-growth attempt run on a
-  private single background thread (`AtlasMatcherWorker`, internal). Growth copies the frame, then on
-  the worker rectifies the page, gates it, **forks** the live matcher (native clone of its atlas) and
-  adds the page to the fork, while `onFrame` keeps matching on the live matcher; the grown matcher is
-  swapped in at the start of a later frame and the old one is closed on the worker. A rejected page
-  just drops the fork — the live matcher is never touched and nothing is rebuilt. Outcomes are
-  generation-checked, so a candidate built for a matcher that has since been dropped, rebuilt or
-  closed is discarded. All callbacks still fire on the `onFrame` thread.
-  - Behaviour change: until the first matcher build lands (and briefly after an intrinsics change),
-    frames return the base pose with no planar pose; a too-weak reference fails the session on the
-    frame after its build rather than the same frame. A growth attempt that throws is now a
-    diagnostic (`atlas growth failed`), not a fatal error.
-  - `Frame.luma` is not retained after `onFrame` returns, so hosts may reuse a pooled buffer.
-  - The KPM front end (`KpmPlanarFrontEnd`) forks with its speed config and page windows; the fork
-    starts with fresh flow/scheduling state, so the first frame after a swap is a full solve. Growth
-    is still never started from a flow-tracked pose.
-- **Native (`KpmBridge.cpp`) thread-safety.** Sessions are now addressed by never-reused ids mapped to
-  shared owners, each with its **own** lock (the registry lock is held only for lookup); destroy
-  unregisters and frees once in-flight calls return. One handle is still never used by two threads at
-  once; different sessions now run in parallel. New `KpmBridge.cloneSession` (calibration + deep copy
-  of the atlas; the source is locked only for the copy). The second-page crash fix (matcher rebuilt
-  before the grown atlas is loaded; see the KPM speed section) applies whenever a session was already
-  indexed, so it covers clones too; `nativeMatchPlanarEx` and its single-page matchers run under the
-  same per-session lock.
-- `SphereSlamStandaloneSession.fork()` (new, public): an independent session with every registered
-  page, safe to create on another thread while this one matches; null for a non-KPM engine.
-- **`LumaFrameTransform` speed and buffer reuse.** Rows are bulk-read and rotated in 16-row bands
-  (byte-identical output, pinned against the old scalar loop). New `LumaFrameBufferPool(slots = 2)`
-  (round-robin pooled output: a returned array is overwritten `slots` calls later, so keep at most
-  `slots − 1` frames or copy) and `packCropAndRotateInto` / `packAndRotateInto` (caller-owned
-  destination). The existing `packAndRotate` / `packCropAndRotate` still return a fresh array, so
-  callers that retain frames are unaffected.
-- **`:models` `DepthEstimator`.** New `estimateLuma(luma, width, height, rowStride, outMaxDim)`
-  feeds a grey plane straight into the model (bilinear resample, grey in all three channels) without
-  an ARGB `Bitmap` round trip, reusing its input buffers.
-- **`:models` `DepthEstimator` runs on the GPU (LiteRT).** Monocular depth moved from ONNX Runtime
-  (CPU) to **LiteRT 1.4.2** (`com.google.ai.edge.litert:litert`, `litert-gpu`, `litert-gpu-api`) with
-  the **GPU delegate** as the default: fp16 precision allowed, sustained-speed preference, compiled
-  programs serialized under `codeCacheDir/sphereslam-depth-gpu` (token = model name + size + CRC32).
-  Opening runs one warm-up inference; if the GPU delegate cannot be created, the device is on LiteRT's
-  GPU compatibility block list, or that first run fails, it falls back to LiteRT's XNNPACK CPU path
-  and logs an **error** (GPU is the expected path). `activeBackend` reports the backend truthfully.
-  - **Model:** `midas_v21_small_256_int8.onnx` (17.3 MB) is replaced by
-    `midas_v21_small_256_fp16.tflite` (33.2 MB) — the official isl-org/MiDaS `v2_1`
-    `model_opt.tflite` (MIT) with float16 weights (`models/tools/tflite_fp16_weights.py`); outputs
-    match the fp32 file within 0.15 % and track the PyTorch reference far better than the old ONNX
-    path did. `DepthEstimator.MODEL_ASSET` changed accordingly. Provenance, sha256 and the size change:
-    `docs/MODELS.md`.
-  - **Threading:** the estimator owns a single `SphereSLAM-depth` thread; the delegate is created,
-    run and closed there, and `load` / `loadFrom` / `estimate` / `estimateLuma` / `close` hand their
-    model work to it and block, so callers may use any (and changing) threads. `close()` ends the
-    thread; a later `load()` starts a new one.
-  - **Options (replacing this branch's unreleased ONNX ones):** `DepthEstimatorOptions(backend = GPU
-    | CPU, cpuThreads = 2, allowFp16Precision = true, gpuProgramCache = true)`; `activeBackend`
-    replaces `activeExecutionProvider`. The `intraOpThreads` / `XNNPACK` / `NNAPI` / `allowSpinning`
-    options never shipped in a release and are gone.
-  - Unchanged: constructors, `load`, `loadFrom` (now takes a `.tflite` path), `estimate`,
-    `estimateLuma`, `inputSize` (default 256), `MEAN`/`STD`, and `DepthMap` (MiDaS relative inverse
-    depth, row-major, at most `outMaxDim` on the long side). Custom models may be NHWC or NCHW.
-  - `:models` now ships consumer R8 rules (LiteRT reflection/JNI and ONNX Runtime's JNI exception
-    class), so apps need no keep rules of their own for it. Do not add LiteRT 2.x (`litert:2.*`) to an
-    app using `:models`: it drops the classic delegate API that `litert-gpu` 1.4.2 needs.
-  - SuperPoint and Zero-DCE stay on ONNX Runtime, unchanged.
-### Standalone tracking speed: downscaled KPM, flow tracking between solves, focused pages
-
-`PhotosphereTrackingSession` ran a full-resolution, all-pages native `kpmMatching` on every analyzer
-frame (est. 40–150+ ms at 640×480, growing with atlas pages), so the overlay pose only updated at
-that rate. New `Config.matchSpeed: KpmMatchSpeedConfig` (defaults on; additive API):
-
-- **Downscaled matching** (`matchDownscale = 2`, never below `minMatchShortSidePx = 240`): KPM runs
-  on a box-filtered luma with intrinsics scaled in the pixel-centre convention
-  (`fx' = fx/f`, `cx' = (cx + ½)/f − ½`). The calibrated pose is resolution-independent, so the returned
-  camera-from-wall transform has the same convention; the reprojection error stays in the pixels KPM
-  solved in (its own ≤ 10 px² gate and `PoseAcceptanceConfig` were tuned on that scale). artoolkitX's
-  own `kpmSetProcMode` is deliberately not used: in the pinned FREAK path the pose solve consumes
-  unscaled query coordinates against full-size calibration, giving wrong poses for any reduced mode.
-- **Frame-to-frame flow tracking** (`flowTracking`): the full solve's inlier correspondences (frame
-  pixel ↔ page millimetre) are tracked at full resolution with forward–backward-checked pyramidal
-  Lucas–Kanade and the pose is re-solved by iterative PnP against the page's own reference
-  coordinates (AR2-style; no chained drift), with one residual-outlier pass. A full KPM solve runs on
-  flow loss, too few inliers (`minFlowInliers`, `minFlowInlierFraction`), RMS error above
-  `maxFlowRmsErrorPx`, a pose-gate rejection, and at least every `fullSolveEveryFrames` (10) frames /
-  `fullSolveIntervalMs` (500 ms); a missed periodic solve may be covered by flow for at most
-  `maxFlowOnlyMs`. Requires OpenCV's native library (as `Relocalizer`); without it flow turns itself
-  off. Flow poses never grow the atlas.
-- **Focused page matching** (`focusedPageMatching`): with ≥ 2 pages and a lock within
-  `focusWindowMs`, the page under the gyro-predicted optical axis (hysteresis on the last locked page)
-  is matched alone first, falling back to all pages on a miss.
-- `TrackedPose.matchMethod` / `VisualMatchMethod` (`KPM_FULL`, `KPM_FOCUSED`, `FLOW`); the periodic KPM
-  diagnostic appends `method=`. `KpmMatchSpeedConfig.FULL_KPM_EVERY_FRAME` restores the old behaviour.
-- `:sphereslam`: `PlanarMatchRequest(pageNo, maxCorrespondences)`,
-  `SphereSlamEngine.match(luma, request)` (default ignores the request),
-  `SphereSlamStandaloneSession.match(luma, timestampNs, request)`,
-  `SphereSlamStandaloneSession.cameraFromCanonical(pageNo, cameraFromPage3x4)`,
-  `Pose.cameraFromPage3x4` / `Pose.correspondences`, `PlanarMatch.correspondences` (old constructor
-  kept).
-- Native (`KpmBridge.matchPlanarEx`): single-page matchers built lazily from the already-extracted
-  atlas features, inlier correspondence export, and the redundant per-page-slot ICP pose solves in
-  the FREAK path skipped (`kpmSetMatchingSkipPage` on every slot but the first — same pose, N−1 fewer
-  solves). C++ exceptions no longer cross JNI.
-- **Fix:** adding a second atlas page called `kpmSetRefDataSet` on a handle that already held pages;
-  the FREAK database re-adds image id 0 and throws `"ID already exists"`, aborting the process. The
-  matcher is now rebuilt from the retained calibration before loading the grown atlas.
-
-### Coverage glow: display-rate, full-rotation tracking and styles (additive)
+### Display-rate coverage glow, attitude extrapolation and pose prediction (additive)
 
 Why the glow felt loosely attached to the scene (diagnosis):
 
@@ -132,33 +17,32 @@ Why the glow felt loosely attached to the scene (diagnosis):
   `SENSOR_DELAY_UI` (~16 Hz, up to ~60 ms stale). At a 90°/s pan that is 10–20° of lag, and the glow
   froze whenever tracking dropped.
 - **Lens.** Only a centred principal point was supported (FOV in, no intrinsics).
-- Tile sampling was adequate (4×4 per tile; meridians project straight, parallels are curves), but
-  fixed per tile rather than per degree.
 
 Additions:
 
 - `CoverageGlowProjection.worldFromCamera(heading, elevation, roll)` (the `directionOfPixel` /
   `CameraAttitudeProvider` convention) and `worldFromCamera(deviceToWorld, cameraFromDevice)`:
-  row-major 3×3 whose columns are the GL camera axes in East-North-Up.
+  row-major 3×3 whose columns are the GL camera axes (x right, y up, z backward) in East-North-Up.
 - `CoverageGlowProjection.Lens` (`fromFieldOfView`, `fromIntrinsics` incl. off-centre principal
   point), `projectRegions(regions, worldFromCamera, lens, maxSegmentDeg = 5)`,
   `project(directions, worldFromCamera, lens)`, and `prepareRegions(...)` →
   `PreparedRegions.projectInto(worldFromCamera, lens, out)` (pre-sampled unit vectors, no trig or
   allocation per frame; tile edges cut into ≤ 5° segments; seam-exact across 0/360°).
-  The heading/elevation `projectRegions` is **deprecated** (unchanged behaviour).
-- `CoverageGlowRenderer`: display-rate re-projection on the GL thread — `setRegions`, `setLens`,
-  `rotationSource: RotationSource` (queried every draw with the frame time) or `setWorldFromCamera`;
+- `:overlay` `CoverageGlowRenderer`: display-rate re-projection on the GL thread — `setRegions`,
+  `setLens`, `rotationSource: RotationSource` (queried on every draw with the frame time, in the
+  `SystemClock.elapsedRealtimeNanos()` base) or the push alternative `setWorldFromCamera`;
   `drawEmbedded(frameTimeNanos)`. New styles `FillMode.OUTLINE` (soft edge glow on the needs-update
-  side of the current tiles) and `FillMode.COMPLEMENT_OUTLINED` (wash + edge), with `outlineAlpha`,
-  `outlineWidthPx`; `hazeColor` / `hazeAlpha` are now safe to change from any thread while drawing,
+  side of the current tiles) and `FillMode.COMPLEMENT_OUTLINED` (wash + edge), with `outlineAlpha` and
+  `outlineWidthPx`. `hazeColor` / `hazeAlpha` are now safe to change from any thread while drawing,
   plus `setHazeColorArgb`. Defaults unchanged (`TRIANGLES`, hot pink at 0.2).
-- `CoverageGlowView`: `updateRegions(map)`, `update(map, worldFromCamera, lens)`,
-  `trackAtDisplayRate(source)`; the heading/elevation `update` is deprecated.
+- `:overlay` `CoverageGlowView`: `updateRegions(map)`, `update(map, worldFromCamera, lens)`,
+  `trackAtDisplayRate(source)`.
 - `attitude.AttitudeExtrapolator`: timestamped attitude history — slerp inside it, constant-velocity
-  extrapolation (capped, default 50 ms) past it; `quaternionAt`, `deviceToWorldAt`,
-  `worldFromCameraAt`; thread-safe, allocation-free reads.
-- `CameraAttitudeProvider`: `start(samplingPeriodUs)` (default unchanged), `latestSample()`, and
-  `attitudeExtrapolator` fed by every sample.
+  extrapolation past it (capped, default 50 ms; no velocity across a > 100 ms sensor gap);
+  `quaternionAt`, `deviceToWorldAt`, `worldFromCameraAt`; thread-safe, allocation-free reads.
+- `CameraAttitudeProvider` (still `TYPE_ROTATION_VECTOR`, East-North-Up): `start(samplingPeriodUs)`
+  (default unchanged, `SENSOR_DELAY_UI`), `latestSample()` (defined at the poles, unlike heading),
+  and `attitudeExtrapolator`, fed by every sample.
 - `attitude.DisplayPosePredictor`: rotates the last vision pose by the attitude change since its
   frame (same math as the IMU bridge, camera centre held, no re-referencing) for per-draw pose
   prediction between vision updates; `predictInto(currentAttitude, out)` /
@@ -166,10 +50,146 @@ Additions:
 - `:reloc` `PhotosphereTrackingSession.displayPosePredictor`: when set, every rendered pose is
   published to it with its frame's attitude and `cameraFromDevice` (cleared when a frame yields no
   pose), so the GL thread can draw the artwork pose at display rate between analyzer updates.
-- `:reloc` `PhotosphereTrackingSession`: the periodic (`metricsIntervalMs`, 5 s) KPM diagnostic now
-  carries per-stage timing over the window — `timing{frames matched convertMs setupMs matchMs
-  keyframeMs growthMs}` as `mean/max` ms — and is also emitted without a lock (`KPM no-lock`).
-  `Frame(convertDurationNs = …)` lets the host report its Y-plane pack/rotate time.
+
+Deprecated (behaviour unchanged): the heading/elevation `CoverageGlowProjection.projectRegions` and
+`CoverageGlowView.update(map, heading, elevation, hFov, vFov)`.
+
+### Standalone tracking speed (`:reloc` `PhotosphereTrackingSession`)
+
+Why standalone tracking felt low frame-rate (diagnosis): a full-resolution, all-pages native
+`kpmMatching` ran on every analyzer frame (est. 40–150+ ms at 640×480, growing with atlas pages);
+atlas growth ran on the analyzer thread (rectify + page quality gate + `kpmAddRefDataSet` feature
+extraction + `kpmSetRefDataSet` index rebuild, ~100–400 ms per attempt, every ≥ 3 s while locked); a
+page that failed the KPM feature floor closed the live matcher, so the *next* frame rebuilt KPM and
+re-added every page inline (a multi-second hitch); the native bridge held one global lock across every
+KPM call; and every frame allocated a fresh ~300 KB rotated luma array through a per-pixel
+`ByteBuffer.get` loop.
+
+**Cheaper matching** — new `Config.matchSpeed: KpmMatchSpeedConfig` (on by default; additive API):
+
+- **Downscaled matching** (`matchDownscale = 2`, never below `minMatchShortSidePx = 240`): KPM runs
+  on a box-filtered luma with intrinsics scaled in the pixel-centre convention
+  (`fx' = fx/f`, `cx' = (cx + ½)/f − ½`). The calibrated pose is resolution-independent, so the
+  returned camera-from-wall transform has the same convention; the reprojection error stays in the
+  pixels KPM solved in (its own ≤ 10 px² gate and `PoseAcceptanceConfig` were tuned on that scale).
+  artoolkitX's own `kpmSetProcMode` is deliberately not used: in the pinned FREAK path the pose solve
+  consumes unscaled query coordinates against full-size calibration, giving wrong poses for any
+  reduced mode.
+- **Frame-to-frame flow tracking** (`flowTracking`): the full solve's inlier correspondences (frame
+  pixel ↔ page millimetre) are tracked at full resolution with forward–backward-checked pyramidal
+  Lucas–Kanade and the pose is re-solved by iterative PnP against the page's own reference
+  coordinates (AR2-style; no chained drift), with one residual-outlier pass. A full KPM solve runs on
+  flow loss, too few inliers (`minFlowInliers`, `minFlowInlierFraction`), RMS error above
+  `maxFlowRmsErrorPx`, a pose-gate rejection, and at least every `fullSolveEveryFrames` (10) frames /
+  `fullSolveIntervalMs` (500 ms); a missed periodic solve may be covered by flow for at most
+  `maxFlowOnlyMs` (1.5 s). Requires OpenCV's native library (`opencv_java5`, as `Relocalizer`);
+  without it flow turns itself off. Flow poses never grow the atlas.
+- **Focused page matching** (`focusedPageMatching`): with ≥ 2 pages and a lock within
+  `focusWindowMs`, the page under the gyro-predicted optical axis (hysteresis on the last locked page)
+  is matched alone first, falling back to all pages on a miss.
+- `TrackedPose.matchMethod` / `VisualMatchMethod` (`KPM_FULL`, `KPM_FOCUSED`, `FLOW`).
+  `KpmMatchSpeedConfig.FULL_KPM_EVERY_FRAME` restores the old every-frame full-resolution solve.
+
+**No matcher work on the analyzer thread** — the initial build, rebuilds after a
+reference/intrinsics change and every atlas-growth attempt run on a private single background thread
+(`AtlasMatcherWorker`, internal). Growth copies the frame, then on the worker rectifies the page,
+gates it, **forks** the live matcher (native clone of its atlas) and adds the page to the fork, while
+`onFrame` keeps matching on the live matcher; the grown matcher is swapped in at the start of a later
+frame and the old one is closed on the worker. A rejected page just drops the fork — the live matcher
+is never touched and nothing is rebuilt. Outcomes are generation-checked, so a candidate built for a
+matcher that has since been dropped, rebuilt or closed is discarded. All callbacks still fire on the
+`onFrame` thread. The fork starts with fresh flow/scheduling state, so the first frame after a swap
+is a full solve.
+
+Behaviour changes:
+
+- Until the first matcher build lands (and briefly after an intrinsics change), frames return the
+  base pose with `FrameResult.pose == null`.
+- A too-weak reference (`ReferenceTooWeakException`) fails the session on the frame *after* its build
+  completes rather than the same frame.
+- A growth attempt that throws is now a diagnostic (`atlas growth failed`), not a fatal error.
+- `Frame.luma` is not retained after `onFrame` returns, so hosts may reuse a pooled buffer.
+
+**Diagnostics** — the periodic (`metricsIntervalMs`, 5 s) KPM line now carries `method=` and
+per-stage timing over the window, `timing{frames matched convertMs setupMs matchMs keyframeMs
+growthMs}` as `mean/max` ms, and is also emitted without a lock (`KPM no-lock`).
+`Frame(convertDurationNs = …)` lets the host report its Y-plane pack/rotate time.
+
+**Supporting `:sphereslam` API** (all additive):
+
+- `PlanarMatchRequest(pageNo, maxCorrespondences)`, `SphereSlamEngine.match(luma, request)` (the
+  default ignores the request), `SphereSlamStandaloneSession.match(luma, timestampNs, request)`,
+  `SphereSlamStandaloneSession.cameraFromCanonical(pageNo, cameraFromPage3x4)`,
+  `Pose.cameraFromPage3x4` / `Pose.correspondences`, `PlanarMatch.correspondences` (old constructor
+  kept).
+- `SphereSlamStandaloneSession.fork()`: an independent session with every registered page, safe to
+  create on another thread while this one matches; null for a non-KPM engine.
+- `LumaFrameTransform`: rows are bulk-read and rotated in 16-row bands (byte-identical output, pinned
+  against the old scalar loop). New `LumaFrameBufferPool(slots = 2)` (round-robin pooled output: a
+  returned array is overwritten `slots` calls later, so keep at most `slots − 1` frames or copy) and
+  `packCropAndRotateInto` / `packAndRotateInto` (caller-owned destination). The existing
+  `packAndRotate` / `packCropAndRotate` still return a fresh array, so callers that retain frames are
+  unaffected.
+
+### Native (`KpmBridge`)
+
+- **Fix — crash when adding the second atlas page.** Growing the atlas called `kpmSetRefDataSet` on
+  a handle that already held pages; the FREAK database re-adds image id 0 and throws
+  `"ID already exists"`, aborting the process. The matcher is now rebuilt from the retained
+  calibration before the grown atlas is loaded. This applies whenever a session was already indexed,
+  so it covers clones too.
+- **Thread safety.** Sessions are addressed by never-reused ids mapped to shared owners, each with
+  its **own** lock (the registry lock is held only for lookup); destroy unregisters and frees once
+  in-flight calls return. One handle is still never used by two threads at once; different sessions
+  now run in parallel. New `cloneSession` (calibration + deep copy of the atlas; the source is locked
+  only for the copy).
+- `matchPlanarEx`: single-page matchers built lazily from the already-extracted atlas features,
+  inlier correspondence export, and the redundant per-page-slot ICP pose solves in the FREAK path
+  skipped (`kpmSetMatchingSkipPage` on every slot but the first — same pose, N−1 fewer solves). C++
+  exceptions no longer cross JNI.
+
+### `:models` depth
+
+- **`DepthEstimator` runs on the GPU (LiteRT).** Monocular depth moved from ONNX Runtime (CPU) to
+  **LiteRT 1.4.2** (`com.google.ai.edge.litert:litert`, `litert-gpu`, `litert-gpu-api`) with the
+  **GPU delegate** as the default: fp16 precision allowed, sustained-speed preference, compiled
+  programs serialized under `codeCacheDir/sphereslam-depth-gpu` (token = model name + size + CRC32).
+  Opening runs one warm-up inference; if the GPU delegate cannot be created, the device is on LiteRT's
+  GPU compatibility block list, or that first run fails, it falls back to LiteRT's XNNPACK CPU path
+  and logs an **error** (GPU is the expected path). `activeBackend` reports the backend truthfully.
+- **Model:** `midas_v21_small_256_int8.onnx` (17.3 MB) is replaced by
+  `midas_v21_small_256_fp16.tflite` (33.2 MB) — the official isl-org/MiDaS `v2_1` `model_opt.tflite`
+  (MIT) with float16 weights (`models/tools/tflite_fp16_weights.py`); outputs match the fp32 file
+  within 0.15 % and track the PyTorch reference far better than the old ONNX path did.
+  `DepthEstimator.MODEL_ASSET` changed accordingly. Provenance, sha256 and the size change:
+  [`docs/MODELS.md`](docs/MODELS.md).
+- **Threading:** the estimator owns a single `SphereSLAM-depth` thread; the delegate is created, run
+  and closed there, and `load` / `loadFrom` / `estimate` / `estimateLuma` / `close` hand their model
+  work to it and block, so callers may use any (and changing) threads. `close()` ends the thread; a
+  later `load()` starts a new one.
+- **Options:** `DepthEstimatorOptions(backend = GPU | CPU, cpuThreads = 2, allowFp16Precision = true,
+  gpuProgramCache = true)` as a new trailing constructor parameter (the 5-argument constructor is
+  kept). The ONNX execution-provider options that existed briefly on this branch
+  (`intraOpThreads`, `XNNPACK`, `NNAPI`, `allowSpinning`, `activeExecutionProvider`) never shipped
+  in a release and are gone.
+- New `estimateLuma(luma, width, height, rowStride, outMaxDim)` feeds a grey plane straight into the
+  model (bilinear resample, grey in all three channels) without an ARGB `Bitmap` round trip, reusing
+  its input buffers.
+- Unchanged: `load`, `loadFrom` (now takes a `.tflite` path), `estimate`, `inputSize` (default 256),
+  `MEAN`/`STD`, and `DepthMap` (MiDaS relative inverse depth, row-major, at most `outMaxDim` on the
+  long side). Custom models may be NHWC or NCHW.
+- `:models` now ships consumer R8 rules (LiteRT reflection/JNI and ONNX Runtime's JNI exception
+  class). Do not add LiteRT 2.x (`litert:2.*`) to an app using `:models`: it drops the classic
+  delegate API that `litert-gpu` 1.4.2 needs.
+- `SuperPointDetector` and `LowLightEnhancer` (Zero-DCE) stay on ONNX Runtime, unchanged.
+
+### Documentation
+
+- README and `docs/PUBLIC_API.md` rewritten for the full-rotation glow, attitude extrapolation,
+  display pose prediction, KPM speed levers, the background atlas worker and pooled luma; new
+  **App integration** walkthrough; build-from-source notes (artoolkitX submodule, pinned CMake,
+  JitPack). Stale heading/elevation-only glow examples removed; the ONNX-only depth notes are
+  replaced by a LiteRT GPU depth section (model details stay in `docs/MODELS.md`).
 
 ### App → library consolidation, part 2 (additive)
 
