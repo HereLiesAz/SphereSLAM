@@ -414,8 +414,8 @@ Behaviour to expect:
   earlier photospheres are kept: tiles looking the same way from two standpoints are triangulated
   into landmarks and a plane per tile, giving a full 6-DoF fix from anywhere and predicting how each
   tile looks as the device moves. A station keeps at most 64 tiles, oldest dropped first — except
-  its **anchor tiles**: the tile its first lock was made from and its immediate neighbours (within
-  18°) are never dropped, so the wall's surroundings stay recognisable however long the artist works
+  its **anchor tiles**: those within 24° of the direction its first lock was made from — the tiles
+  viewing the wall and the ring bordering them — are never dropped, so the wall's surroundings stay recognisable however long the artist works
   away from it, and the artwork is re-found as the wall swings back into view. Needs OpenCV (ORB); without it tile localization disables itself
   once. Turn off with `Config(tileLocalization = false)`; `Config(holdOffWall = false)` restores "no
   pose past the bridge".

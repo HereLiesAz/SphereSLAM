@@ -32,9 +32,9 @@ import kotlin.math.sqrt
  * within its extent) — and every feature with a
  * depth becomes a pseudo-landmark. Triangulated landmarks always win over pseudo ones.
  *
- * **Anchor tiles.** The tiles around the direction the wall was first locked from at a station
- * ([anchor]) — the lock tile and its ring of immediate neighbours, [Config.anchorRadiusDeg] — are never
- * dropped by [Config.maxTilesPerStation]. They are the first tiles a station captures, so plain
+ * **Anchor tiles.** Tiles within [Config.anchorRadiusDeg] of the direction the wall was first locked
+ * from at a station ([anchor]) — those viewing the wall and the ring bordering them — are never
+ * dropped by [Config.maxTilesPerStation]. They are among the first tiles a station captures, so plain
  * oldest-first eviction would discard exactly the ones that re-find the wall when it leaves view.
  *
  * **Conventions.** Rotations are row-major 3×3 world→camera in the OpenCV camera frame (x right,
@@ -55,7 +55,8 @@ internal class PhotosphereTileLocalizer(
      *   far from every tile of its station.
      * @property maxTilesPerStation cap per station (oldest beyond it are dropped, anchor tiles never).
      * @property anchorRadiusDeg tiles whose axis is within this of a station's [anchor] direction are
-     *   anchor tiles: 1.5 × [tileSpacingDeg] covers the lock tile and its immediate neighbours.
+     *   anchor tiles. 2 × [tileSpacingDeg]: the spacing gate leaves neighbouring tiles up to about that
+     *   far apart, so the ring bordering the wall-facing tile is inside it (a dozen or so tiles).
      * @property candidateConeDeg tiles whose axis is within this of the predicted camera axis are tried.
      * @property maxCandidates tiles tried per [localize] call, nearest axis first.
      * @property minRotationInliers / [rotationInlierDeg] the within-station rotation fix's RANSAC gate.
@@ -71,7 +72,7 @@ internal class PhotosphereTileLocalizer(
     data class Config(
         val tileSpacingDeg: Float = 12f,
         val maxTilesPerStation: Int = 64,
-        val anchorRadiusDeg: Float = 18f,
+        val anchorRadiusDeg: Float = 24f,
         val candidateConeDeg: Float = 40f,
         val maxCandidates: Int = 3,
         val minRotationInliers: Int = 20,
@@ -240,8 +241,14 @@ internal class PhotosphereTileLocalizer(
         station.tiles += tile
         while (station.tiles.size > config.maxTilesPerStation) {
             // Oldest first, anchor tiles never (they are bounded: a cone of anchorRadiusDeg at
-            // tileSpacingDeg spacing holds a handful).
-            val victim = station.tiles.indexOfFirst { !it.anchored }.takeIf { it >= 0 } ?: break
+            // tileSpacingDeg spacing holds a dozen or so).
+            val victim = station.tiles.indexOfFirst { !it.anchored }
+            if (victim < 0 || station.tiles[victim] === tile) {
+                // Only anchor tiles older than it: the new tile is the one that does not fit.
+                station.tiles.remove(tile)
+                tile.features.close()
+                return null
+            }
             station.tiles.removeAt(victim).features.close()
         }
         compareAcrossStations(tile)
