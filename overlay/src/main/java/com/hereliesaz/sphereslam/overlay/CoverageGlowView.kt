@@ -50,7 +50,8 @@ class CoverageGlowView @JvmOverloads constructor(
     /**
      * Feed [map]'s tiles to the renderer's live projection in the form its current
      * [CoverageGlowRenderer.fillMode] expects ([regionsFor]: the tiles needing an update for
-     * TRIANGLES, the current tiles for the COMPLEMENT / OUTLINE styles), and redraw. Call per keyframe
+     * TRIANGLES, the current tiles for the COMPLEMENT / OUTLINE styles) plus its scan progress
+     * ([PhotosphereMap.regionsInProgress]), and redraw. Call per keyframe
      * (whenever the map changes) and after changing the fill mode; the view re-projects every frame
      * from [trackAtDisplayRate]'s source, or from the last [update]`(map, worldFromCamera, lens)`
      * rotation. Nothing is drawn until the map is anchored, a lens is set
@@ -58,11 +59,17 @@ class CoverageGlowView @JvmOverloads constructor(
      */
     fun updateRegions(map: PhotosphereMap) {
         renderer.setRegions(regionsFor(map, renderer.fillMode))
+        renderer.setRegionProgress(map.regionsInProgress())
         requestRender()
     }
 
-    /** Set the renderer's [fillMode] and re-feed [map]'s regions in the form that mode needs. */
+    /**
+     * Set the renderer's [fillMode] and re-feed [map]'s regions in the form that mode needs. The
+     * regions go first: a frame drawn in between pairs the old mode with the new geometry, which
+     * (unlike the new mode with the old geometry) never inverts the glow.
+     */
     fun setFillMode(fillMode: CoverageGlowRenderer.FillMode, map: PhotosphereMap) {
+        renderer.setRegions(regionsFor(map, fillMode))
         renderer.fillMode = fillMode
         updateRegions(map)
     }
@@ -76,6 +83,7 @@ class CoverageGlowView @JvmOverloads constructor(
      */
     fun update(map: PhotosphereMap, worldFromCamera: FloatArray, lens: CoverageGlowProjection.Lens) {
         renderer.setRegions(regionsFor(map, renderer.fillMode))
+        renderer.setRegionProgress(map.regionsInProgress())
         renderer.setLens(lens)
         renderer.setWorldFromCamera(worldFromCamera)
         requestRender()

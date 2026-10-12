@@ -18,8 +18,9 @@ package com.hereliesaz.sphereslam
  * **Scale-free.** Coverage is purely angular, identical whether the surface is a 3 m wall or a 30 cm
  * canvas; only the angles swept through matter, never the distance.
  *
- * **Backward-compatible.** With [elevationBandCount] 1 the elevation dimension collapses to a single
- * band spanning the whole elevation arc, and the accumulator behaves as a plain azimuth ring:
+ * **Azimuth-only mode.** The default is 6 bands over the full ±90°. With [elevationBandCount] 1 the
+ * elevation dimension collapses to a single band spanning the whole elevation arc, and the
+ * accumulator behaves as a plain azimuth ring:
  * [observe] with only a heading lands at the horizon band. Pass `elevationBandCount > 1` for the 2-D
  * coverage a directional glow consumes via [thinDirections].
  *

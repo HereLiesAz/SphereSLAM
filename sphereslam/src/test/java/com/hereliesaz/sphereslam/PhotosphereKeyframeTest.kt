@@ -130,6 +130,21 @@ class PhotosphereKeyframeTest {
     }
 
     @Test
+    fun `a keyframe whose axis is outside an anchored lattice changes nothing`() {
+        // A front-only lattice: 12 sectors over ±90°, 3 bands over ±60°, anchored at 0°.
+        val map = PhotosphereMap(
+            sectorCount = 12, viewableHalfAngleDeg = 90f,
+            elevationBandCount = 3, viewableElevationHalfAngleDeg = 60f,
+        )
+        map.setWallHeading(0f)
+        val before = map.currentTiles()
+        // Aimed at 100° (outside the arc), a portrait frame still reaches the arc's edge.
+        assertNull(PhotosphereKeyframeStore(map).record(portraitKeyframe(100f, 0f), nowMs = 1L))
+        assertEquals(before, map.currentTiles())
+        assertTrue(map.regionsInProgress().isEmpty())
+    }
+
+    @Test
     fun `an out-of-band keyframe never anchors the wall heading`() {
         // A deliberately front-only lattice (±60° elevation).
         val map = PhotosphereMap(sectorCount = 12, viewableHalfAngleDeg = 90f, elevationBandCount = 3, viewableElevationHalfAngleDeg = 60f)
@@ -247,5 +262,25 @@ class PhotosphereKeyframeTest {
         val lens = CoverageGlowProjection.Lens.fromIntrinsics(500f, 500f, 320f, 240f, 640, 480)
         assertTrue(TileId(14, 3) in map.tilesCovered(7.5f, 15f, 0f, lens))
         assertFalse(TileId(14, 3) in map.tilesCovered(7.5f, 15f, 90f, lens))
+        // The scan path (recordView) honours it too.
+        val upright = PhotosphereMap().apply { setWallHeading(0f) }
+        upright.recordView(7.5f, 15f, 0f, lens)
+        val rolled = PhotosphereMap().apply { setWallHeading(0f) }
+        rolled.recordView(7.5f, 15f, 90f, lens)
+        val u = upright.scanProgress(TileId(14, 3))
+        val r = rolled.scanProgress(TileId(14, 3))
+        assertTrue("upright $u rolled $r", u > 0.6f && r < 0.35f)
+    }
+
+    @Test
+    fun `scan progress is area-weighted`() {
+        val map = PhotosphereMap()
+        map.setWallHeading(0f)
+        // Aimed 20° up at sector 12 (0°–15°), the landscape frame's top edge sits near 45.6°: it holds
+        // the lower ~half of band 4 (30°–60°) by elevation, but more of its area — a cos(elevation)
+        // sphere has more of it low down: (sin 45.6° − sin 30°) / (sin 60° − sin 30°) ≈ 0.59, not 0.52.
+        val lens = CoverageGlowProjection.Lens.fromIntrinsics(500f, 500f, 320f, 240f, 640, 480)
+        map.recordView(7.5f, 20f, 0f, lens)
+        assertEquals(0.59f, map.scanProgress(TileId(12, 4)), 0.025f)
     }
 }

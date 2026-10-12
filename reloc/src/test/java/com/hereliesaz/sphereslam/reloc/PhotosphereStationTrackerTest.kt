@@ -120,6 +120,21 @@ class PhotosphereStationTrackerTest {
     }
 
     @Test
+    fun `the first lock anchors the tiles around it`() {
+        val t = tracker()
+        val r0 = yaw(0.0)
+        t.onLock(PhotosphereStationTracker.viewOf(r0, DoubleArray(3)), r0, 0)
+        for ((i, deg) in listOf(0.0, 20.0, 40.0).withIndex()) {
+            val r = yaw(deg)
+            t.onKeyframe(r, frameFor(r), intrinsics, 10L + i)
+        }
+        assertTrue(t.summary(), t.summary().contains("tiles=3 anchored=2 "))
+        // A later lock far from every tile: a moved anchor would leave none anchored.
+        t.onLock(PhotosphereStationTracker.viewOf(yaw(100.0), DoubleArray(3)), yaw(100.0), 100)
+        assertTrue(t.summary(), t.summary().contains("tiles=3 anchored=2 "))
+    }
+
+    @Test
     fun `a fix measured before a newer lock is dropped`() {
         val t = tracker()
         val r0 = yaw(0.0)

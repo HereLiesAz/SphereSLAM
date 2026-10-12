@@ -199,6 +199,81 @@ class KpmPlanarFrontEndTest {
         assertEquals(before + 2, b.calls.size)
     }
 
+    /**
+     * A page (1 m wide) seen from [tiltDeg] off its normal, as the session predicts it: the
+     * front end, its page centre (mm) and the predicted canonical view.
+     */
+    private fun obliqueScene(tiltDeg: Double): Triple<KpmPlanarFrontEnd, DoubleArray, Pair<DoubleArray, DoubleArray>> {
+        val fe = frontEnd()
+        val canonicalFromPage = RigidMath.identity().also { it[12] = 0.4f }
+        val g = fe.addPage(ByteBuffer.allocateDirect(4), 800, 600, 1f, false, 0, canonicalFromPage).geometry
+        val centre = doubleArrayOf(g.centerXmm.toDouble(), g.centerYmm.toDouble(), 0.0)
+        return Triple(fe, centre, ObliqueGeometry.pose(tiltDeg, centre, 1_500.0))
+    }
+
+    private fun canonicalView(pose: Pair<DoubleArray, DoubleArray>, centre: DoubleArray) =
+        SphereSlamPoseMath.pageViewToCanonicalView(
+            SphereSlamPoseMath.pageToOpenGlViewMeters(ObliqueGeometry.pose3x4(pose.first, pose.second), centre[0].toFloat(), centre[1].toFloat()),
+            RigidMath.identity().also { it[12] = 0.4f },
+        )
+
+    @Test
+    fun `an oblique predicted view is matched rectified and solved in the real frame`() {
+        val (fe, centre, truth) = obliqueScene(70.0)
+        val mk = backend!!.intrinsics
+        val km = floatArrayOf(mk.fx, mk.fy, mk.cx, mk.cy)
+        val plan = ObliqueRectifier.plan(truth.first, truth.second, km, 30f, centre)!!
+        val virtualFromReal = ObliqueRectifier.invert3(plan.realFromVirtual)!!
+        // KPM's answer on the virtual frontal image: page points at their virtual pixels.
+        val corr = ArrayList<Float>()
+        for (gx in -8..8) for (gy in -8..8) {
+            val px = centre[0] + gx * 30.0
+            val py = centre[1] + gy * 30.0
+            val real = ObliqueGeometry.project(km, truth.first, truth.second, px, py)
+            if (real[0] < 0 || real[0] >= mk.width || real[1] < 0 || real[1] >= mk.height) continue
+            val w = virtualFromReal[6] * real[0] + virtualFromReal[7] * real[1] + virtualFromReal[8]
+            corr += ((virtualFromReal[0] * real[0] + virtualFromReal[1] * real[1] + virtualFromReal[2]) / w).toFloat()
+            corr += ((virtualFromReal[3] * real[0] + virtualFromReal[4] * real[1] + virtualFromReal[5]) / w).toFloat()
+            corr += px.toFloat()
+            corr += py.toFloat()
+        }
+        assertTrue("visible ${corr.size / 4}", corr.size / 4 >= 20)
+        // An all-pages request answers with the page it found.
+        backend!!.answer = { KpmMatcherBackend.Solve(0, view, 0.5f, corr.size / 4, FloatArray(12), corr.toFloatArray()) }
+        val r = fe.match(input(0, canonicalView(truth, centre)))!!
+        assertEquals(VisualMatchMethod.KPM_RECTIFIED, r.method)
+        val call = backend!!.calls.single()
+        assertEquals(mk.width * mk.height, call.lumaBytes)
+        assertTrue(call.maxCorrespondences >= KpmMatchSpeedConfig().maxCorrespondences)
+        assertTrue(r.reprojectionError < 0.01f)
+        // Flow is seeded in full-frame pixels of the real (not the virtual) image.
+        val seeded = flow.seeded!!
+        val expected = ObliqueGeometry.project(
+            floatArrayOf(k.fx, k.fy, k.cx, k.cy), truth.first, truth.second, seeded[2].toDouble(), seeded[3].toDouble(),
+        )
+        assertEquals(expected[0], seeded[0].toDouble(), 0.1)
+        assertEquals(expected[1], seeded[1].toDouble(), 0.1)
+    }
+
+    @Test
+    fun `a frontal predicted view, or rectification off, matches the frame directly`() {
+        val (fe, centre, frontal) = obliqueScene(10.0)
+        assertEquals(VisualMatchMethod.KPM_FULL, fe.match(input(0, canonicalView(frontal, centre)))!!.method)
+
+        val off = frontEnd(KpmMatchSpeedConfig(obliqueRectificationDeg = 0f))
+        off.addPage(ByteBuffer.allocateDirect(4), 800, 600, 1f, false, 0, RigidMath.identity().also { it[12] = 0.4f })
+        val oblique = ObliqueGeometry.pose(70.0, centre, 1_500.0)
+        assertEquals(VisualMatchMethod.KPM_FULL, off.match(input(0, canonicalView(oblique, centre)))!!.method)
+    }
+
+    @Test
+    fun `a failed rectified solve returns no pose`() {
+        val (fe, centre, truth) = obliqueScene(70.0)
+        backend!!.answer = { null }
+        assertNull(fe.match(input(0, canonicalView(truth, centre))))
+        assertEquals(1, backend!!.calls.size)
+    }
+
     @Test
     fun `close releases the backend`() {
         val fe = frontEnd()

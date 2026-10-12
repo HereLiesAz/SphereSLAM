@@ -236,7 +236,8 @@ glow.setRegionProgress(map.regionsInProgress()) // tiles being scanned, filling 
   actually on screen if it visibly leads the camera image during fast pans; the extrapolator
   interpolates inside its history and extrapolates at most 50 ms past the newest sample.
 - `setRegions` pre-samples the tiles once (tile edges cut into ≤ 5° segments, seam-exact across
-  0/360°); each draw is then a few hundred 3×3 multiplies with no allocation. When no
+  0/360°); each draw is then one 3×3 multiply per sample (about 70 per 15° × 30° tile at the default 5°
+  segments, ~10 000 with the whole sphere hazed), with no allocation. When no
   `rotationSource` is set, push a rotation with `setWorldFromCamera(worldFromCamera)`.
 - Use the **same sensor** (`TYPE_ROTATION_VECTOR`, East-North-Up) that stamps keyframe headings, so
   tiles and glow share one world frame. `CameraAttitudeProvider` deliberately stays on the
@@ -370,8 +371,15 @@ result.pose?.let { draw(it.cameraFromMap, it.projection) }
 - **Focused pages** — with a multi-page atlas and a recent lock, the page under the gyro-predicted
   optical axis is matched alone first. If it misses, that frame reports no match and the next full
   solve searches all pages (a frame never pays for both).
+- **Oblique rectification** — KPM's features do not survive strong foreshortening, so a wall seen
+  from the side never matched. When the predicted view is at least `obliqueRectificationDeg` (30°)
+  off the wall's normal, the full solve warps the frame to a virtual camera facing the wall square-on
+  (same intrinsics, same distance, aimed where the real optical axis meets it), matches that, maps
+  the correspondences back to real pixels and solves the real pose from them by RANSAC PnP. The
+  result is exact however rough the prediction: the prediction only chooses the warp. Needs a
+  predicted pose (gyro bridge or last lock); 0 disables.
 
-`TrackedPose.matchMethod` (`VisualMatchMethod.KPM_FULL`, `KPM_FOCUSED`, `FLOW`) says which path
+`TrackedPose.matchMethod` (`VisualMatchMethod.KPM_FULL`, `KPM_FOCUSED`, `FLOW`, `KPM_RECTIFIED`) says which path
 produced a pose. `KpmMatchSpeedConfig.FULL_KPM_EVERY_FRAME` restores a full-resolution all-pages
 solve on every frame.
 
@@ -413,7 +421,10 @@ Behaviour to expect:
   metric reference, reference widths otherwise) from every station a new station opens and the
   earlier photospheres are kept: tiles looking the same way from two standpoints are triangulated
   into landmarks and a plane per tile, giving a full 6-DoF fix from anywhere and predicting how each
-  tile looks as the device moves. Needs OpenCV (ORB); without it tile localization disables itself
+  tile looks as the device moves. A station keeps at most 64 tiles, oldest dropped first — except
+  its **anchor tiles**: those within 24° of the direction its first lock was made from — the tiles
+  viewing the wall and the ring bordering them — are never dropped, so the wall's surroundings stay recognisable however long the artist works
+  away from it, and the artwork is re-found as the wall swings back into view. Needs OpenCV (ORB); without it tile localization disables itself
   once. Turn off with `Config(tileLocalization = false)`; `Config(holdOffWall = false)` restores "no
   pose past the bridge".
 - **Monocular depth for tiles.** Pass a `TileDepthSource` (MiDaS through `:models`) so tiles get 3D
@@ -443,10 +454,10 @@ Every `metricsIntervalMs` (5 s) `Callbacks.onDiagnostic` receives a KPM line —
 window, as `mean/max` milliseconds:
 
 ~~~text
-SphereSLAM standalone KPM page=0 inliers=87 error=3.1 ageMs=41.2 matchMs=18.4 method=FLOW timing{frames=150 attempts=150 matched=141 convertMs=1.2/2.9 setupMs=0.3/1.1 matchMs=11.7/38.0 keyframeMs=0.4/6.2 growthMs=0.1/0.4} tiles{stations=2 active=1 tiles=23 landmarks=412 depthPoints=3180 rotFixes=17 poseFixes=4}
+SphereSLAM standalone KPM page=0 inliers=87 error=3.1 ageMs=41.2 matchMs=18.4 method=FLOW timing{frames=150 attempts=150 matched=141 convertMs=1.2/2.9 setupMs=0.3/1.1 matchMs=11.7/38.0 keyframeMs=0.4/6.2 growthMs=0.1/0.4} tiles{stations=2 active=1 tiles=23 anchored=5 landmarks=412 depthPoints=3180 rotFixes=17 poseFixes=4}
 ~~~
 
-`tiles{…}` (with tile localization): stations opened, the active one, tiles, triangulated landmarks,
+`tiles{…}` (with tile localization): stations opened, the active one, tiles, anchor tiles, triangulated landmarks,
 monocular-depth points, and rotation / 6-DoF tile fixes adopted in the window.
 
 `attempts` frames ran the matcher and `matched` of them got a pose back (before gating). `error` is

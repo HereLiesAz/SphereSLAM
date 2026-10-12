@@ -32,6 +32,11 @@ import kotlin.math.sqrt
  * within its extent) — and every feature with a
  * depth becomes a pseudo-landmark. Triangulated landmarks always win over pseudo ones.
  *
+ * **Anchor tiles.** Tiles within [Config.anchorRadiusDeg] of the direction the wall was first locked
+ * from at a station ([anchor]) — those viewing the wall and the ring bordering them — are never
+ * dropped by [Config.maxTilesPerStation]. They are among the first tiles a station captures, so plain
+ * oldest-first eviction would discard exactly the ones that re-find the wall when it leaves view.
+ *
  * **Conventions.** Rotations are row-major 3×3 world→camera in the OpenCV camera frame (x right,
  * y down, z forward); centres are world-frame; intrinsics are `fx, fy, cx, cy` of the image the
  * features came from.
@@ -48,7 +53,10 @@ internal class PhotosphereTileLocalizer(
     /**
      * @property tileSpacingDeg a new keyframe becomes a tile only when its view axis is at least this
      *   far from every tile of its station.
-     * @property maxTilesPerStation cap per station (oldest beyond it are dropped).
+     * @property maxTilesPerStation cap per station (oldest beyond it are dropped, anchor tiles never).
+     * @property anchorRadiusDeg tiles whose axis is within this of a station's [anchor] direction are
+     *   anchor tiles. 2 × [tileSpacingDeg]: the spacing gate leaves neighbouring tiles up to about that
+     *   far apart, so the ring bordering the wall-facing tile is inside it (a dozen or so tiles).
      * @property candidateConeDeg tiles whose axis is within this of the predicted camera axis are tried.
      * @property maxCandidates tiles tried per [localize] call, nearest axis first.
      * @property minRotationInliers / [rotationInlierDeg] the within-station rotation fix's RANSAC gate.
@@ -64,6 +72,7 @@ internal class PhotosphereTileLocalizer(
     data class Config(
         val tileSpacingDeg: Float = 12f,
         val maxTilesPerStation: Int = 64,
+        val anchorRadiusDeg: Float = 24f,
         val candidateConeDeg: Float = 40f,
         val maxCandidates: Int = 3,
         val minRotationInliers: Int = 20,
@@ -83,6 +92,11 @@ internal class PhotosphereTileLocalizer(
         val centre: DoubleArray = centre.copyOf()
         internal val tiles = ArrayList<Tile>()
         val tileCount: Int get() = tiles.size
+
+        /** The camera axis (world) the wall was first locked from here, or null ([anchor]). */
+        internal var anchorAxis: DoubleArray? = null
+
+        val anchorTileCount: Int get() = tiles.count { it.anchored }
     }
 
     /** One keyframe of a station: its pose, its features and what other stations taught us about it. */
@@ -103,6 +117,10 @@ internal class PhotosphereTileLocalizer(
 
         /** The camera's forward axis in world (third row of [rotation]). */
         internal val axis: DoubleArray = doubleArrayOf(rotation[6], rotation[7], rotation[8])
+
+        /** Near its station's anchor direction: never evicted. */
+        var anchored: Boolean = false
+            internal set
 
         /** Feature index → world landmark, from cross-station triangulation. */
         internal val landmarks = HashMap<Int, DoubleArray>()
@@ -176,6 +194,22 @@ internal class PhotosphereTileLocalizer(
     fun nearestStation(centre: DoubleArray): Pair<Station, Double>? =
         stationList.map { it to distance(it.centre, centre) }.minByOrNull { it.second }
 
+    /**
+     * The wall was locked at [station] with camera [rotation]: on the station's first lock, its tiles
+     * near that view direction (and those captured near it later) become anchor tiles. Later locks
+     * keep the first direction, so the anchored set stays bounded.
+     */
+    fun anchor(station: Station, rotation: DoubleArray) {
+        require(rotation.size == 9)
+        if (station.anchorAxis != null) return
+        val axis = doubleArrayOf(rotation[6], rotation[7], rotation[8])
+        station.anchorAxis = axis
+        station.tiles.forEach { it.anchored = nearAnchor(station, it.axis) }
+    }
+
+    private fun nearAnchor(station: Station, axis: DoubleArray): Boolean =
+        station.anchorAxis?.let { angleDeg(it, axis) <= config.anchorRadiusDeg } ?: false
+
     /** Whether a keyframe with [rotation] would become a tile of [station] (the spacing gate). */
     fun wouldAccept(station: Station, rotation: DoubleArray): Boolean {
         val axis = doubleArrayOf(rotation[6], rotation[7], rotation[8])
@@ -203,8 +237,20 @@ internal class PhotosphereTileLocalizer(
         if (!wouldAccept(station, rotation)) return null
         val features = backend.extract(luma, width, height) ?: return null
         val tile = Tile(nextTileId++, station, rotation, centre, intrinsics, width, height, features, depth)
+        tile.anchored = nearAnchor(station, tile.axis)
         station.tiles += tile
-        while (station.tiles.size > config.maxTilesPerStation) station.tiles.removeAt(0).features.close()
+        while (station.tiles.size > config.maxTilesPerStation) {
+            // Oldest first, anchor tiles never (they are bounded: a cone of anchorRadiusDeg at
+            // tileSpacingDeg spacing holds a dozen or so).
+            val victim = station.tiles.indexOfFirst { !it.anchored }
+            if (victim < 0 || station.tiles[victim] === tile) {
+                // Only anchor tiles older than it: the new tile is the one that does not fit.
+                station.tiles.remove(tile)
+                tile.features.close()
+                return null
+            }
+            station.tiles.removeAt(victim).features.close()
+        }
         compareAcrossStations(tile)
         calibrateDepths(onlyUncalibrated = true)
         return tile

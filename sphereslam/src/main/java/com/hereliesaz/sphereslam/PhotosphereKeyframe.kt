@@ -118,6 +118,9 @@ class PhotosphereKeyframeStore(
      *   is left unchanged (in particular, the wall heading is not anchored).
      */
     fun record(keyframe: PhotosphereKeyframe, nowMs: Long): Recorded? {
+        // An anchored map can tell up front whether the axis is addressable; check before recordView
+        // touches anything (an unanchored map is anchored by recordView itself).
+        if (map.hasWallHeading() && map.tileAt(keyframe.headingDeg, keyframe.elevationDeg) == null) return null
         val k = keyframe.intrinsics
         val lens = CoverageGlowProjection.Lens.fromIntrinsics(k[0], k[1], k[2], k[3], keyframe.width, keyframe.height)
         // recordView anchors the map on the first addressable view; an unaddressable one (outside the

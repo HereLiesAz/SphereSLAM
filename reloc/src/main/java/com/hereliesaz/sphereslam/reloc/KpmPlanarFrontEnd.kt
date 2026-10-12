@@ -38,6 +38,12 @@ internal class KpmPlanarFrontEnd(
 
     private val scheduler = KpmMatchScheduler(config)
     private val pages = linkedMapOf<Int, KpmPagePriority.PageWindow>()
+
+    // Each page's placement, for re-expressing a predicted canonical pose in page millimetres.
+    private class PageFrame(val canonicalFromPage: FloatArray, val centerXmm: Float, val centerYmm: Float)
+    private val pageFrames = HashMap<Int, PageFrame>()
+    private val matchK = floatArrayOf(matchIntrinsics.fx, matchIntrinsics.fy, matchIntrinsics.cx, matchIntrinsics.cy)
+    private var rectifiedBuffer: ByteBuffer? = null
     private var flow: FlowTracker? = null
     private var flowUnavailable = !config.flowTracking
     private var lastLockedPage: Int? = null
@@ -62,6 +68,7 @@ internal class KpmPlanarFrontEnd(
         pages[pageNo] = KpmPagePriority.PageWindow(
             pageNo, canonicalFromPage[12], canonicalFromPage[13], r.geometry.widthMeters, r.geometry.heightMeters,
         )
+        pageFrames[pageNo] = PageFrame(canonicalFromPage.copyOf(), r.geometry.centerXmm, r.geometry.centerYmm)
         return r
     }
 
@@ -96,7 +103,10 @@ internal class KpmPlanarFrontEnd(
      */
     override fun fork(): PlanarFrontEnd? {
         val forked = backend.fork() ?: return null
-        return KpmPlanarFrontEnd(intrinsics, config, flowFactory, backendFactory, forked).also { it.pages.putAll(pages) }
+        return KpmPlanarFrontEnd(intrinsics, config, flowFactory, backendFactory, forked).also {
+            it.pages.putAll(pages)
+            it.pageFrames.putAll(pageFrames)
+        }
     }
 
     override fun onVerdict(accepted: Boolean) {
@@ -121,6 +131,10 @@ internal class KpmPlanarFrontEnd(
         }
         val wantCorrespondences = !flowUnavailable && lumaBytes != null && config.maxCorrespondences > 0
         val maxCorr = if (wantCorrespondences) config.maxCorrespondences else 0
+
+        rectificationPlan(predicted)?.let { plan ->
+            return rectifiedSolve(plan, matchLuma, lumaBytes, timestampNs, nowMs, predicted!!, wantCorrespondences)
+        }
 
         val msSinceLock = if (lastLockMs == Long.MIN_VALUE || nowMs == Long.MIN_VALUE) null else nowMs - lastLockMs
         val focus = if (focusMissPending) {
@@ -167,6 +181,71 @@ internal class KpmPlanarFrontEnd(
         )
     }
 
+    /** The rectification for this frame's predicted pose, or null when it is frontal enough (or unknown). */
+    private fun rectificationPlan(predicted: FloatArray?): ObliqueRectifier.Plan? {
+        if (predicted == null || config.obliqueRectificationDeg <= 0f) return null
+        val pageNo = lastLockedPage?.takeIf { it in pageFrames } ?: pageFrames.keys.firstOrNull() ?: return null
+        val frame = pageFrames.getValue(pageNo)
+        val (r, t) = ObliqueRectifier.pagePose(predicted, frame.canonicalFromPage, frame.centerXmm, frame.centerYmm)
+            ?: return null
+        val pageCentre = doubleArrayOf(frame.centerXmm.toDouble(), frame.centerYmm.toDouble(), 0.0)
+        return ObliqueRectifier.plan(r, t, matchK, config.obliqueRectificationDeg, pageCentre)
+    }
+
+    /**
+     * The full solve of an oblique frame: KPM on its virtual frontal view, the real pose solved from
+     * the correspondences mapped back. Same bookkeeping (scheduler, focus, flow seeding) as a direct
+     * solve; its correspondences are always requested (the pose is solved from them).
+     */
+    private fun rectifiedSolve(
+        plan: ObliqueRectifier.Plan,
+        matchLuma: ByteBuffer,
+        lumaBytes: ByteArray?,
+        timestampNs: Long,
+        nowMs: Long,
+        predicted: FloatArray,
+        wantCorrespondences: Boolean,
+    ): PlanarMatchResult? {
+        val w = matchIntrinsics.width
+        val h = matchIntrinsics.height
+        val src = if (small == null && lumaBytes != null) lumaBytes else ByteArray(w * h).also { matchLuma.duplicate().get(it) }
+        val buffer = rectifiedBuffer ?: ByteBuffer.allocateDirect(w * h).also { rectifiedBuffer = it }
+        ObliqueRectifier.warp(src, w, h, plan, buffer)
+        val pageRequest = lastLockedPage?.takeIf { it in pageFrames } ?: PlanarMatchRequest.ALL_PAGES
+        val raw = backend.match(buffer.duplicate(), timestampNs, pageRequest, maxOf(config.maxCorrespondences, MIN_RECTIFIED_CORRESPONDENCES))
+        val solved = raw?.let { m ->
+            val frame = pageFrames[m.pageNo] ?: return@let null
+            val (pr, pt) = ObliqueRectifier.pagePose(predicted, frame.canonicalFromPage, frame.centerXmm, frame.centerYmm)
+                ?: return@let null
+            ObliqueRectifier.solve(plan, m.correspondences, matchK, pr, ObliqueRectifier.centreOf(pr, pt))
+                ?.let { s -> backend.cameraFromCanonical(m.pageNo, s.cameraFromPage3x4)?.let { view -> Triple(m.pageNo, s, view) } }
+        }
+        if (solved == null) {
+            if (nowMs != Long.MIN_VALUE) scheduler.onFullSolve(nowMs, success = false, seeded = false)
+            if (!scheduler.isArmed) flow?.reset()
+            return null
+        }
+        val (pageNo, s, view) = solved
+        var seeded = false
+        if (wantCorrespondences && lumaBytes != null) {
+            val corr = KpmMatchScale.correspondencesToFramePixels(s.correspondences, factor)
+            seeded = withFlow { it.seed(lumaBytes, pageNo, corr, s.cameraFromPage3x4) } == true
+        }
+        if (nowMs != Long.MIN_VALUE) {
+            scheduler.onFullSolve(nowMs, success = true, seeded = seeded)
+            lastLockMs = nowMs
+        }
+        lastLockedPage = pageNo
+        return PlanarMatchResult(
+            pageNo = pageNo,
+            cameraFromCanonical = view,
+            // Solved in the real matcher image's pixels, the scale KPM's own errors are reported in.
+            reprojectionError = s.meanSquaredErrorPx,
+            inlierCount = s.inliers,
+            method = VisualMatchMethod.KPM_RECTIFIED,
+        )
+    }
+
     private fun trackFlow(input: PlanarFrameInput): PlanarMatchResult? {
         val tracked = withFlow { it.track(input.lumaBytes) } ?: return null
         val page = flow?.trackedPage ?: return null
@@ -192,6 +271,11 @@ internal class KpmPlanarFrontEnd(
             scheduler.disarm()
             null
         }
+    }
+
+    private companion object {
+        /** Correspondences requested from a rectified solve (its pose is solved from them). */
+        const val MIN_RECTIFIED_CORRESPONDENCES = 120
     }
 
     override fun close() {

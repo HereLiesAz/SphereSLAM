@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **Extreme perspectives.** KPM is not affine-invariant: past ~45° off the wall's normal the page
+  stopped matching, where ARCore's tracking kept the artwork warped onto the wall. When the
+  predicted view is at least `KpmMatchSpeedConfig.obliqueRectificationDeg` (default 30°, 0 disables)
+  oblique, the full solve now matches a virtual frontal re-rendering of the frame (`ObliqueRectifier`:
+  plane homography from the predicted pose) and solves the real pose from the correspondences mapped
+  back — exact regardless of prediction error. Such poses report `VisualMatchMethod.KPM_RECTIFIED`
+  and seed flow tracking as usual.
+- **Fixes from an audit of the full-sphere / scan-progress release.**
+  - `CoverageGlowRenderer`: in `OUTLINE`, scan progress now draws before any tile is current (it
+    returned early with no boundary to glow along — exactly the first sweep).
+  - `PhotosphereMap.tilesInView` also takes tiles whose centre lies in the camera's frustum, so tiles
+    near the zenith/nadir — far apart in heading, close on screen — are matcher candidates.
+  - `PhotosphereKeyframeStore.record` returns null before touching an anchored map when the axis is
+    outside the lattice (it had already recorded the view).
+  - `CoverageGlowView.updateRegions` / `update` feed scan progress; `setFillMode` swaps the regions
+    before the mode.
+  - Tests now pin `recordView`'s roll and `cos(elevation)` area weighting (both survived removal).
+- **Anchor tiles.** A station's tile cap (64) dropped the oldest tile first, and the oldest are the
+  ones around the wall, captured at the first lock, so a long session forgot exactly the tiles that
+  re-find the wall. A station's first lock now anchors its view direction: tiles within
+  `PhotosphereTileLocalizer.Config.anchorRadiusDeg` of it (24° = 2 × tile spacing: those viewing the
+  wall and the ring bordering them), including those captured later, are never evicted. The periodic diagnostic gains
+  `tiles{… anchored=N …}`.
 - **The photosphere is a sphere.** `SphereCoverage` / `PhotosphereMap` defaulted to a front region —
   12 sectors over ±85° and one band (±60° when banded) — so the ceiling, the floor and everything
   behind the start lay outside the lattice: never scannable, glowing for good, and "100 %" meant a
