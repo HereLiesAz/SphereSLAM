@@ -1,0 +1,60 @@
+name: Test app
+
+# Builds the on-device test bench (docs/TESTAPP.md) and uploads the debug APK as a run artifact.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          # Full history and tags: the APK reports `git describe` as the tested build.
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # The native build requires CMake 4.4.4 exactly (same bootstrap as ci.yml and jitpack.yml).
+      - name: Install CMake 4.4.4
+        run: |
+          curl --fail --location --retry 3 --output /tmp/cmake.tar.gz https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-linux-x86_64.tar.gz
+          echo "e5bb807f7728cb60cd8b27ebc97a2edb469b68655f21e844a600c3575b76f5bb  /tmp/cmake.tar.gz" | sha256sum --check -
+          tar -xzf /tmp/cmake.tar.gz -C /tmp
+          printf 'sdk.dir=%s\ncmake.dir=/tmp/cmake-4.4.4-linux-x86_64\n' "$ANDROID_HOME" > local.properties
+
+      - name: Build the test app
+        run: ./gradlew :testapp:assembleDebug --stacktrace
+
+      - name: Name the APK after the tested build
+        id: apk
+        run: |
+          build="$(git describe --tags --always --dirty | tr -c 'A-Za-z0-9._-\n' '_')"
+          mv testapp/build/outputs/apk/debug/testapp-debug.apk "sphereslam-testapp-$build.apk"
+          echo "name=sphereslam-testapp-$build" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apk.outputs.name }}
+          path: ${{ steps.apk.outputs.name }}.apk
+          if-no-files-found: error
+          retention-days: 30

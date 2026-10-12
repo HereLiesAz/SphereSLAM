@@ -6,6 +6,13 @@ checkout and is never published.
 
 ## Build and install
 
+The **Test app** workflow (`.github/workflows/testapp.yml`) builds it on every push and pull request
+to `main`, and on demand (Actions ▸ Test app ▸ Run workflow). The APK is the run's artifact,
+`sphereslam-testapp-<build>`, kept 30 days. Each run signs with a fresh debug key, so uninstall the
+previous build before installing a new one.
+
+Locally:
+
 ~~~bash
 ./gradlew :testapp:installDebug
 ~~~
