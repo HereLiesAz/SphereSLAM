@@ -175,6 +175,32 @@ class SphereSlamStandaloneSession internal constructor(
     }
 
     /**
+     * Adds a preview of registered page [pageNo]: [luma] ([width] × [height]) is the page's reference
+     * image seen through a warp, and [pageFromView] (row-major 3×3) maps a preview pixel back to the
+     * page's reference pixel. KPM learns the preview's features as image [imageNo] (≥ 1) of the page,
+     * at the page's own millimetres, so matching a frame that looks like the preview solves the page's
+     * pose. [reindex] false defers the matcher's re-indexing to the next view that asks, so a batch
+     * indexes once; don't match in between. Returns the features added, or < 0 when the engine cannot
+     * or KPM refused (−8: the session holds KPM's limit of 1024 reference images).
+     */
+    fun addReferenceView(
+        luma: ByteBuffer,
+        width: Int,
+        height: Int,
+        pageNo: Int,
+        imageNo: Int,
+        pageFromView: FloatArray,
+        maxFeatures: Int = 1000,
+        reindex: Boolean = true,
+    ): Int {
+        requireOpen()
+        val reference = requireNotNull(references[pageNo]) { "page $pageNo is not registered" }
+        val g = reference.geometry
+        val heightPx = Math.round(g.heightMeters * 1000f / 25.4f * g.referenceDpi)
+        return engine.addPageView(luma, width, height, PlanarPageView(pageNo, imageNo, maxFeatures, pageFromView, heightPx, g.referenceDpi, reindex))
+    }
+
+    /**
      * Match one tightly packed direct luma frame.
      *
      * @return a canonical camera pose for this exact frame, or null when no registered page matched.

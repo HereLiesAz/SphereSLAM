@@ -96,6 +96,37 @@ object KpmBridge {
     }
 
     /**
+     * Adds a preview of an existing page: [luma] is page [pageNo]'s reference image seen through a
+     * warp (a perspective tilt, a size, a rotation). Its features join the page as image [imageNo],
+     * each mapped back through [pageFromView] (row-major 3×3, preview pixel → page reference pixel) to
+     * the page's own millimetres ([pageDpi], [pageHeight] px), so a match on the preview solves the
+     * page's pose. [reindex] false defers rebuilding the matcher's index to the next call that asks
+     * for it, so a batch of previews indexes once; nothing may match the session in between. Returns
+     * the features added, or < 0 (−8: the session is at KPM's limit of 1024 reference images).
+     */
+    fun addPlanarPageView(
+        session: Long,
+        luma: ByteBuffer,
+        width: Int,
+        height: Int,
+        pageNo: Int,
+        imageNo: Int,
+        maxFeatures: Int,
+        pageFromView: FloatArray,
+        pageHeight: Int,
+        pageDpi: Float,
+        reindex: Boolean = true,
+    ): Int {
+        require(session != 0L)
+        require(luma.isDirect)
+        require(width > 0 && height > 0)
+        require(pageNo >= 0 && imageNo >= 0 && maxFeatures > 0)
+        require(pageFromView.size == 9 && pageFromView.all { it.isFinite() })
+        require(pageHeight > 0 && pageDpi > 0f)
+        return nativeAddPlanarPageView(session, luma, width, height, pageNo, imageNo, maxFeatures, pageFromView, pageHeight, pageDpi, reindex)
+    }
+
+    /**
      * Matches one tightly packed direct luma frame.
      *
      * On success returns pageNo and writes 14 floats to out:
@@ -164,6 +195,20 @@ object KpmBridge {
         cx: Float,
         cy: Float,
     ): Long
+    private external fun nativeAddPlanarPageView(
+        session: Long,
+        luma: ByteBuffer,
+        width: Int,
+        height: Int,
+        pageNo: Int,
+        imageNo: Int,
+        maxFeatures: Int,
+        pageFromView: FloatArray,
+        pageHeight: Int,
+        pageDpi: Float,
+        reindex: Boolean,
+    ): Int
+
     private external fun nativeAddPlanarPage(
         session: Long,
         luma: ByteBuffer,

@@ -41,6 +41,32 @@ data class PlanarPage(
 }
 
 /**
+ * A preview of a registered page: the page's reference image seen through a warp (a perspective
+ * tilt, a size, a rotation), added to KPM as another image of the page. Its features keep the page's
+ * own millimetres: each is mapped back through [pageFromView] (row-major 3×3, preview pixel → page
+ * reference pixel) and converted with the page's [referenceDpi] and [pageHeightPixels], so a match on
+ * the preview solves the page's pose.
+ */
+class PlanarPageView(
+    val pageNo: Int,
+    val imageNo: Int,
+    val maxFeatures: Int,
+    pageFromView: FloatArray,
+    val pageHeightPixels: Int,
+    val referenceDpi: Float,
+    /** False defers the matcher's re-indexing to the next view or page that asks (a batch indexes once). */
+    val reindex: Boolean = true,
+) {
+    val pageFromView: FloatArray = pageFromView.copyOf()
+
+    init {
+        require(pageNo >= 0 && imageNo > 0 && maxFeatures > 0)
+        require(this.pageFromView.size == 9 && this.pageFromView.all { it.isFinite() })
+        require(pageHeightPixels > 0 && referenceDpi.isFinite() && referenceDpi > 0f)
+    }
+}
+
+/**
  * Result of calibrated planar KPM tracking.
  *
  * [cameraFromPage3x4] is artoolkitX's **row-major camera-from-page** 3x4 transform. Translation is in
@@ -140,6 +166,14 @@ interface SphereSlamEngine : AutoCloseable {
     val isReady: Boolean
 
     fun addPage(luma: ByteBuffer, width: Int, height: Int, page: PlanarPage): Int
+
+    /**
+     * Adds [view] (a preview of a registered page) as another image of that page. Returns the
+     * features added, or < 0 when the engine cannot (the default) or KPM refused it (at its limit of
+     * 1024 reference images per session, −8).
+     */
+    fun addPageView(luma: ByteBuffer, width: Int, height: Int, view: PlanarPageView): Int = -1
+
     fun match(luma: ByteBuffer): PlanarMatch?
 
     /** [match] with a [PlanarMatchRequest]; the default ignores the request and matches all pages. */

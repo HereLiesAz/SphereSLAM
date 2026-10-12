@@ -191,8 +191,8 @@ Every `Config.metricsIntervalMs` (5 s) `Callbacks.onDiagnostic` receives the las
 `timing{frames attempts matched convertMs setupMs matchMs keyframeMs growthMs}` (`attempts` frames
 ran the matcher, `matched` got a pose back; `mean/max` ms over the
 window; `convertMs` comes from `Frame.convertDurationNs`, `growthMs` is only the analyzer-side cost of
-starting a growth attempt), then `tiles{…}` and `rect{planned swept kpm solved frontal maxObliq}`
-when they apply (README: Diagnostics). The line is a diagnostic, not a stable format.
+starting a growth attempt), then `tiles{…}`, `rect{planned swept kpm solved frontal maxObliq}` and
+`previews{images features builtMs ready tried solved}` when they apply (README: Diagnostics). The line is a diagnostic, not a stable format.
 
 #### `:models`
 

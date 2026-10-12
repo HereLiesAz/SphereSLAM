@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Previews.** Each reference (and, with `previewAtlasPages`, each grown page) is rendered tilted in
+  perspective, resized and turned, with OpenCV, and each preview joins KPM as another image of its
+  page with its features' millimetres mapped back through the warp
+  (`KpmBridge.addPlanarPageView`, `SphereSlamEngine.addPageView`). They live in a second KPM session
+  built off the camera thread and searched on every other full solve once direct solves have missed
+  twice running, so a lost camera relocks from a steep, near, far or turned view with no prediction.
+  `KpmMatchSpeedConfig.previewSearchAfterMisses` (0 builds none), `previewTiltsDeg`, `previewScales`,
+  `previewRotationStepDeg`, `previewMaxFeatures`, `previewAtlasPages`; `VisualMatchMethod.KPM_PREVIEW`.
+  The periodic diagnostic gains `previews{images features builtMs ready tried solved}`. The test app's
+  tuning panel gains a Previews group.
 - **Steep relocks.** A lost camera's predicted pose is the photosphere's placement: right in rotation,
   but where the lock was in position. The oblique solve (`ObliqueRectifier.solve`) now also starts
   from the plane homography of the matches themselves and keeps the fit that explains more of them,

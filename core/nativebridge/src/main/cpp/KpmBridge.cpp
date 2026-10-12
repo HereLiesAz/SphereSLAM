@@ -15,6 +15,7 @@
 #include <jni.h>
 #include <android/log.h>
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -374,6 +375,53 @@ int matchWithHandle(
     }
 }
 
+
+// Merges `page` into the atlas (consuming it) and, with `reindex`, re-indexes the matcher on the whole
+// atlas. Without it the matcher keeps its old index until the next re-indexing merge: a batch of
+// previews merges unindexed and indexes once, with its last image; nothing matches in between.
+// Returns 0, or -4 (merge failed) / -6 (matcher rebuild failed).
+int mergeAndIndex(KpmSession *session, KpmRefDataSet **page, const char *who, bool reindex = true) {
+    const int mergeResult = kpmMergeRefDataSet(&session->atlas, page); // consumes `page`
+    if (*page) kpmDeleteRefDataSet(page);
+    if (mergeResult < 0 || !session->atlas) {
+        LOGE("%s: kpmMergeRefDataSet failed (%d)", who, mergeResult);
+        return -4;
+    }
+    if (!reindex) return 0;
+    if (session->indexed) {
+        // kpmSetRefDataSet appends every atlas page to the handle's FREAK database under ids
+        // 0..n-1; on a handle that already holds pages that re-adds id 0 and the database throws
+        // "ID already exists". Rebuild the matcher so the full atlas loads into an empty database.
+        kpmDeleteHandle(&session->handle);
+        session->indexed = false;
+        session->handle = kpmCreateHandle(session->cameraParams);
+        if (!session->handle) {
+            LOGE("%s: KPM handle re-creation failed", who);
+            return -6;
+        }
+    }
+    const int setResult = kpmSetRefDataSet(session->handle, session->atlas);
+    if (setResult < 0) {
+        LOGE("%s: kpmSetRefDataSet failed (%d)", who, setResult);
+        return -6;
+    }
+    session->indexed = true;
+    refreshSkipPages(session);
+    return 0;
+}
+
+// KPM's FREAK database holds at most DB_IMAGE_MAX (1024) reference images across all pages; previews
+// stop short of it.
+constexpr int kMaxAtlasImages = DB_IMAGE_MAX - 8;
+
+// Reference images in the atlas, all pages.
+int atlasImageCount(const KpmRefDataSet *atlas) {
+    if (!atlas || !atlas->pageInfo) return 0;
+    int n = 0;
+    for (int i = 0; i < atlas->pageNum; ++i) n += atlas->pageInfo[i].imageNum;
+    return n;
+}
+
 } // namespace
 #endif
 
@@ -542,32 +590,8 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeAddPlanarPage(
             kpmDeleteRefDataSet(&page);
             return -5;
         }
-        const int mergeResult = kpmMergeRefDataSet(&session->atlas, &page); // consumes `page`
-        if (page) kpmDeleteRefDataSet(&page);
-        if (mergeResult < 0 || !session->atlas) {
-            LOGE("nativeAddPlanarPage: kpmMergeRefDataSet failed (%d)", mergeResult);
-            return -4;
-        }
-
-        if (session->indexed) {
-            // kpmSetRefDataSet appends every atlas page to the handle's FREAK database under ids
-            // 0..n-1; on a handle that already holds pages that re-adds id 0 and the database throws
-            // "ID already exists". Rebuild the matcher so the full atlas loads into an empty database.
-            kpmDeleteHandle(&session->handle);
-            session->indexed = false;
-            session->handle = kpmCreateHandle(session->cameraParams);
-            if (!session->handle) {
-                LOGE("nativeAddPlanarPage: KPM handle re-creation failed");
-                return -6;
-            }
-        }
-        const int setResult = kpmSetRefDataSet(session->handle, session->atlas);
-        if (setResult < 0) {
-            LOGE("nativeAddPlanarPage: kpmSetRefDataSet failed (%d)", setResult);
-            return -6;
-        }
-        session->indexed = true;
-        refreshSkipPages(session.get());
+        const int indexResult = mergeAndIndex(session.get(), &page, "nativeAddPlanarPage");
+        if (indexResult < 0) return indexResult;
 
         LOGI(
             "nativeAddPlanarPage: page=%d image=%d features=%d atlasFeatures=%d",
@@ -593,6 +617,98 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeAddPlanarPage(
     (void) pageNo;
     (void) imageNo;
     (void) maxFeatures;
+    return -1;
+#endif
+}
+
+// A preview of an existing page: `luma` is the page's reference image seen through a warp (a
+// perspective tilt, a size, a rotation). Its features are generated from the preview and added as
+// another image (`imageNo`) of page `pageNo`, but each one's page position (millimetres, what the pose
+// is solved from) is mapped back through `pageFromView` (row-major 3x3: preview pixel -> page
+// reference pixel) and converted with the page's own `pageDpi` and `pageHeight`. A match on the
+// preview therefore solves the real page's pose. `reindex` false defers the matcher's re-indexing to
+// the next call that asks for it (see mergeAndIndex). Returns the features added, or < 0 (-8: the
+// atlas is at KPM's image limit).
+JNIEXPORT jint JNICALL
+Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeAddPlanarPageView(
+        JNIEnv *env,
+        jobject,
+        jlong sessionValue,
+        jobject lumaBuffer,
+        jint width,
+        jint height,
+        jint pageNo,
+        jint imageNo,
+        jint maxFeatures,
+        jfloatArray pageFromView,
+        jint pageHeight,
+        jfloat pageDpi,
+        jboolean reindex) {
+#ifdef HAVE_ARX_KPM
+    std::shared_ptr<KpmSession> session = findSession(sessionValue);
+    if (!session) return -1;
+    std::lock_guard<std::mutex> workLock(session->work);
+    if (!session->handle || !session->cameraParams) return -1;
+    if (width <= 0 || height <= 0 || pageNo < 0 || imageNo < 0 || maxFeatures <= 0 ||
+        pageHeight <= 0 || pageDpi <= 0.0f || !pageFromView || env->GetArrayLength(pageFromView) != 9) {
+        return -2;
+    }
+    if (atlasImageCount(session->atlas) >= kMaxAtlasImages) return -8;
+    float h[9];
+    env->GetFloatArrayRegion(pageFromView, 0, 9, h);
+    const jlong requiredBytes = static_cast<jlong>(width) * static_cast<jlong>(height);
+    ARUint8 *luma = nullptr;
+    if (!directBuffer(env, lumaBuffer, requiredBytes, &luma)) return -3;
+
+    KpmRefDataSet *view = nullptr;
+    try {
+        // The dpi here only sets the millimetres KPM assigns, which are replaced below.
+        const int genResult = kpmGenRefDataSet(
+            luma, static_cast<int>(width), static_cast<int>(height), pageDpi, KpmProcFullSize, KpmCompNull,
+            static_cast<int>(maxFeatures), static_cast<int>(pageNo), static_cast<int>(imageNo), &view);
+        if (genResult < 0 || !view) {
+            if (view) kpmDeleteRefDataSet(&view);
+            return -4;
+        }
+        const int generated = capFeatures(view, static_cast<int>(maxFeatures));
+        if (generated <= 0) {
+            kpmDeleteRefDataSet(&view);
+            return -5;
+        }
+        // Each feature's page position: its preview pixel through the warp back to the page image, then
+        // to millimetres exactly as kpmGenRefDataSet does for the page itself (KpmProcFullSize).
+        const float mmPerPx = 25.4f / pageDpi;
+        int kept = 0;
+        for (int i = 0; i < view->num; ++i) {
+            KpmRefData &p = view->refPoint[i];
+            const float x = p.coord2D.x, y = p.coord2D.y;
+            const float w = h[6] * x + h[7] * y + h[8];
+            if (!(w > 1e-9f)) continue;
+            const float px = (h[0] * x + h[1] * y + h[2]) / w;
+            const float py = (h[3] * x + h[4] * y + h[5]) / w;
+            if (!std::isfinite(px) || !std::isfinite(py)) continue;
+            p.coord3D.x = (px + 0.5f) * mmPerPx;
+            p.coord3D.y = ((static_cast<float>(pageHeight) - 0.5f) - py) * mmPerPx;
+            view->refPoint[kept++] = p;
+        }
+        view->num = kept;
+        if (kept <= 0) {
+            kpmDeleteRefDataSet(&view);
+            return -5;
+        }
+        const int indexResult = mergeAndIndex(session.get(), &view, "nativeAddPlanarPageView", reindex == JNI_TRUE);
+        if (indexResult < 0) return indexResult;
+        LOGI("nativeAddPlanarPageView: page=%d image=%d features=%d atlasImages=%d",
+             pageNo, imageNo, kept, atlasImageCount(session->atlas));
+        return kept;
+    } catch (...) {
+        if (view) kpmDeleteRefDataSet(&view);
+        LOGE("nativeAddPlanarPageView: KPM threw");
+        return -7;
+    }
+#else
+    (void) env; (void) sessionValue; (void) lumaBuffer; (void) width; (void) height; (void) pageNo;
+    (void) imageNo; (void) maxFeatures; (void) pageFromView; (void) pageHeight; (void) pageDpi; (void) reindex;
     return -1;
 #endif
 }

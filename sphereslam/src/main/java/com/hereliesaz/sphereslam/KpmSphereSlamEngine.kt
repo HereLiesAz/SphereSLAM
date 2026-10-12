@@ -46,6 +46,11 @@ internal class KpmSphereSlamEngine private constructor(
         return result
     }
 
+    override fun addPageView(luma: ByteBuffer, width: Int, height: Int, view: PlanarPageView): Int {
+        val active = requireOpen()
+        return api.addPageView(active, packedView(luma, width, height), width, height, view)
+    }
+
     override fun match(luma: ByteBuffer): PlanarMatch? {
         val active = requireOpen()
         val packed = packedView(luma, frameWidth, frameHeight)

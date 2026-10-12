@@ -42,6 +42,8 @@ class KpmPlanarFrontEndTest {
             return PhotosphereTrackingSession.RegisteredPage(pageNo, 100, SphereSlamPoseMath.pageGeometry(width, height, dpi), physicallyMetric)
         }
 
+        override fun addView(luma: ByteBuffer, width: Int, height: Int, pageNo: Int, imageNo: Int, pageFromView: FloatArray, maxFeatures: Int, reindex: Boolean): Int = 50
+
         override fun match(luma: ByteBuffer, timestampNs: Long, pageNo: Int, maxCorrespondences: Int): KpmMatcherBackend.Solve? {
             calls += Call(pageNo, maxCorrespondences, luma.remaining())
             lastLuma = ByteArray(luma.remaining()).also { luma.duplicate().get(it) }
@@ -97,7 +99,8 @@ class KpmPlanarFrontEndTest {
     private fun frontEnd(
         config: KpmMatchSpeedConfig = KpmMatchSpeedConfig(),
         flowFactory: (CameraIntrinsics, KpmMatchSpeedConfig) -> FlowTracker = { _, _ -> flowCreations++; flow },
-    ) = KpmPlanarFrontEnd(k, config, flowFactory, { mk -> FakeBackend(mk).also { backend = it } })
+        previews: ((CameraIntrinsics) -> PreviewMatcher?) = { null },
+    ) = KpmPlanarFrontEnd(k, config, flowFactory, { mk -> FakeBackend(mk).also { backend = it } }, previewsFactory = previews)
 
     private fun input(nowMs: Long, predicted: FloatArray? = null) =
         PlanarFrameInput(frameBuffer.duplicate(), frameBytes, nowMs * 1_000_000L, nowMs, predicted)
@@ -329,6 +332,41 @@ class KpmPlanarFrontEndTest {
         backend!!.answer = { null }
         repeat(8) { fe.match(input(it * 10L)) }
         assertNull(fe.diagnosticsAndReset())
+    }
+
+    @Test
+    fun `once lost every other full solve searches the previews and a hit relocks there`() {
+        val pb = FakeBackend(k).apply { answer = { null } }
+        val matcher = PreviewMatcher(pb, KpmMatchSpeedConfig(), java.util.concurrent.Executor { it.run() }, useOpenCv = false)
+        val fe = frontEnd(KpmMatchSpeedConfig(flowTracking = false, obliqueSearchAfterMisses = 0), previews = { matcher })
+        fe.addPage(ByteBuffer.allocateDirect(400 * 300), 400, 300, 1f, false, 0, RigidMath.identity())
+        assertTrue(matcher.isReady)
+        val live = backend!!
+        live.answer = { null }
+        // Two direct misses, then previews and direct take turns.
+        assertNull(fe.match(input(0))); assertNull(fe.match(input(10)))
+        assertEquals(0, pb.calls.size)
+        assertNull(fe.match(input(20)))
+        assertEquals(1, pb.calls.size)
+        assertNull(fe.match(input(30)))
+        assertEquals(1, pb.calls.size)
+        assertEquals(4, live.calls.size + pb.calls.size)
+        pb.answer = { solve(0) }
+        val r = fe.match(input(40))!!
+        assertEquals(VisualMatchMethod.KPM_PREVIEW, r.method)
+        assertTrue(fe.diagnosticsAndReset()!!.contains("previews{images=27 features=") )
+        // A hit ends the search: back to direct solves.
+        val before = pb.calls.size
+        fe.match(input(50))
+        assertEquals(before, pb.calls.size)
+    }
+
+    @Test
+    fun `previews off builds none`() {
+        var asked = false
+        val fe = frontEnd(KpmMatchSpeedConfig(previewSearchAfterMisses = 0), previews = { asked = true; null })
+        fe.addPage(ByteBuffer.allocateDirect(4), 2, 2, 1f, false, 0, RigidMath.identity())
+        assertTrue(!asked)
     }
 
     @Test

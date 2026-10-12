@@ -17,6 +17,15 @@ internal interface KpmApi {
     ): Int
     fun match(session: Long, luma: ByteBuffer, out: FloatArray): Int
 
+    /** [KpmBridge.addPlanarPageView]; the default does not support previews. */
+    fun addPageView(
+        session: Long,
+        luma: ByteBuffer,
+        width: Int,
+        height: Int,
+        view: PlanarPageView,
+    ): Int = -1
+
     /**
      * [KpmBridge.matchPlanarEx]: optional single-page restriction ([pageNo] >= 0) and inlier
      * correspondences. The default ignores both (all pages, zero correspondences in out[14]).
@@ -69,6 +78,12 @@ internal object NativeKpmApi : KpmApi {
 
     override fun match(session: Long, luma: ByteBuffer, out: FloatArray): Int =
         KpmBridge.matchPlanar(session, luma, out)
+
+    override fun addPageView(session: Long, luma: ByteBuffer, width: Int, height: Int, view: PlanarPageView): Int =
+        KpmBridge.addPlanarPageView(
+            session, luma, width, height, view.pageNo, view.imageNo, view.maxFeatures,
+            view.pageFromView, view.pageHeightPixels, view.referenceDpi, view.reindex,
+        )
 
     override fun matchEx(
         session: Long,

@@ -389,6 +389,16 @@ result.pose?.let { draw(it.cameraFromMap, it.projection) }
   the guess. 0 disables. The virtual view is rendered from the full-resolution frame (2 × 2
   sub-samples per pixel), not its downscaled copy, so the foreshortened side of the wall keeps the
   detail the frame has.
+- **Previews** — the reference rendered as the camera may see it, so a lost camera relocks without a
+  prediction of where it is: tilted in perspective (30°, 45°, 60°, 70° each way about both axes;
+  `previewTiltsDeg`), at `previewScales` (½, ¼: far off; 2×: its centre, close up) and turned every
+  `previewRotationStepDeg` (45°). Rendered with OpenCV's `warpPerspective` (area-shrunk first when
+  small), each preview joins KPM as another image of its page, every feature's millimetres mapped back
+  through the warp, so a match against one solves the real pose directly. They live in a second KPM
+  session built off the camera thread (KPM checks every image on every query; the live matcher stays
+  fast) and are searched on every other full solve once direct solves have missed
+  `previewSearchAfterMisses` (2) times running. 0 builds none. `previewAtlasPages` previews grown
+  atlas pages too; `previewMaxFeatures` (600) caps each.
 - **Reference scale** — a reference far larger than the matched frame (a full-resolution camera
   still against a 320 × 240 match) leaves the wall outside KPM's scale range. A page is registered
   from an area-downscaled copy whose long side is at most `maxReferenceScale` (3) × the matched
@@ -479,6 +489,10 @@ monocular-depth points, and rotation / 6-DoF tile fixes adopted in the window.
 `rect{planned swept kpm solved frontal maxObliq}` (once a full solve has considered rectification):
 frames rectified from the prediction (`maxObliq` its steepest, degrees) and from a guessed view, how
 many of those KPM matched and how many gave a pose, and predictions too frontal to rectify.
+
+`previews{images features builtMs ready tried solved}` (with previews): reference images the preview
+session holds (pages and previews), their features, the last build's time, whether it is searchable,
+and the lost-frame searches made and solved in the window (`method=KPM_PREVIEW`).
 
 `attempts` frames ran the matcher and `matched` of them got a pose back (before gating). `error` is
 the mean squared reprojection error in pixels² of the image the pose was solved in (KPM: the

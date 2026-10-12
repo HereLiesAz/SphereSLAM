@@ -27,12 +27,23 @@ internal class KpmPlanarFrontEnd(
     private val backendFactory: (CameraIntrinsics) -> KpmMatcherBackend = KpmMatcherBackend::standalone,
     // A forked backend (see [fork]) instead of a fresh one.
     forkedBackend: KpmMatcherBackend? = null,
+    // The previews matcher, shared with the front end this one was forked from.
+    sharedPreviews: PreviewMatcher? = null,
+    // Builds the previews matcher for the matcher's intrinsics; null result = none (tests inject theirs).
+    private val previewsFactory: ((CameraIntrinsics) -> PreviewMatcher?)? = null,
 ) : PlanarFrontEnd {
 
     /** Downscale factor KPM matches at for this frame size. */
     val factor = KpmMatchScale.effectiveFactor(intrinsics.width, intrinsics.height, config.matchDownscale, config.minMatchShortSidePx)
     private val matchIntrinsics = KpmMatchScale.scaleIntrinsics(intrinsics, factor)
     private val backend = forkedBackend ?: backendFactory(matchIntrinsics)
+
+    /** Previews of every page in their own matcher, searched while the target is lost; null when off. */
+    private val previews: PreviewMatcher? = sharedPreviews
+        ?: if (config.previewSearchAfterMisses > 0) {
+            if (previewsFactory != null) previewsFactory.invoke(matchIntrinsics) else PreviewMatcher(backendFactory(matchIntrinsics), config)
+        } else null
+    private var previewTurn = 0
     private val small: ByteBuffer? =
         if (factor > 1) ByteBuffer.allocateDirect(matchIntrinsics.width * matchIntrinsics.height) else null
 
@@ -86,6 +97,11 @@ internal class KpmPlanarFrontEnd(
             KpmMatchScale.resampleArea(bytes, width, height, rw, rh)
         }
         val r = backend.addReference(refLuma, rw, rh, referenceWidthUnits, physicallyMetric, pageNo, canonicalFromPage)
+        // Previews of the captured reference (page 0) and, when asked, of every page the atlas grows.
+        if (previews != null && (pageNo == 0 || config.previewAtlasPages)) {
+            val bytes = ByteArray(rw * rh).also { refLuma.duplicate().get(it) }
+            previews.addPage(bytes, rw, rh, referenceWidthUnits, physicallyMetric, pageNo, canonicalFromPage)
+        }
         pages[pageNo] = KpmPagePriority.PageWindow(
             pageNo, canonicalFromPage[12], canonicalFromPage[13], r.geometry.widthMeters, r.geometry.heightMeters,
         )
@@ -124,7 +140,7 @@ internal class KpmPlanarFrontEnd(
      */
     override fun fork(): PlanarFrontEnd? {
         val forked = backend.fork() ?: return null
-        return KpmPlanarFrontEnd(intrinsics, config, flowFactory, backendFactory, forked).also {
+        return KpmPlanarFrontEnd(intrinsics, config, flowFactory, backendFactory, forked, previews?.retain(), previewsFactory).also {
             it.pages.putAll(pages)
             it.pageFrames.putAll(pageFrames)
         }
@@ -144,6 +160,11 @@ internal class KpmPlanarFrontEnd(
         nowMs: Long,
         predicted: FloatArray?,
     ): PlanarMatchResult? {
+        // Lost: every other full solve searches the previews, which need no prediction at all.
+        val p = previews
+        if (p != null && p.isReady && missStreak >= config.previewSearchAfterMisses && previewTurn++ % 2 == 0) {
+            return previewSolve(p, luma, lumaBytes, timestampNs, nowMs)
+        }
         // Oblique: KPM matches a virtual frontal view rendered from the full frame (no downscale needed),
         // from the prediction, or from a guessed steep view once direct solves keep missing.
         val planned = rectificationPlan(predicted)?.let { it to predicted } ?: sweepPlan(predicted)?.let { it to null }
@@ -208,6 +229,48 @@ internal class KpmPlanarFrontEnd(
         )
     }
 
+    /**
+     * One full solve against the [previews] matcher (the frame downscaled as for a direct solve), with
+     * a direct solve's bookkeeping: a hit seeds flow and ends the search, a miss extends it.
+     */
+    private fun previewSolve(p: PreviewMatcher, luma: ByteBuffer, lumaBytes: ByteArray?, timestampNs: Long, nowMs: Long): PlanarMatchResult? {
+        rect.previewTried++
+        val matchLuma = if (small != null) {
+            val bytes = lumaBytes ?: ByteArray(luma.remaining()).also { luma.duplicate().get(it) }
+            KpmMatchScale.downsample(bytes, intrinsics.width, intrinsics.height, factor, small)
+        } else {
+            luma
+        }
+        val wantCorrespondences = !flowUnavailable && lumaBytes != null && config.maxCorrespondences > 0
+        val pose = p.match(matchLuma.duplicate(), timestampNs, PlanarMatchRequest.ALL_PAGES, if (wantCorrespondences) config.maxCorrespondences else 0)
+        if (pose == null) {
+            missStreak++
+            if (nowMs != Long.MIN_VALUE) scheduler.onFullSolve(nowMs, success = false, seeded = false)
+            if (!scheduler.isArmed) flow?.reset()
+            return null
+        }
+        missStreak = 0
+        previewTurn = 0
+        rect.previewSolved++
+        var seeded = false
+        if (wantCorrespondences && lumaBytes != null) {
+            val corr = KpmMatchScale.correspondencesToFramePixels(pose.correspondences, factor)
+            seeded = withFlow { it.seed(lumaBytes, pose.pageNo, corr, pose.cameraFromPage3x4) } == true
+        }
+        if (nowMs != Long.MIN_VALUE) {
+            scheduler.onFullSolve(nowMs, success = true, seeded = seeded)
+            lastLockMs = nowMs
+        }
+        lastLockedPage = pose.pageNo
+        return PlanarMatchResult(
+            pageNo = pose.pageNo,
+            cameraFromCanonical = pose.cameraFromCanonical,
+            reprojectionError = pose.reprojectionError,
+            inlierCount = pose.inlierCount,
+            method = VisualMatchMethod.KPM_PREVIEW,
+        )
+    }
+
     /** The rectification for this frame's predicted pose, or null when it is frontal enough (or unknown). */
     private fun rectificationPlan(predicted: FloatArray?): ObliqueRectifier.Plan? {
         if (predicted == null || config.obliqueRectificationDeg <= 0f) return null
@@ -249,7 +312,10 @@ internal class KpmPlanarFrontEnd(
     private fun planPage(): Int? = lastLockedPage?.takeIf { it in pageFrames } ?: pageFrames.keys.firstOrNull()
 
     /** `rect{…}` for the session's periodic diagnostic, then reset; null before any full solve was planned. */
-    override fun diagnosticsAndReset(): String? = rect.summaryAndReset()
+    override fun diagnosticsAndReset(): String? = listOfNotNull(
+        rect.summaryAndReset(),
+        previews?.let { p -> rect.previewSummaryAndReset(p) },
+    ).joinToString(" ").ifEmpty { null }
 
     /**
      * The full solve of an oblique frame: KPM on its virtual frontal view, the real pose solved from
@@ -342,6 +408,19 @@ internal class KpmPlanarFrontEnd(
         var solved = 0
         var frontal = 0
         var maxObliquity = 0.0
+        var previewTried = 0
+        var previewSolved = 0
+
+        /**
+         * `previews{images=I features=F builtMs=B ready=R tried=T solved=S}`: the previews matcher's
+         * reference images and features, how long its last build took, whether it is ready, and the
+         * full solves that searched it and found a pose. Every window, so a report shows it was built.
+         */
+        fun previewSummaryAndReset(p: PreviewMatcher): String {
+            val out = "previews{images=${p.images} features=${p.features} builtMs=${p.buildMs} ready=${p.isReady} tried=$previewTried solved=$previewSolved}"
+            previewTried = 0; previewSolved = 0
+            return out
+        }
 
         fun planned(obliquityDeg: Double) {
             planned++
@@ -371,6 +450,7 @@ internal class KpmPlanarFrontEnd(
         runCatching { flow?.close() }
         flow = null
         backend.close()
+        previews?.release()
     }
 }
 
@@ -401,6 +481,12 @@ internal interface KpmMatcherBackend : AutoCloseable {
         pageNo: Int,
         canonicalFromPage: FloatArray,
     ): PhotosphereTrackingSession.RegisteredPage
+
+    /**
+     * Adds a preview of registered page [pageNo] as its image [imageNo] ([SphereSlamStandaloneSession.addReferenceView]).
+     * Returns the features added, or < 0 (unsupported, refused, −8 at KPM's image limit).
+     */
+    fun addView(luma: ByteBuffer, width: Int, height: Int, pageNo: Int, imageNo: Int, pageFromView: FloatArray, maxFeatures: Int, reindex: Boolean): Int = -1
 
     /** Match [pageNo] only, or every page for [PlanarMatchRequest.ALL_PAGES]. */
     fun match(luma: ByteBuffer, timestampNs: Long, pageNo: Int, maxCorrespondences: Int): Solve?
@@ -436,6 +522,9 @@ internal interface KpmMatcherBackend : AutoCloseable {
             )
             return PhotosphereTrackingSession.RegisteredPage(r.pageNo, r.featureCount, r.geometry, r.physicallyMetric)
         }
+
+        override fun addView(luma: ByteBuffer, width: Int, height: Int, pageNo: Int, imageNo: Int, pageFromView: FloatArray, maxFeatures: Int, reindex: Boolean): Int =
+            runCatching { session.addReferenceView(luma, width, height, pageNo, imageNo, pageFromView, maxFeatures, reindex) }.getOrDefault(-1)
 
         override fun match(luma: ByteBuffer, timestampNs: Long, pageNo: Int, maxCorrespondences: Int): Solve? {
             val p = session.match(luma, timestampNs, PlanarMatchRequest(pageNo, maxCorrespondences)) ?: return null
