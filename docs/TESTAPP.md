@@ -22,14 +22,25 @@ of the checkout it was built from.
 
 ## Use
 
-1. Point at a textured surface. Capture takes the square in the middle of the screen as the target
-   (page 0, one unit wide).
-2. Exercise each check (Checklist button; every row says what to do). The outline should sit on the
-   target's edges.
-3. Leave the app or keep going. There is nothing to copy: every change is reported.
+The app walks you through the run one step at a time (`Guide.kt`, 15 steps, wall first, then the
+floor, then an optional ceiling). Each step says exactly what to do and shows its progress live:
+the tilt still needed before Capture unlocks, a lock countdown, frames tracked, a look-away timer.
+It decides the step itself and moves on (a passed result stays up about 2 s). A step only you can
+judge asks a yes/no question, and its buttons unlock only when the step's conditions are met (the
+one-minute look-away, for example). A failed step shows its evidence with Retry and Continue. Skip
+records the step as skipped.
 
-The HUD shows tracking state, pose source and match method, match time and inliers, and the attitude
-snapshot (heading, elevation, roll, facing azimuth).
+- The segmented bar under the title shows every step's result; **All steps** lists them with their
+  evidence, and tapping one goes to it.
+- The line under the camera shows tracking state, pose source and match method, match time,
+  inliers, and the camera's elevation.
+- When the run is complete, add notes if something looked wrong. There is nothing to copy: every
+  change is reported.
+
+The screen is a single column (app bar, progress, camera, telemetry, step, actions), padded by the
+measured status bar, navigation bar, display cutout and keyboard. The first step checks that on the
+device (`layout_clear`), and `ScreenLayoutTest` renders the screen under Robolectric with those
+insets. Its screenshots go to `testapp/build/screenshots/`.
 
 ## Checks
 
@@ -37,6 +48,7 @@ Graded automatically from live telemetry:
 
 | Check | Passes when |
 |---|---|
+| `layout_clear` | no control overlaps the status bar, navigation bar, display cutout or keyboard (evidence: the measured insets and padding) |
 | `attitude_sensor` | the rotation-vector sensor reports reliable samples |
 | `lens_correction` | the camera delivers a distortion-corrected stream (skipped when it cannot; evidence gives the uncorrected residual) |
 | `lock_wall` / `lock_floor` / `lock_ceiling` | a target captured at \|elevation\| ≤ 30° / ≤ −60° / ≥ 60° locks within 30 s |
@@ -52,8 +64,9 @@ Graded automatically from live telemetry:
 | `pole_attitude` | at \|elevation\| ≥ 85°, heading/elevation/roll rebuild the sensor rotation within 2° (30 samples) |
 | `pole_facing` | over a floor, held still for 2 s, the facing azimuth spreads ≤ 5° |
 
-The tester's verdict (Pass / Fail buttons): `outline_on_target`, `outline_at_edges`,
-`returns_after_minute`. A notes field goes with the report.
+The tester's verdict (a yes/no question in the step): `outline_on_target`, `outline_at_edges`,
+`returns_after_minute` (unlocks after a minute with the target out of view). A notes field goes with
+the report.
 
 ## Reporting
 

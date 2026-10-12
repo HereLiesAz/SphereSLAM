@@ -1,29 +1,18 @@
 package com.hereliesaz.sphereslam.testapp
 
 import android.Manifest
-import android.annotation.SuppressLint
-import android.content.Context
 import android.content.pm.PackageManager
-import android.graphics.Color
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureRequest
 import android.os.Build
 import android.os.Bundle
-import android.text.Editable
-import android.text.TextWatcher
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
-import android.view.Gravity
-import android.view.View
-import android.view.ViewGroup.LayoutParams.MATCH_PARENT
-import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
-import android.widget.Button
-import android.widget.EditText
 import android.widget.FrameLayout
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -36,27 +25,29 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
 import com.hereliesaz.sphereslam.CameraAttitudeProvider
 import com.hereliesaz.sphereslam.camera.CameraIntrinsicsEstimator
 import com.hereliesaz.sphereslam.camera.LensDistortion
 import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.ArrayDeque
 import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * SphereSLAM on-device test bench (docs/TESTAPP.md): the camera, a captured target tracked by
- * [Tracker], its outline ([OverlayView]), a live HUD, and the [Checklist] — which grades most checks
- * itself and takes the tester's verdict on the visual ones. Every change is reported to the
- * repository's issues ([Reporter]); nothing to copy or paste.
+ * SphereSLAM on-device test bench (docs/TESTAPP.md). The [Guide] walks the tester through one step at
+ * a time; [Tracker] runs the library on the camera and feeds the [Checklist], which grades each step
+ * from telemetry (or takes the tester's verdict where only a person can judge); [TestScreen] shows
+ * the step, its live progress and the result; [Reporter] files every change to the repository's
+ * issues.
  */
 @ExperimentalCamera2Interop
 class MainActivity : ComponentActivity() {
 
     private val checklist = Checklist()
+    private val guide = Guide()
     private val logLines = ArrayDeque<String>()
     private lateinit var attitude: CameraAttitudeProvider
     private lateinit var reporter: Reporter
@@ -65,11 +56,23 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var preview: PreviewView
     private lateinit var overlay: OverlayView
-    private lateinit var hud: TextView
-    private lateinit var reportStatus: TextView
-    private lateinit var panel: ScrollView
-    private lateinit var rows: LinearLayout
-    private lateinit var notes: EditText
+    private lateinit var screen: TestScreen
+
+    @Volatile private var lastView: TrackedView? = null
+    @Volatile private var notesSnapshot = ""
+    @Volatile private var reportState = "Report: nothing sent yet"
+    private var cameraProblem: String? = null
+    private var decidedStep = -1
+    private var decidedAtMs = 0L
+    private var shownStep = -1
+
+    private val ui = Handler(Looper.getMainLooper())
+    private val tick = object : Runnable {
+        override fun run() {
+            render()
+            ui.postDelayed(this, TICK_MS)
+        }
+    }
 
     private val runInfo by lazy {
         RunInfo(
@@ -87,19 +90,34 @@ class MainActivity : ComponentActivity() {
     }
 
     private val permission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) startCamera() else hud.text = "Camera permission is needed."
+        if (granted) startCamera() else cameraProblem = "Camera permission was denied. Grant it in Settings ▸ Apps ▸ SphereSLAM Test ▸ Permissions, then reopen the app."
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         attitude = CameraAttitudeProvider(this)
         analysisExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "sphereslam-test-analysis") }
         reporter = Reporter(BuildConfig.REPORT_URL, BuildConfig.REPORT_KEY, ::reportBody) { ok, detail ->
-            runOnUiThread { reportStatus.text = if (ok) "Reported ${Instant.now()}" else "Report failed: $detail" }
+            reportState = if (ok) "Report sent ${CLOCK.format(Instant.now())}" else "Report not sent ($detail); retrying on the next change"
         }
-        enableEdgeToEdge()
-        setContentView(buildLayout())
-        renderChecklist()
+        preview = PreviewView(this).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
+        overlay = OverlayView(this)
+        val camera = FrameLayout(this)
+        camera.addView(preview, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        camera.addView(overlay, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        screen = TestScreen(this, camera)
+        screen.onJump = { i ->
+            guide.goTo(i, now())
+            screen.showOverview(false)
+            render()
+        }
+        screen.onNotes = { text ->
+            notesSnapshot = text
+            reporter.schedule(NOTES_DEBOUNCE_MS)
+        }
+        setContentView(screen.root)
+        guide.start(now())
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             startCamera()
         } else {
@@ -110,9 +128,11 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         attitude.start(android.hardware.SensorManager.SENSOR_DELAY_GAME)
+        ui.post(tick)
     }
 
     override fun onPause() {
+        ui.removeCallbacks(tick)
         attitude.stop()
         super.onPause()
     }
@@ -129,26 +149,199 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
+    private fun now() = SystemClock.elapsedRealtime()
+
+    // --- the guided run -------------------------------------------------------------------------
+
+    private fun render() {
+        val now = now()
+        screen.layoutCheck()?.let { (clear, evidence) -> mutate { checklist.onLayout(clear, evidence) } }
+
+        val statuses = synchronized(checklist) { guide.steps.map { guide.statusOf(it, checklist) } }
+        val n = guide.steps.size
+        val step = guide.current
+        screen.header(
+            stepLabel = if (step == null) "Run complete" else "Step ${guide.index + 1} of $n",
+            statuses = statuses,
+            current = guide.index,
+            report = reportState,
+        )
+        val v = lastView
+        screen.telemetry(
+            cameraProblem ?: v?.telemetry ?: "Starting the camera…",
+            v?.elevationDeg?.let { Guide.describeElevation(it) }.orEmpty(),
+        )
+        screen.showCamera(step != null)
+        if (screen.overviewOpen) {
+            renderOverview()
+            screen.actions(primary = Action("Back to step") { screen.showOverview(false); render() })
+            return
+        }
+        if (step == null) return renderFinished(statuses)
+        if (shownStep != guide.index) {
+            shownStep = guide.index
+            log("step ${guide.index + 1}: ${step.title}")
+        }
+
+        val status = statuses[guide.index]
+        if (status == Status.UNTESTED) decidedStep = -1
+        else if (decidedStep != guide.index) { decidedStep = guide.index; decidedAtMs = now }
+
+        val progress = synchronized(checklist) { progressLine(step, now) }
+        val hint = synchronized(checklist) { if (guide.showHint(checklist, now)) step.hint else null }
+        val result = synchronized(checklist) { resultLine(step, status) }
+        screen.card(
+            title = step.title,
+            body = step.instruction,
+            progressLine = listOfNotNull(progress, hint).joinToString("\n").ifEmpty { null },
+            result = result,
+            resultTone = Palette.of(status).takeIf { status != Status.UNTESTED } ?: Palette.TEXT,
+        )
+
+        val skip = Action("Skip") { mutate { guide.skip(checklist, now()) }; render() }
+        when (status) {
+            Status.UNTESTED -> when (step.kind) {
+                StepKind.CAPTURE -> {
+                    val surface = step.surface!!
+                    val aim = surface.aimHint(v?.elevationDeg)
+                    val capturing = synchronized(checklist) { checklist.progress(surface.checkId, now)?.startsWith("Locking") == true }
+                    screen.actions(
+                        primary = Action(if (capturing) "Capture again" else "Capture", enabled = aim == null && tracker != null) {
+                            tracker?.requestCapture(surface.checkId)
+                            log("capture for ${surface.checkId}")
+                        },
+                        tertiary = skip,
+                    )
+                }
+                StepKind.AUTO -> screen.actions(primary = null, tertiary = skip)
+                StepKind.MANUAL -> {
+                    val ready = synchronized(checklist) { guide.manualWait(step, checklist, now) } == null
+                    screen.actions(
+                        primary = Action("Yes, it did", enabled = ready) { verdict(step, Status.PASS) },
+                        secondary = Action("No", enabled = ready) { verdict(step, Status.FAIL) },
+                        tertiary = skip,
+                    )
+                }
+            }
+            Status.PASS, Status.SKIPPED -> {
+                screen.actions(primary = Action("Next") { advance() })
+                if (status == Status.PASS && now - decidedAtMs >= AUTO_ADVANCE_MS) advance()
+            }
+            Status.FAIL -> screen.actions(
+                primary = Action("Continue") { advance() },
+                secondary = Action("Retry") { mutate { guide.retry(checklist, now()) }; render() },
+            )
+        }
+    }
+
+    private fun advance() {
+        guide.next(now())
+        render()
+    }
+
+    private fun verdict(step: Step, status: Status) {
+        mutate { for (id in step.checks) checklist.set(id, status, "tester: " + if (status == Status.PASS) "yes" else "no") }
+        if (status == Status.PASS) advance() else render()
+    }
+
+    /** What the tester sees under the instruction while the step is undecided. */
+    private fun progressLine(step: Step, now: Long): String? {
+        if (guide.statusOf(step, checklist) != Status.UNTESTED) return null
+        return when (step.kind) {
+            StepKind.CAPTURE -> {
+                val surface = step.surface!!
+                val p = checklist.progress(surface.checkId, now)
+                if (p == null || p.startsWith("Waiting")) surface.aimHint(lastView?.elevationDeg) ?: "Aimed correctly. Hold still and tap Capture."
+                else p
+            }
+            StepKind.MANUAL -> guide.manualWait(step, checklist, now) ?: "Watch closely, then answer below."
+            StepKind.AUTO -> step.checks.mapNotNull { checklist.progress(it, now) }.joinToString("\n").ifEmpty { null }
+        }
+    }
+
+    private fun resultLine(step: Step, status: Status): CharSequence? {
+        if (status == Status.UNTESTED) return null
+        val head = when (status) {
+            Status.PASS -> "Passed"
+            Status.FAIL -> "Failed"
+            else -> "Skipped"
+        }
+        return screen.verdict(head, status, step.checks.map { checklist[it] }.map { c -> "${c.title}: ${c.evidence}" to c.status })
+    }
+
+    private fun renderFinished(statuses: List<Status>) {
+        val passed = statuses.count { it == Status.PASS }
+        val failed = statuses.count { it == Status.FAIL }
+        val skipped = statuses.count { it == Status.SKIPPED }
+        val open = statuses.count { it == Status.UNTESTED }
+        screen.card(
+            title = "Run complete",
+            body = "$passed passed, $failed failed, $skipped skipped" + (if (open > 0) ", $open not finished" else "") +
+                ". The report is filed automatically; add notes below if anything looked wrong.",
+            progressLine = null,
+            result = reportState,
+            resultTone = Palette.MUTED,
+            showNotes = true,
+        )
+        screen.actions(
+            primary = Action("Start over") {
+                mutate { checklist.reset(guide.steps.drop(1).flatMap { it.checks }) }
+                guide.goTo(1, now())
+                render()
+            },
+            secondary = Action("Review steps") { screen.showOverview(true); render() },
+        )
+        if (shownStep != guide.steps.size) {
+            shownStep = guide.steps.size
+            log("run complete: $passed passed, $failed failed, $skipped skipped")
+            reporter.flush()
+        }
+    }
+
+    private fun renderOverview() {
+        val rows = synchronized(checklist) {
+            guide.steps.map { s ->
+                Triple(s.title, guide.statusOf(s, checklist), s.checks.map { id ->
+                    val c = checklist[id]
+                    screen.mark(c.title + (if (c.evidence.isNotEmpty()) ": ${c.evidence}" else ""), c.status)
+                })
+            }
+        }
+        screen.overview(rows, guide.index)
+    }
+
+    /** Checklist writes hold its monitor (the analysis thread writes too) and schedule a report. */
+    private inline fun mutate(block: () -> Unit) {
+        val changed = synchronized(checklist) {
+            val before = checklist.changes
+            block()
+            checklist.changes != before
+        }
+        if (changed) reporter.schedule()
+    }
+
     // --- camera ---------------------------------------------------------------------------------
 
     private fun startCamera() {
-        val cameraId = backCameraId() ?: run { hud.text = "No back camera."; return }
+        val cameraId = backCameraId() ?: run { cameraProblem = "This device has no back camera."; return }
         val characteristics = getSystemService(CameraManager::class.java).getCameraCharacteristics(cameraId)
         val lens = LensDistortion.read(characteristics)
         val correction = lens.trackingCorrectionMode
         val realtime = characteristics.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) ==
             CameraMetadata.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
         val nominal = CameraIntrinsicsEstimator.estimate(this, cameraId, 640, 480)
-        checklist.onLens(
-            mode = correction?.let { correctionName(it) },
-            residualPx = nominal?.let { LensDistortion.maxResidualPx(lens.coefficients, it) },
-            description = LensDistortion.describe(lens, correction, nominal),
-        )
-        log("camera $cameraId realtime=$realtime lens=${checklist["lens_correction"].evidence}")
+        mutate {
+            checklist.onLens(
+                mode = correction?.let { correctionName(it) },
+                residualPx = nominal?.let { LensDistortion.maxResidualPx(lens.coefficients, it) },
+                description = LensDistortion.describe(lens, correction, nominal),
+            )
+        }
+        log("camera $cameraId realtime=$realtime lens=${synchronized(checklist) { checklist["lens_correction"].evidence }}")
 
         val t = Tracker(this, cameraId, realtime, attitude, checklist, ::log,
-            onView = { v -> overlay.show(v); runOnUiThread { hud.text = v.hud } },
-            onChecklistChanged = { runOnUiThread { renderChecklist() }; reporter.schedule() },
+            onView = { v -> lastView = v; overlay.show(v) },
+            onChecklistChanged = { reporter.schedule() },
         )
         tracker = t
 
@@ -190,13 +383,10 @@ class MainActivity : ComponentActivity() {
 
     private fun reportBody(): String {
         val log = synchronized(logLines) { logLines.joinToString("\n") }
-        val notesText = runCatching { notesSnapshot }.getOrDefault("")
         return synchronized(checklist) {
-            ReportJson.build(runInfo, checklist.checks, Instant.now().toString(), notesText, log)
+            ReportJson.build(runInfo, checklist.checks, Instant.now().toString(), notesSnapshot, log)
         }
     }
-
-    @Volatile private var notesSnapshot = ""
 
     private fun log(line: String) {
         Log.d("SphereSLAM-Test", line)
@@ -206,130 +396,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // --- UI -------------------------------------------------------------------------------------
-
-    /**
-     * One vertical stack, nothing layered except the outline on the camera it annotates: HUD, camera,
-     * checklist (when open, it splits the space with the camera), buttons. The root is padded by the
-     * status bar, navigation bar, display cutout and keyboard, so no control sits under any of them.
-     */
-    @SuppressLint("SetTextI18n")
-    private fun buildLayout(): View {
-        preview = PreviewView(this).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
-        overlay = OverlayView(this)
-        // Not inside apply{}: there `overlay` would resolve to View.getOverlay().
-        val camera = FrameLayout(this)
-        camera.addView(preview, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-        camera.addView(overlay, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-        hud = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            setPadding(24, 16, 24, 16)
-            typeface = android.graphics.Typeface.MONOSPACE
-            textSize = 12f
-        }
-        reportStatus = TextView(this).apply {
-            setTextColor(Color.LTGRAY)
-            textSize = 11f
-            text = "Not reported yet"
-        }
-        val capture = button("Capture") { tracker?.requestCapture() }
-        val toggle = button("Checklist") { panel.visibility = if (panel.visibility == View.VISIBLE) View.GONE else View.VISIBLE }
-        val bar = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(24, 16, 24, 16)
-            addView(LinearLayout(context).apply {
-                addView(capture, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-                addView(toggle, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-            })
-            addView(reportStatus)
-        }
-        rows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 24, 24, 24) }
-        notes = EditText(this).apply {
-            hint = "Notes for this run (sent with the report)"
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.GRAY)
-            addTextChangedListener(object : TextWatcher {
-                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
-                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
-                override fun afterTextChanged(s: Editable?) {
-                    notesSnapshot = s?.toString().orEmpty()
-                    reporter.schedule(NOTES_DEBOUNCE_MS)
-                }
-            })
-        }
-        panel = ScrollView(this).apply {
-            setBackgroundColor(Color.rgb(10, 10, 10))
-            visibility = View.GONE
-            addView(LinearLayout(context).apply {
-                orientation = LinearLayout.VERTICAL
-                addView(rows)
-                addView(notes)
-            })
-        }
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.BLACK)
-            addView(hud, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-            addView(camera, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
-            addView(panel, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
-            addView(bar, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-        }
-        ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
-            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
-            v.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
-            WindowInsetsCompat.CONSUMED
-        }
-        return root
-    }
-
-    @SuppressLint("SetTextI18n")
-    private fun renderChecklist() {
-        rows.removeAllViews()
-        val snapshot = synchronized(checklist) { checklist.checks.map { Triple(it, it.status, it.evidence) } }
-        for ((check, status, evidence) in snapshot) {
-            val row = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 12, 0, 12) }
-            row.addView(TextView(this).apply {
-                text = "${symbol(status)}  ${check.title}"
-                setTextColor(Color.WHITE)
-                textSize = 14f
-            })
-            row.addView(TextView(this).apply {
-                text = if (evidence.isNotEmpty()) evidence else check.howTo
-                setTextColor(Color.LTGRAY)
-                textSize = 12f
-            })
-            if (check.manual) {
-                row.addView(LinearLayout(this).apply {
-                    addView(button("Pass") { verdict(check.id, Status.PASS) })
-                    addView(button("Fail") { verdict(check.id, Status.FAIL) })
-                })
-            }
-            rows.addView(row)
-        }
-    }
-
-    private fun verdict(id: String, status: Status) {
-        synchronized(checklist) { checklist.set(id, status, "tester: ${status.name.lowercase()}") }
-        renderChecklist()
-        reporter.schedule()
-    }
-
-    private fun symbol(s: Status) = when (s) {
-        Status.PASS -> "✅"
-        Status.FAIL -> "❌"
-        Status.SKIPPED -> "➖"
-        Status.UNTESTED -> "⬜"
-    }
-
-    private fun button(label: String, onClick: () -> Unit) = Button(this).apply {
-        text = label
-        isAllCaps = false
-        setOnClickListener { onClick() }
-    }
-
     private companion object {
         const val MAX_LOG_LINES = 200
         const val NOTES_DEBOUNCE_MS = 5_000L
+        const val TICK_MS = 200L
+        /** How long a passed step's result stays up before the next step. */
+        const val AUTO_ADVANCE_MS = 1_800L
+        val CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault())
     }
 }

@@ -44,6 +44,8 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+        // ScreenLayoutTest inflates the real resources (launcher icon) under Robolectric.
+        unitTests.isIncludeAndroidResources = true
     }
 }
 
@@ -55,6 +57,7 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
 }
 
 tasks.withType<KotlinCompile>().configureEach {
@@ -62,4 +65,9 @@ tasks.withType<KotlinCompile>().configureEach {
         jvmTarget.set(JvmTarget.JVM_17)
         freeCompilerArgs.add("-opt-in=com.hereliesaz.sphereslam.reloc.ExperimentalSphereSlamRelocApi")
     }
+}
+
+// Robolectric reaches into FileDescriptor internals (and jdk.internal.access), closed by default on JDK 17+.
+tasks.withType<Test>().configureEach {
+    jvmArgs("--add-opens=java.base/java.io=ALL-UNNAMED", "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
 }

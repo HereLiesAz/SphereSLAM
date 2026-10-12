@@ -16,7 +16,7 @@ import com.hereliesaz.sphereslam.reloc.CameraTimestampSource
 import com.hereliesaz.sphereslam.reloc.PhotosphereTrackingSession
 import kotlin.math.acos
 
-/** What the overlay draws and the HUD prints for the latest frame. */
+/** What the overlay draws and the telemetry line prints for the latest frame. */
 class TrackedView(
     /** Column-major camera-from-fingerprint, or null when nothing is placed. */
     val cameraFromFingerprint: FloatArray?,
@@ -25,7 +25,10 @@ class TrackedView(
     val frameHeight: Int,
     /** Page height / width of the captured reference (its width is 1 unit). */
     val pageAspect: Float,
-    val hud: String,
+    /** One line: state, pose source and method, match time, inliers. */
+    val telemetry: String,
+    /** Camera elevation from the attitude snapshot, degrees; null without one. */
+    val elevationDeg: Float?,
 )
 
 /**
@@ -47,7 +50,8 @@ class Tracker(
 
     private val pool = LumaFrameBufferPool(slots = 2)
     private val cameraFromDisplay = DeviceCameraRotation.cameraFromDeviceForDisplayFrame(0)
-    @Volatile private var captureRequested = false
+    /** The lock check the next frame's capture is for (`lock_wall` …), or null. */
+    @Volatile private var captureFor: String? = null
     private var pageAspect = 1f
     private var lastAxis: FloatArray? = null
 
@@ -65,9 +69,9 @@ class Tracker(
         ),
     )
 
-    /** Capture the centre of the next frame as the target. */
-    fun requestCapture() {
-        captureRequested = true
+    /** Capture the centre of the next frame as the target for [checkId] (`lock_wall`, `lock_floor`, `lock_ceiling`). */
+    fun requestCapture(checkId: String) {
+        captureFor = checkId
     }
 
     /** Checklist writes hold its monitor: the UI and the reporter read it from other threads. */
@@ -93,10 +97,10 @@ class Tracker(
             val snapshot = attitude.latestAttitude()
             val roll = snapshot?.let { CameraAttitudeProvider.cameraRollDegrees(it.deviceToWorld, cameraFromDisplay) }
 
-            if (captureRequested) {
-                captureRequested = false
+            captureFor?.let { checkId ->
+                captureFor = null
                 capture(luma.bytes, luma.width, luma.height)
-                mutate { checklist.onCapture(SystemClock.elapsedRealtime(), snapshot?.elevationDeg) }
+                mutate { checklist.onCapture(SystemClock.elapsedRealtime(), snapshot?.elevationDeg, checkId) }
             }
 
             val result = session.onFrame(
@@ -145,7 +149,8 @@ class Tracker(
                     frameWidth = luma.width,
                     frameHeight = luma.height,
                     pageAspect = pageAspect,
-                    hud = hud(result, snapshot, roll),
+                    telemetry = telemetry(result),
+                    elevationDeg = snapshot?.elevationDeg,
                 ),
             )
         } catch (t: Throwable) {
@@ -185,24 +190,16 @@ class Tracker(
         return Math.toDegrees(acos(dot)).toFloat()
     }
 
-    private fun hud(result: PhotosphereTrackingSession.FrameResult, a: CameraAttitudeProvider.Attitude?, roll: Float?): String {
+    private fun telemetry(result: PhotosphereTrackingSession.FrameResult): String {
         val p = result.pose
         return buildString {
-            append("state ").append(result.state)
+            append(result.state)
             if (p != null) {
-                append("  ").append(p.source)
+                append(" · ").append(p.source)
                 if (p.source == PhotosphereTrackingSession.PoseSource.KPM) append(' ').append(p.matchMethod)
-                append("\nmatch ").append("%.1f".format(p.matchDurationMs)).append(" ms  inliers ").append(p.inlierCount)
+                append(" · ").append("%.1f".format(p.matchDurationMs)).append(" ms · ").append(p.inlierCount).append(" inliers")
             }
-            if (a != null) {
-                append("\nhdg ").append("%.0f".format(a.headingDeg))
-                append("  elev ").append("%.1f".format(a.elevationDeg))
-                append("  roll ").append(roll?.let { "%.0f".format(it) } ?: "?")
-                append("  facing ").append(a.facingAzimuthDeg?.let { "%.0f".format(it) } ?: "?")
-            } else {
-                append("\nno attitude")
-            }
-            result.failure?.let { append("\n").append(it.reason) }
+            result.failure?.let { append(" · ").append(it.reason) }
         }
     }
 

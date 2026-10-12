@@ -14,6 +14,8 @@ onnxruntime = "1.30.0"
 litert = "1.4.2"
 opencv = "5.0.0.1"
 junit = "4.13.2"
+# :testapp layout tests (renders the screen on the JVM with system-bar insets).
+robolectric = "4.17"
 androidxTestRunner = "1.7.0"
 androidxTestExtJunit = "1.3.0"
 ndk = "30.0.16248370"
@@ -33,6 +35,7 @@ litert = { group = "com.google.ai.edge.litert", name = "litert", version.ref = "
 litert-gpu = { group = "com.google.ai.edge.litert", name = "litert-gpu", version.ref = "litert" }
 litert-gpu-api = { group = "com.google.ai.edge.litert", name = "litert-gpu-api", version.ref = "litert" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTestRunner" }
 androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExtJunit" }
 
