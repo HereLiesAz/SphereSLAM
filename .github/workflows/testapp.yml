@@ -35,9 +35,18 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       # The native build requires CMake 4.4.4 exactly (same bootstrap as ci.yml and jitpack.yml).
+      # Cached so a GitHub release-download outage (504s) doesn't fail the run; checksum-verified either way.
+      - uses: actions/cache@v4
+        id: cmake
+        with:
+          path: /tmp/cmake.tar.gz
+          key: cmake-4.4.4-linux-x86_64-e5bb807f
+
       - name: Install CMake 4.4.4
         run: |
-          curl --fail --location --retry 3 --output /tmp/cmake.tar.gz https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-linux-x86_64.tar.gz
+          if [ "${{ steps.cmake.outputs.cache-hit }}" != "true" ]; then
+            curl --fail --location --retry 8 --retry-delay 15 --retry-all-errors --output /tmp/cmake.tar.gz https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-linux-x86_64.tar.gz
+          fi
           echo "e5bb807f7728cb60cd8b27ebc97a2edb469b68655f21e844a600c3575b76f5bb  /tmp/cmake.tar.gz" | sha256sum --check -
           tar -xzf /tmp/cmake.tar.gz -C /tmp
           printf 'sdk.dir=%s\ncmake.dir=/tmp/cmake-4.4.4-linux-x86_64\n' "$ANDROID_HOME" > local.properties
