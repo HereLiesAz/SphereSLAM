@@ -53,8 +53,11 @@ class KpmPlanarFrontEndTest {
 
         val imageCalls = mutableListOf<List<PlanarImage>>()
 
+        var imagesLuma: ByteArray? = null
+
         override fun matchImages(luma: ByteBuffer, timestampNs: Long, images: List<PlanarImage>, maxCorrespondences: Int): KpmMatcherBackend.Solve? {
             imageCalls += images
+            imagesLuma = ByteArray(luma.remaining()).also { luma.duplicate().get(it) }
             return answer(images.first().pageNo)
         }
 
@@ -373,8 +376,9 @@ class KpmPlanarFrontEndTest {
     fun `a lost search starts with the previews nearest the predicted view and widens on each miss`() {
         val pb = FakeBackend(k).apply { answer = { null } }
         lateinit var matcher: PreviewMatcher
+        // Searched as the frame is (not turned square-on first), so the previews' own tilts matter.
         val fe = frontEnd(
-            KpmMatchSpeedConfig(flowTracking = false, obliqueSearchAfterMisses = 0, obliqueRectificationDeg = 0f),
+            KpmMatchSpeedConfig(flowTracking = false, obliqueSearchAfterMisses = 0, obliqueRectificationDeg = 0f, previewRectify = false),
             previews = { mk -> previewsFor(pb, mk).also { matcher = it } },
         )
         val g = fe.addPage(ByteBuffer.allocateDirect(400 * 300), 400, 300, 1f, false, 0, RigidMath.identity().also { it[12] = 0.4f }).geometry
@@ -399,10 +403,10 @@ class KpmPlanarFrontEndTest {
         assertNull(fe.match(input(t, predicted))); t += 10
         assertEquals(guided, pb.imageCalls.size)
         assertEquals(1, pb.calls.size) // all of them
-        // The first set was the cuts on the camera's side (meridian 0), nearest first: 67.5° on the
+        // The first set was the cuts on the camera's side (meridian 0), nearest first: 60° on the
         // half-sphere nearest the predicted distance (1.5 widths: 1.41).
         val labels = pb.imageCalls.first().map { im -> matcher.views.single { it.imageNo == im.imageNo }.label }
-        assertEquals("1.414w tilt 67.5° toward 0°", labels.first())
+        assertEquals("1.414w tilt 60° toward 0°", labels.first())
         assertTrue(labels.toString(), labels.take(2).all { it.endsWith("toward 0°") })
         assertTrue(fe.diagnosticsAndReset()!!.contains("guided=$guided "))
         // A hit resets the search: the next one starts from the nearest n again.
@@ -439,7 +443,54 @@ class KpmPlanarFrontEndTest {
         repeat(4) { fe.match(input(t)); t += 10 }
         assertEquals(1, pb.imageCalls.size)
         assertEquals(0, pb.calls.size)
-        assertTrue(fe.diagnosticsAndReset()!!.contains("anticipation=0d×0lat×0lon×1roll/3d×8lat×3lon×1roll factor=0.00 battery=0.00 heat=1.00 compute=0.00 searchable=0"))
+        assertTrue(fe.diagnosticsAndReset()!!.contains("anticipation=0d×0lat×0lon×1roll/3d×6lat×2lon×1roll factor=0.00 battery=0.00 heat=1.00 compute=0.00 searchable=0"))
+    }
+
+    @Test
+    fun `with the sensors' rotation the frame is turned square-on and upright before the preview search`() {
+        val pb = FakeBackend(k).apply { answer = { null } }
+        lateinit var matcher: PreviewMatcher
+        val fe = frontEnd(
+            KpmMatchSpeedConfig(flowTracking = false, obliqueSearchAfterMisses = 0, obliqueRectificationDeg = 0f),
+            previews = { mk -> previewsFor(pb, mk).also { matcher = it } },
+        )
+        val placement = RigidMath.identity().also { it[12] = 0.4f }
+        val g = fe.addPage(ByteBuffer.allocateDirect(400 * 300), 400, 300, 1f, false, 0, placement).geometry
+        val centre = doubleArrayOf(g.centerXmm.toDouble(), g.centerYmm.toDouble(), 0.0)
+        // Seen from 58° to the right, upright; predicted with the right rotation from a stale place.
+        val truth = ObliqueGeometry.pose(58.0, centre, 1_500.0, rollDeg = 180.0)
+        val stale = ObliqueGeometry.pose(58.0, doubleArrayOf(centre[0] - 400.0, centre[1] + 150.0, 0.0), 2_200.0, rollDeg = 180.0)
+        assertArrayEquals(truth.first, stale.first, 1e-9)
+        val predicted = canonicalView(stale, centre)
+        backend!!.answer = { null }
+        var t = 0L
+        repeat(3) { fe.match(input(t, predicted)); t += 10 } // two direct misses, then the previews
+        // The square-on pole at the predicted distance comes first: the turned frame is square-on.
+        val first = pb.imageCalls.single().first()
+        assertEquals("pole 1.414w", matcher.views.single { it.imageNo == first.imageNo }.label)
+        // KPM saw the frame turned by the rotation alone.
+        val mk = backend!!.intrinsics
+        val km = floatArrayOf(mk.fx, mk.fy, mk.cx, mk.cy)
+        val (r, tr) = ObliqueRectifier.pagePose(predicted, placement, g.centerXmm, g.centerYmm)!!
+        val plan = ObliqueRectifier.rotationPlan(r, km, ObliqueRectifier.centreOf(r, tr))!!
+        val expected = ObliqueRectifier.warp(frameBytes, k.width, k.height, fe.factor, mk.width, mk.height, plan, ByteBuffer.allocateDirect(mk.width * mk.height))
+            .let { b -> ByteArray(b.remaining()).also { b.get(it) } }
+        val seen = pb.imagesLuma!!
+        assertEquals(0, expected.indices.count { kotlin.math.abs((expected[it].toInt() and 0xff) - (seen[it].toInt() and 0xff)) > 2 })
+        // Whatever the stale position, the turned view of the wall is square-on and upright: a square
+        // on the wall, seen by the true camera, is a square in the turned image, sides level.
+        val virtualFromReal = ObliqueRectifier.invert3(plan.realFromVirtual)!!
+        fun turned(x: Double, y: Double): DoubleArray {
+            val p = ObliqueGeometry.project(km, truth.first, truth.second, x, y)
+            val w = virtualFromReal[6] * p[0] + virtualFromReal[7] * p[1] + virtualFromReal[8]
+            return doubleArrayOf((virtualFromReal[0] * p[0] + virtualFromReal[1] * p[1] + virtualFromReal[2]) / w, (virtualFromReal[3] * p[0] + virtualFromReal[4] * p[1] + virtualFromReal[5]) / w)
+        }
+        val a = turned(centre[0] - 50, centre[1] - 50); val b = turned(centre[0] + 50, centre[1] - 50)
+        val c = turned(centre[0] + 50, centre[1] + 50)
+        assertEquals(0.0, b[1] - a[1], 1e-6) // level
+        assertEquals(b[0] - a[0], b[1] - c[1], 1e-6) // square (page y up is image y down)
+        assertEquals(0.0, c[0] - b[0], 1e-6) // upright
+        assertTrue(fe.diagnosticsAndReset()!!.contains("rectified=1 "))
     }
 
     /** A previews matcher over [pb] for the front end's match intrinsics, built at once. */

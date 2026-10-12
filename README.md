@@ -391,15 +391,16 @@ result.pose?.let { draw(it.cameraFromMap, it.projection) }
   detail the frame has.
 - **Previews** — the reference rendered as the camera may see it, so a lost camera relocks without a
   prediction of where it is. Where from is the **anticipation resolution**
-  (`AnticipationResolution(distance, latitude, longitude, roll)`, default 3 × 8 × 3 × 1). Picture a
+  (`AnticipationResolution(distance, latitude, longitude, roll)`, default 3 × 6 × 2 × 1). Picture a
   half-sphere over the target, the target at its core and the square-on view at its pole: `latitude`
-  meridians run from the pole to the equator, cut by `longitude` circles (3 circles: 22.5°, 45°,
-  67.5° from square-on); a preview is taken at the pole and at every cut, aimed at the core, none on
+  meridians run from the pole to the equator, cut by `longitude` circles (2 circles: 30° and 60° from
+  square-on); a preview is taken at the pole and at every cut, aimed at the core, none on
   the equator (edge-on). `distance` nests that many half-spheres from `anticipationNearestWidths`
   (0.5) to `anticipationFarthestWidths` (4) target widths, evenly in log distance. `roll` takes each
   view turned about its optical axis that many times, evenly from upright (2: upright and upside
-  down); KPM's features survive about ±33° of turn, so 6 covers every turn. Previews per page:
-  `distance × (1 + latitude × longitude) × roll` (75). Each is what this phone's camera (the
+  down). KPM matches up to about 30° of viewing angle, so the default's circles 30° apart and
+  meridians 60° apart keep every view within reach of a preview. Previews per page:
+  `distance × (1 + latitude × longitude) × roll` (39). Each is what this phone's camera (the
   matched image's intrinsics) would see from there, cropped to its frame: a near view large, partly
   out of frame and strongly foreshortened, a far one small (dropped under 64 px). Rendered with
   OpenCV's `warpPerspective` (area-shrunk first when small), each joins KPM as another image of its
@@ -411,6 +412,13 @@ result.pose?.let { draw(it.cameraFromMap, it.projection) }
   every query, so the live matcher stays fast; the previews are searched on every other full solve
   once direct solves have missed `previewSearchAfterMisses` (2) times running. 0 builds none.
   `previewAtlasPages` previews grown atlas pages too; `previewMaxFeatures` (600) caps each.
+  **The sensors do the turning.** The phone's rotation stays right while the target is lost (only
+  the position goes stale), and a pure turn needs no position: before a preview search the frame is
+  turned square-on and upright by the predicted rotation alone (`previewRectify`,
+  `ObliqueRectifier.rotationPlan`: a virtual camera at the real one's centre facing the wall, its
+  focal length × the cosine of the obliquity), and the real pose is solved from the matches mapped
+  back through the turn. So the turned frame is nearest the square-on previews, and the cuts and rolls
+  cover what the sensors get wrong (heading drift) and steep views the turn stretches too far.
   The search is guided by the phone's rotation, which stays right while the target is lost (only the
   position goes stale). Assuming the target is in view, the rotation fixes how the camera sees the
   page: how steep, from which side, how turned. Each preview records the camera rotation it stands
@@ -524,11 +532,11 @@ frames rectified from the prediction (`maxObliq` its steepest, degrees) and from
 many of those KPM matched and how many gave a pose, and predictions too frontal to rectify.
 
 `previews{images features builtMs ready anticipation factor battery heat compute searchable tried
-guided solved}` (with previews): reference images the preview session holds (pages and previews),
+rectified guided solved}` (with previews): reference images the preview session holds (pages and previews),
 their features, the time spent building, whether it is searchable; the effective and maximum
-anticipation resolution (`3d×4lat×1lon×1roll/3d×8lat×3lon×1roll`), the throttle factor and the pressures behind
-it; the previews it allows; and the lost-frame searches made (`guided` of them over only the previews
-nearest the predicted view) and solved in the window (`method=KPM_PREVIEW`).
+anticipation resolution (`3d×3lat×1lon×1roll/3d×6lat×2lon×1roll`), the throttle factor and the pressures behind
+it; the previews it allows; and the lost-frame searches made (`rectified` of them on the frame turned
+square-on by the sensors, `guided` over only the previews nearest the predicted view) and solved in the window (`method=KPM_PREVIEW`).
 
 `attempts` frames ran the matcher and `matched` of them got a pose back (before gating). `error` is
 the mean squared reprojection error in pixels² of the image the pose was solved in (KPM: the

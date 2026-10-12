@@ -201,7 +201,7 @@ Every `Config.metricsIntervalMs` (5 s) `Callbacks.onDiagnostic` receives the las
 ran the matcher, `matched` got a pose back; `mean/max` ms over the
 window; `convertMs` comes from `Frame.convertDurationNs`, `growthMs` is only the analyzer-side cost of
 starting a growth attempt), then `tiles{…}`, `rect{planned swept kpm solved frontal maxObliq}` and
-`previews{images features builtMs ready anticipation factor battery heat compute searchable tried guided solved}` when they apply (README: Diagnostics). The line is a diagnostic, not a stable format.
+`previews{images features builtMs ready anticipation factor battery heat compute searchable tried rectified guided solved}` when they apply (README: Diagnostics). The line is a diagnostic, not a stable format.
 
 #### `:models`
 

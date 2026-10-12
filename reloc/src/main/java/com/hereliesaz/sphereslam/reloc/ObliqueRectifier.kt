@@ -129,6 +129,34 @@ internal object ObliqueRectifier {
     }
 
     /**
+     * A rectification from the camera's [rotation] alone (page frame → camera, row-major), which the
+     * phone's sensors keep right while the target is lost: a virtual camera at the real one's centre,
+     * turned to face the wall square-on and upright (the page's up is the image's up). A pure turn
+     * needs no position, so the frame loses its tilt and roll however stale the prediction's position
+     * is; only the wall's distance stays unknown. The real optical axis lands on the principal point,
+     * and the focal length is the real one's × the cosine of the obliquity, so the wall keeps the scale
+     * it has there across the tilt. [priorCentre] (page frame, mm) only seeds [solve]. Null when the
+     * camera faces away from the wall or within [maxObliquityDeg] of along it.
+     */
+    fun rotationPlan(rotation: DoubleArray, k: FloatArray, priorCentre: DoubleArray, maxObliquityDeg: Double = 85.0): Plan? {
+        val r = rotation
+        // The optical axis is the rotation's third row (page frame); the wall faces +z.
+        val cosT = -r[8]
+        if (!cosT.isFinite() || cosT < kotlin.math.cos(Math.toRadians(maxObliquityDeg))) return null
+        // Square-on and upright: page x right → image right, page y up → image up, facing the wall.
+        val rv = doubleArrayOf(1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0)
+        // The real optical axis in the virtual camera (rv · axis).
+        val d = doubleArrayOf(r[6], -r[7], -r[8])
+        val fx = k[0] * cosT
+        val fy = k[1] * cosT
+        val kv = doubleArrayOf(fx, 0.0, k[2] - fx * d[0] / d[2], 0.0, fy, k[3] - fy * d[1] / d[2], 0.0, 0.0, 1.0)
+        val kk = doubleArrayOf(k[0].toDouble(), 0.0, k[2].toDouble(), 0.0, k[1].toDouble(), k[3].toDouble(), 0.0, 0.0, 1.0)
+        // virtual pixel → virtual ray → page direction (rvᵀ = rv) → real ray → real pixel.
+        val realFromVirtual = normalize(mul3(mul3(mul3(kk, r), rv), invert3(kv) ?: return null)) ?: return null
+        return Plan(realFromVirtual, Math.toDegrees(acos(cosT.coerceIn(-1.0, 1.0))), r.copyOf(), priorCentre.copyOf())
+    }
+
+    /**
      * Render the virtual image: every [width] × [height] (matcher-size) pixel of [dst] samples [src] at
      * its [Plan.realFromVirtual] image, bilinearly; outside the real frame it is mid-grey (no hard
      * border for the detector to fire on).

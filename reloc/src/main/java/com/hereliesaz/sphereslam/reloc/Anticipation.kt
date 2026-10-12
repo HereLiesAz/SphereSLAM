@@ -16,8 +16,10 @@ import android.os.PowerManager
  * from [KpmMatchSpeedConfig.anticipationNearestWidths] to
  * [KpmMatchSpeedConfig.anticipationFarthestWidths] target widths, so near and far views are
  * anticipated too. [roll] takes each of those views turned about its optical axis that many times,
- * evenly from upright (2: upright and upside down; 4: every quarter turn). KPM's features survive
- * about ±33° of turn, so 6 covers every turn. Previews per page:
+ * evenly from upright (2: upright and upside down; 4: every quarter turn); the sensors already turn
+ * the frame upright before a search ([KpmMatchSpeedConfig.previewRectify]), so 1 usually serves.
+ * KPM matches up to about 30° of viewing angle, so circles 30° apart (longitude 2: 30°, 60°) and
+ * meridians 60° apart (latitude 6) keep every view within reach of a preview. Previews per page:
  * `distance × (1 + latitude × longitude) × roll` ([views]).
  *
  * This is the maximum: the session throttles below it by [AnticipationThrottle].

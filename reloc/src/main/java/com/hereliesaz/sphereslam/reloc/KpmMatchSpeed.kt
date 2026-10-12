@@ -51,7 +51,10 @@ import kotlin.math.sqrt
  *    in view it fixes how the camera sees the page (tilt, side, turn); so the first search matches
  *    only the [previewNearest] previews nearest that view (sizes nearest the last lock's distance),
  *    each miss widens it by as many again, until all are searched. Nothing changes while the lock
- *    holds. The session throttles the resolution below its maximum by battery, heat and its own load
+ *    holds. With a prediction ([previewRectify]), the frame is first turned square-on and upright by
+ *    the phone's rotation alone (`ObliqueRectifier.rotationPlan`: no position needed), so the
+ *    previews nearest that view (by size, then the rest) are searched and the real pose solved
+ *    through the turn. The session throttles the resolution below its maximum by battery, heat and its own load
  *    ([anticipationThrottle]; [PhotosphereTrackingSession.anticipation]).
  * 6. **Reference scale** ([maxReferenceScale]): a reference much larger than the matched frame (a
  *    full-resolution camera still against a 320 × 240 match) puts the wall outside KPM's scale range;
@@ -90,6 +93,9 @@ import kotlin.math.sqrt
  *   resolution; the session's starting value ([PhotosphereTrackingSession.anticipationThrottle]).
  * @property previewNearest previews the first search matches, nearest the predicted view; each
  *   missed search adds as many again. 0 searches them all every time.
+ * @property previewRectify turn the frame square-on and upright by the predicted rotation before a
+ *   preview search (the sensors' rotation stays right while lost); without a prediction the frame is
+ *   searched as it is.
  * @property previewMaxFeatures most features KPM keeps per preview.
  * @property previewAtlasPages build previews for pages the atlas grows, not only captured references.
  * @property maxReferenceScale register a reference whose long side exceeds this many times the matched
@@ -114,11 +120,12 @@ data class KpmMatchSpeedConfig(
     val obliqueSearchAfterMisses: Int = 3,
     val obliqueSearchTiltsDeg: List<Float> = listOf(45f, -45f, 65f, -65f),
     val previewSearchAfterMisses: Int = 2,
-    val anticipationResolution: AnticipationResolution = AnticipationResolution(distance = 3, latitude = 8, longitude = 3),
+    val anticipationResolution: AnticipationResolution = AnticipationResolution(distance = 3, latitude = 6, longitude = 2),
     val anticipationNearestWidths: Float = 0.5f,
     val anticipationFarthestWidths: Float = 4f,
     val anticipationThrottle: AnticipationThrottle = AnticipationThrottle(),
     val previewNearest: Int = 4,
+    val previewRectify: Boolean = true,
     val previewMaxFeatures: Int = 600,
     val previewAtlasPages: Boolean = true,
     val maxReferenceScale: Float = 3f,

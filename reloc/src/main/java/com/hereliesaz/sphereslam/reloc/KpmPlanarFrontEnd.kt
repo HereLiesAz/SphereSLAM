@@ -250,15 +250,43 @@ internal class KpmPlanarFrontEnd(
         predicted: FloatArray?,
     ): PlanarMatchResult? {
         rect.previewTried++
-        val images = previewImages(p, allowed, predicted)
-        val matchLuma = if (small != null) {
-            val bytes = lumaBytes ?: ByteArray(luma.remaining()).also { luma.duplicate().get(it) }
-            KpmMatchScale.downsample(bytes, intrinsics.width, intrinsics.height, factor, small)
-        } else {
-            luma
-        }
         val wantCorrespondences = !flowUnavailable && lumaBytes != null && config.maxCorrespondences > 0
-        val pose = p.match(matchLuma.duplicate(), timestampNs, if (wantCorrespondences) config.maxCorrespondences else 0, images)
+        // Turned square-on and upright by the predicted rotation, when there is one.
+        val turn = predicted?.takeIf { config.previewRectify }?.let { rotationTurn(it) }
+        val matchLuma: ByteBuffer
+        val maxCorr: Int
+        if (turn != null) {
+            rect.previewRectified++
+            val frame = lumaBytes ?: ByteArray(luma.remaining()).also { luma.duplicate().get(it) }
+            val buffer = rectifiedBuffer ?: ByteBuffer.allocateDirect(matchIntrinsics.width * matchIntrinsics.height).also { rectifiedBuffer = it }
+            ObliqueRectifier.warp(frame, intrinsics.width, intrinsics.height, factor, matchIntrinsics.width, matchIntrinsics.height, turn, buffer)
+            matchLuma = buffer
+            maxCorr = maxOf(config.maxCorrespondences, MIN_RECTIFIED_CORRESPONDENCES)
+        } else {
+            matchLuma = if (small != null) {
+                val bytes = lumaBytes ?: ByteArray(luma.remaining()).also { luma.duplicate().get(it) }
+                KpmMatchScale.downsample(bytes, intrinsics.width, intrinsics.height, factor, small)
+            } else {
+                luma
+            }
+            maxCorr = if (wantCorrespondences) config.maxCorrespondences else 0
+        }
+        val images = previewImages(p, allowed, predicted, rectified = turn != null)
+        val found = p.match(matchLuma.duplicate(), timestampNs, maxCorr, images)
+        // Through the turn, the real pose is solved from the correspondences mapped back to real pixels.
+        val pose: PreviewPose? = when {
+            found == null -> null
+            turn == null -> PreviewPose(found.pageNo, found.cameraFromCanonical, found.reprojectionError, found.inlierCount, found.cameraFromPage3x4, found.correspondences)
+            else -> pageFrames[found.pageNo]?.let { frame ->
+                val prior = predicted?.let { ObliqueRectifier.pagePose(it, frame.canonicalFromPage, frame.centerXmm, frame.centerYmm) }
+                ObliqueRectifier.solve(turn, found.correspondences, matchK, prior?.first, prior?.let { (pr, pt) -> ObliqueRectifier.centreOf(pr, pt) })
+                    ?.let { s ->
+                        backend.cameraFromCanonical(found.pageNo, s.cameraFromPage3x4)?.let { view ->
+                            PreviewPose(found.pageNo, view, s.meanSquaredErrorPx, s.inliers, s.cameraFromPage3x4, s.correspondences)
+                        }
+                    }
+            }
+        }
         if (pose == null) {
             previewRing++
             missStreak++
@@ -289,19 +317,39 @@ internal class KpmPlanarFrontEnd(
         )
     }
 
+    /** A preview hit's pose, in the real matcher image's pixels. */
+    private class PreviewPose(
+        val pageNo: Int,
+        val cameraFromCanonical: FloatArray,
+        val reprojectionError: Float,
+        val inlierCount: Int,
+        val cameraFromPage3x4: FloatArray,
+        val correspondences: FloatArray,
+    )
+
+    /** The turn of the frame square-on and upright for the predicted pose's rotation, or null. */
+    private fun rotationTurn(predicted: FloatArray): ObliqueRectifier.Plan? {
+        val frame = planPage()?.let { pageFrames.getValue(it) } ?: return null
+        val (r, t) = ObliqueRectifier.pagePose(predicted, frame.canonicalFromPage, frame.centerXmm, frame.centerYmm) ?: return null
+        return ObliqueRectifier.rotationPlan(r, matchK, ObliqueRectifier.centreOf(r, t))
+    }
+
     /**
      * The previews to search on this frame, out of [allowed] (those within the anticipation
      * resolution): the [KpmMatchSpeedConfig.previewNearest] nearest the view the sensors predict, as
      * many again for each preview search missed since the last lock; once that covers [allowed], with
      * no prediction, or with the lever off, all of [allowed] — null when that is every preview held
-     * (the matcher over them all, pages included).
+     * (the matcher over them all, pages included). A [rectified] frame is square-on and upright, so
+     * its view is the square-on one at the predicted distance.
      */
-    private fun previewImages(p: PreviewMatcher, allowed: List<PreviewMatcher.View>, predicted: FloatArray?): List<PlanarImage>? {
+    private fun previewImages(p: PreviewMatcher, allowed: List<PreviewMatcher.View>, predicted: FloatArray?, rectified: Boolean): List<PlanarImage>? {
         val nearest = config.previewNearest
         val count = nearest.toLong() * (previewRing + 1L)
         if (nearest > 0 && predicted != null && count < allowed.size) {
             rect.previewGuided++
-            val ranked = PreviewMatcher.nearest(allowed, { page, referenceWidthPx -> predictedView(predicted, page, referenceWidthPx) }, lastLockedPage)
+            val ranked = PreviewMatcher.nearest(allowed, { page, referenceWidthPx ->
+                predictedView(predicted, page, referenceWidthPx)?.let { (r, scale) -> (if (rectified) ReferencePreviews.FRONTAL else r) to scale }
+            }, lastLockedPage)
             return ranked.take(count.toInt()).map { PlanarImage(it.pageNo, it.imageNo) }
         }
         if (allowed.size == p.views.size) return null
@@ -467,15 +515,17 @@ internal class KpmPlanarFrontEnd(
         var maxObliquity = 0.0
         var previewTried = 0
         var previewGuided = 0
+        var previewRectified = 0
         var previewSolved = 0
 
         /**
          * `previews{images=I features=F builtMs=B ready=R anticipation=E/M factor=X battery=B heat=H
-         * compute=C searchable=N tried=T guided=G solved=S}`: the previews matcher's reference images
-         * and features, the time spent building them, whether it is ready; the effective and maximum
-         * anticipation resolution, the throttle factor and the pressures behind it; the previews the
-         * anticipation allows; the full solves that searched it (G of them only the previews nearest
-         * the predicted view) and found a pose. Every window, so a report shows it was built.
+         * compute=C searchable=N tried=T rectified=Q guided=G solved=S}`: the previews matcher's
+         * reference images and features, the time spent building them, whether it is ready; the
+         * effective and maximum anticipation resolution, the throttle factor and the pressures behind
+         * it; the previews the anticipation allows; the full solves that searched it (Q of them on the
+         * frame turned square-on by the sensors' rotation, G only the previews nearest the predicted
+         * view) and found a pose. Every window, so a report shows it was built.
          */
         fun previewSummaryAndReset(p: PreviewMatcher): String {
             val out = "previews{images=${p.images} features=${p.features} builtMs=${p.buildMs} ready=${p.isReady} " +
@@ -485,8 +535,8 @@ internal class KpmPlanarFrontEnd(
                         "heat=${f(a.heatPressure)} compute=${f(a.computePressure)} "
                 } +
                 "searchable=${p.searchable().size} " +
-                "tried=$previewTried guided=$previewGuided solved=$previewSolved}"
-            previewTried = 0; previewGuided = 0; previewSolved = 0
+                "tried=$previewTried rectified=$previewRectified guided=$previewGuided solved=$previewSolved}"
+            previewTried = 0; previewRectified = 0; previewGuided = 0; previewSolved = 0
             return out
         }
 

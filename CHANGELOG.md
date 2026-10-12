@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The sensors turn the frame before a preview search.** With a prediction, the frame is turned
+  square-on and upright by the phone's rotation alone (`KpmMatchSpeedConfig.previewRectify`,
+  `ObliqueRectifier.rotationPlan`), which needs no position and so holds while the target is lost;
+  the real pose is solved through the turn. Previews then cover what the sensors get wrong. With
+  KPM's ~30° viewing-angle reach, the default anticipation resolution is now 3 × 6 × 2 × 1 (circles
+  at 30° and 60°, meridians 60° apart; 39 per page, from 75). `previews{}` gains `rectified`.
 - **Anticipation resolution.** Previews are now placed on half-spheres over the target:
   `AnticipationResolution(distance, latitude, longitude, roll)` (`KpmMatchSpeedConfig.anticipationResolution`,
   default 3 × 8 × 3 × 1). `latitude` meridians from the pole (square-on) to the equator, cut by
