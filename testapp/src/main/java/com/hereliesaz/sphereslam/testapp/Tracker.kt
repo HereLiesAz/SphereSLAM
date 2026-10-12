@@ -10,6 +10,7 @@ import com.hereliesaz.sphereslam.attitude.DeviceCameraRotation
 import com.hereliesaz.sphereslam.camera.CameraIntrinsicsEstimator
 import com.hereliesaz.sphereslam.camera.CaptureRotation
 import com.hereliesaz.sphereslam.camera.LumaFrameBufferPool
+import com.hereliesaz.sphereslam.reloc.AndroidDevicePressure
 import com.hereliesaz.sphereslam.reloc.CameraTimestampSource
 import com.hereliesaz.sphereslam.reloc.PhotosphereTrackingSession
 import java.util.concurrent.Executors
@@ -107,6 +108,12 @@ class Tracker(
             },
         ),
     )
+
+    init {
+        // Battery and heat throttle the anticipation, as they would in an app.
+        driver.session.devicePressure = AndroidDevicePressure(context)
+    }
+
     private val session get() = driver.session
 
     /** Live measures of this session since its first target ([RunMetrics]); read under its own lock. */

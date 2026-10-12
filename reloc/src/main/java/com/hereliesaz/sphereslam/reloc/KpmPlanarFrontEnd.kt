@@ -42,7 +42,7 @@ internal class KpmPlanarFrontEnd(
     /** Previews of every page in their own matcher, searched while the target is lost; null when off. */
     private val previews: PreviewMatcher? = sharedPreviews
         ?: if (config.previewSearchAfterMisses > 0) {
-            if (previewsFactory != null) previewsFactory.invoke(matchIntrinsics) else PreviewMatcher(backendFactory(matchIntrinsics), config)
+            if (previewsFactory != null) previewsFactory.invoke(matchIntrinsics) else PreviewMatcher(backendFactory(matchIntrinsics), config, matchIntrinsics)
         } else null
     private var previewTurn = 0
     // Preview searches missed since the last lock: each widens the nearest-first set (previewImages).
@@ -308,8 +308,8 @@ internal class KpmPlanarFrontEnd(
         return allowed.map { PlanarImage(it.pageNo, it.imageNo) }
     }
 
-    override fun setAnticipationResolution(resolution: Float) {
-        previews?.setResolution(resolution)
+    override fun setAnticipation(status: AnticipationStatus) {
+        previews?.setAnticipation(status)
     }
 
     /**
@@ -470,15 +470,21 @@ internal class KpmPlanarFrontEnd(
         var previewSolved = 0
 
         /**
-         * `previews{images=I features=F builtMs=B ready=R resolution=A searchable=N tried=T guided=G
-         * solved=S}`: the previews matcher's reference images and features, the time spent building
-         * them, whether it is ready, the anticipation resolution and the previews within it, the full
-         * solves that searched it (G of them only the previews nearest the predicted view) and found a
-         * pose. Every window, so a report shows it was built.
+         * `previews{images=I features=F builtMs=B ready=R anticipation=E/M factor=X battery=B heat=H
+         * compute=C searchable=N tried=T guided=G solved=S}`: the previews matcher's reference images
+         * and features, the time spent building them, whether it is ready; the effective and maximum
+         * anticipation resolution, the throttle factor and the pressures behind it; the previews the
+         * anticipation allows; the full solves that searched it (G of them only the previews nearest
+         * the predicted view) and found a pose. Every window, so a report shows it was built.
          */
         fun previewSummaryAndReset(p: PreviewMatcher): String {
             val out = "previews{images=${p.images} features=${p.features} builtMs=${p.buildMs} ready=${p.isReady} " +
-                "resolution=${String.format(java.util.Locale.ROOT, "%.2f", p.resolution)} searchable=${p.searchable().size} " +
+                p.anticipation.let { a ->
+                    fun f(v: Float) = String.format(java.util.Locale.ROOT, "%.2f", v)
+                    "anticipation=${a.effective}/${a.max} factor=${f(a.factor)} battery=${f(a.batteryPressure)} " +
+                        "heat=${f(a.heatPressure)} compute=${f(a.computePressure)} "
+                } +
+                "searchable=${p.searchable().size} " +
                 "tried=$previewTried guided=$previewGuided solved=$previewSolved}"
             previewTried = 0; previewGuided = 0; previewSolved = 0
             return out

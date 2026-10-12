@@ -2,16 +2,27 @@
 
 ## Unreleased
 
-- **Anticipation resolution.** `PhotosphereTrackingSession.anticipationResolution` (0–1, starting at
-  `KpmMatchSpeedConfig.anticipationResolution`, 1) throttles how many previews are calculated, at
-  runtime: the session builds and searches that share of each page's previews. They are ordered
-  farthest first (tilt and side first, turns weighted at a quarter, sizes by octave), so any share
-  covers the views evenly. They are built 4 at a time, each batch indexed once by the new
-  `KpmBridge.reindex` (`SphereSlamEngine.reindex`, `SphereSlamStandaloneSession.reindexReferences`),
-  and the resolution is read again between batches: raising it builds the rest, lowering it stops
-  building and searching above it. A batch whose last preview failed is now indexed too (before, a
-  failed last preview left its batch unindexed). `previews{}` gains `resolution` and `searchable`.
-  The test app gains an "Anticipation resolution" knob.
+- **Anticipation resolution.** Previews are now placed on half-spheres over the target:
+  `AnticipationResolution(distance, latitude, longitude)` (`KpmMatchSpeedConfig.anticipationResolution`,
+  default 3 × 8 × 3). `latitude` meridians from the pole (square-on) to the equator, cut by
+  `longitude` circles; a preview at the pole and at every cut, aimed at the core, none on the equator;
+  `distance` nested half-spheres from `anticipationNearestWidths` (0.5) to
+  `anticipationFarthestWidths` (4) target widths. Each preview is what the phone's camera would see
+  from there, cropped to its frame, so near views are large and strongly foreshortened and far ones
+  small. Replaces `previewTiltsDeg` and `previewScales`; turned square-on views
+  (`previewRotationStepDeg`) remain as an extra.
+- **The library throttles anticipation itself.** The resolution is a maximum
+  (`PhotosphereTrackingSession.anticipationResolution`); the session cuts it by battery, heat and its
+  own frame load, weighted by `AnticipationThrottle(battery, heat, compute)`
+  (`anticipationThrottle`), with battery and heat from `devicePressure`
+  (`AndroidDevicePressure(context)`: thermal headroom, discharge). It searches the largest nested
+  subset of the maximum that fits (`AnticipationDecimation`), lower at once and higher after 10 s, so
+  throttling builds nothing and lifting it reuses what was built. `anticipation` reports the
+  effective resolution and the pressures; all apply from the next frame. Previews are built 4 at a
+  time, farthest first, each batch indexed once by the new `KpmBridge.reindex`
+  (`SphereSlamEngine.reindex`, `SphereSlamStandaloneSession.reindexReferences`); a batch whose last
+  preview failed is now indexed too. `previews{}` gains the anticipation, factor and pressures. The
+  test app gains Anticipation knobs and reads the phone's battery and heat.
 - **Previews.** Each reference (and, with `previewAtlasPages`, each grown page) is rendered tilted in
   perspective, resized and turned, with OpenCV, and each preview joins KPM as another image of its
   page with its features' millimetres mapped back through the warp

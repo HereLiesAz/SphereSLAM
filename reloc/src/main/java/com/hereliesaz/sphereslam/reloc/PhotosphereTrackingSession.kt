@@ -536,21 +536,49 @@ class PhotosphereTrackingSession internal constructor(
     @Volatile
     var displayPosePredictor: DisplayPosePredictor? = null
 
+    private val governor = AnticipationGovernor(
+        config.matchSpeed.anticipationResolution,
+        config.matchSpeed.anticipationThrottle,
+        null,
+    )
+
     /**
-     * Anticipation resolution: the share (0–1) of each page's previews
-     * ([KpmMatchSpeedConfig.previewSearchAfterMisses]) the session calculates and searches. Starts at
-     * [KpmMatchSpeedConfig.anticipationResolution]; a change applies from the next frame without a
-     * restart. Raising it renders and indexes the missing previews in the background, a few at a
-     * time; lowering it stops at the next few and stops searching the previews above it (KPM keeps
-     * those it has). Previews are ordered so any share covers the views evenly: each next one is the
-     * view farthest from those before it. 0 calculates none. Safe to set from any thread.
+     * The most the session anticipates the target's appearance ([AnticipationResolution]: half-spheres
+     * of previews). Starts at [KpmMatchSpeedConfig.anticipationResolution]; a change applies from the
+     * next frame, without a restart: missing previews are rendered and indexed in the background, a
+     * few at a time. Safe to set from any thread.
      */
-    @Volatile
-    var anticipationResolution: Float = config.matchSpeed.anticipationResolution
+    var anticipationResolution: AnticipationResolution
+        get() = governor.max
         set(value) {
-            require(value.isFinite())
-            field = value.coerceIn(0f, 1f)
+            governor.max = value
         }
+
+    /**
+     * How far battery, heat and the session's own load throttle [anticipationResolution]. The session
+     * re-reads the pressures every 2 s and searches the subset of the maximum's views that fits
+     * ([AnticipationDecimation]: every other meridian, circle or half-sphere, and so on): lower at
+     * once, higher after it has fitted for 10 s. Starts at [KpmMatchSpeedConfig.anticipationThrottle].
+     * Safe to set from any thread.
+     */
+    var anticipationThrottle: AnticipationThrottle
+        get() = governor.throttle
+        set(value) {
+            governor.throttle = value
+        }
+
+    /**
+     * Where battery and heat pressure come from: [AndroidDevicePressure] for the device's own; null
+     * (the default) for none, so only the session's load throttles. Safe to set from any thread.
+     */
+    var devicePressure: DevicePressureSource?
+        get() = governor.source
+        set(value) {
+            governor.source = value
+        }
+
+    /** The resolution the session currently anticipates at, and the pressures that set it. */
+    val anticipation: AnticipationStatus get() = governor.status
 
     /**
      * Process one frame. After [close] or a terminal ([TrackingFailureSeverity.FATAL]) failure this
@@ -559,10 +587,13 @@ class PhotosphereTrackingSession internal constructor(
     @Synchronized
     fun onFrame(frame: Frame): FrameResult {
         if (closed || fatal) return FrameResult(null, stateMachine.state, null, false, null, null, null, null)
+        val startNs = elapsedRealtimeNanos()
         return try {
             process(frame).also { result ->
                 publishToPredictor(frame, result.pose)
                 emitMetricsIfDue()
+                // The session's own load, for the anticipation throttle.
+                governor.onFrame((elapsedRealtimeNanos() - startNs) / 1e6f, frame.timestampNs)
             }
         } catch (t: Throwable) {
             if (t is VirtualMachineError) throw t
@@ -610,7 +641,7 @@ class PhotosphereTrackingSession internal constructor(
             if (event.severity != TrackingFailureSeverity.RECOVERABLE) throw t
             return suspendPrecisionLayer(t, event, cameraFromMap, projection)
         } ?: return FrameResult(null, stateMachine.state, cameraFromMap, false, null, null, null, projection)
-        active.setAnticipationResolution(anticipationResolution)
+        active.setAnticipation(governor.update(elapsedRealtimeNanos() / 1_000_000L))
         val direct = directFrame(frame.luma)
         val matchStartNs = elapsedRealtimeNanos()
         timing.setup.add(matchStartNs - setupStartNs)
@@ -1321,8 +1352,8 @@ internal interface PlanarFrontEnd : AutoCloseable {
     /** A fragment for the session's periodic diagnostic line (counters since the last call), or null. */
     fun diagnosticsAndReset(): String? = null
 
-    /** [PhotosphereTrackingSession.anticipationResolution], applied every frame (unchanged is free). */
-    fun setAnticipationResolution(resolution: Float) {}
+    /** The anticipation the session currently allows, applied every frame (unchanged is free). */
+    fun setAnticipation(status: AnticipationStatus) {}
 }
 
 @ExperimentalSphereSlamRelocApi

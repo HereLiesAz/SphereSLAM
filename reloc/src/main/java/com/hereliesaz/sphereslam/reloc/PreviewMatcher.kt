@@ -2,6 +2,7 @@ package com.hereliesaz.sphereslam.reloc
 
 import com.hereliesaz.sphereslam.PlanarImage
 import com.hereliesaz.sphereslam.PlanarMatchRequest
+import com.hereliesaz.sphereslam.camera.CameraIntrinsics
 import java.nio.ByteBuffer
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
@@ -10,18 +11,19 @@ import java.util.concurrent.atomic.AtomicInteger
 /**
  * A second KPM matcher holding every page and its [ReferencePreviews]: a search that needs no
  * prediction of where the camera is. Kept apart from the live matcher because KPM's matcher checks
- * every reference image on each query, so a few dozen previews per page in the live matcher would
- * slow every solve; this one runs only while the target is lost.
+ * every reference image on each query, so many previews per page in the live matcher would slow every
+ * solve; this one runs only while the target is lost.
  *
  * Built off the camera thread: [addPage] queues the page and its previews on [executor] and returns.
  * [match] answers only once a page is registered and no build is running (a build re-indexes KPM,
  * which a query must not see half-done), so it never waits on one. Shared by a front end and its
  * forks ([retain] / [release]); the last release closes it.
  *
- * How many previews: [resolution] (anticipation resolution, 0–1) of each page's plans, in
- * [ReferencePreviews.prioritized] order so any share covers the views evenly. Previews are built
- * [BATCH] at a time, each batch indexed once, and the resolution is read again between batches:
- * raising it builds the rest, lowering it stops building and narrows [searchable] at once.
+ * Which previews: those of the session's [AnticipationStatus] — the maximum [AnticipationResolution]
+ * thinned by its [AnticipationDecimation] — rendered for [camera] (the matched image). They are built
+ * [BATCH] at a time in [ReferencePreviews.prioritized] order, each batch indexed once, re-reading the
+ * anticipation between batches; [searchable] narrows at once when it is throttled. A throttled set is
+ * a subset of the maximum's, so throttling builds nothing and lifting it reuses what was built.
  *
  * Each preview's [View] says which camera view it stands for, so a search can start with the previews
  * nearest the view the sensors predict ([nearest]) and match only those ([match] with `images`).
@@ -30,6 +32,7 @@ import java.util.concurrent.atomic.AtomicInteger
 internal class PreviewMatcher(
     private val backend: KpmMatcherBackend,
     private val config: KpmMatchSpeedConfig,
+    private val camera: CameraIntrinsics,
     private val executor: Executor = Executors.newSingleThreadExecutor { r -> Thread(r, "sphereslam-previews").apply { isDaemon = true } },
     private val useOpenCv: Boolean = true,
 ) {
@@ -38,9 +41,12 @@ internal class PreviewMatcher(
     @Volatile private var built = false
     @Volatile private var closed = false
 
-    // A registered page and how far its previews are built (the executor thread's alone).
-    private class Source(val pageNo: Int, val luma: ByteArray, val width: Int, val height: Int, val plans: List<ReferencePreviews.Plan>) {
-        var next = 0
+    // A registered page, its previews' plans for the current maximum and which are built (the
+    // executor thread's alone).
+    private class Source(val pageNo: Int, val luma: ByteArray, val width: Int, val height: Int) {
+        var plansFor: AnticipationResolution? = null
+        var plans: List<ReferencePreviews.Plan> = emptyList()
+        val built = HashSet<String>()
         var nextImage = 1
     }
     private val sources = ArrayList<Source>()
@@ -48,7 +54,8 @@ internal class PreviewMatcher(
     /**
      * A preview held: KPM image [imageNo] of page [pageNo], showing the page as a camera at
      * [cameraFromPage] would see it ([ReferencePreviews.Plan]), [scale] preview pixels per pixel of the
-     * [referenceWidthPx]-wide reference. [rank] is its place among the page's [ofPage] plans.
+     * [referenceWidthPx]-wide reference. [site] places it on the half-spheres of [max] (null: not a
+     * view of the current maximum, never searched).
      */
     class View(
         val pageNo: Int,
@@ -57,16 +64,17 @@ internal class PreviewMatcher(
         val cameraFromPage: DoubleArray,
         val scale: Double,
         val referenceWidthPx: Int,
-        val rank: Int = 0,
-        val ofPage: Int = 1,
+        val site: ReferencePreviews.Site? = null,
+        val max: AnticipationResolution? = null,
     )
 
     /** Every preview held (not the pages themselves), replaced whole after each batch. */
     @Volatile var views: List<View> = emptyList()
         private set
 
-    /** Anticipation resolution: the share (0–1) of each page's previews built and searched. */
-    @Volatile var resolution: Float = config.anticipationResolution
+    /** The anticipation in force: the maximum and how it is thinned. */
+    @Volatile var anticipation: AnticipationStatus =
+        AnticipationStatus(config.anticipationResolution, AnticipationDecimation.FULL, 1f, 0f, 0f, 0f)
         private set
 
     /** Reference images held (pages and previews) and their features, for the diagnostic. */
@@ -80,10 +88,10 @@ internal class PreviewMatcher(
 
     val isReady: Boolean get() = built && building.get() == 0 && !closed
 
-    /** The previews within [resolution]: the first share of each page's, in priority order. */
+    /** The previews the [anticipation] allows. */
     fun searchable(): List<View> {
-        val r = resolution
-        return views.filter { it.rank < share(r, it.ofPage) }
+        val a = anticipation
+        return views.filter { v -> v.max == a.max && v.site != null && a.decimation.keeps(v.site, a.max) }
     }
 
     fun retain(): PreviewMatcher = also { users.incrementAndGet() }
@@ -98,9 +106,9 @@ internal class PreviewMatcher(
 
     /**
      * Queues page [pageNo] ([luma], [width] × [height], the copy the live matcher registered) and its
-     * previews. [luma] is copied (and kept, to build more previews when [resolution] rises); the page
-     * registers with the same geometry and placement as the live matcher's, so the two agree on every
-     * pose.
+     * previews. [luma] is copied (and kept, to build more previews as the anticipation allows); the
+     * page registers with the same geometry and placement as the live matcher's, so the two agree on
+     * every pose.
      */
     fun addPage(
         luma: ByteArray,
@@ -118,13 +126,22 @@ internal class PreviewMatcher(
         }
     }
 
-    /** Sets [resolution] (clamped to 0–1): more previews are built in the background, fewer searched at once. */
-    fun setResolution(value: Float) {
-        val v = value.coerceIn(0f, 1f)
-        if (v == resolution) return
-        val raised = v > resolution
-        resolution = v
-        if (raised) schedule { extend() }
+    /**
+     * Applies [status]: a new maximum or a wider subset builds the missing previews in the background;
+     * a narrower one (further down [AnticipationDecimation.chain]) only narrows [searchable], at once.
+     */
+    fun setAnticipation(status: AnticipationStatus) {
+        val old = anticipation
+        if (status.max == old.max && status.decimation == old.decimation) {
+            anticipation = status // the pressures, for the diagnostic
+            return
+        }
+        anticipation = status
+        // A lower subset of the same chain needs nothing new; anything else may.
+        val lower = status.max == old.max && AnticipationDecimation.chain(status.max).let { c ->
+            c.indexOf(status.decimation) >= c.indexOf(old.decimation) && c.indexOf(old.decimation) >= 0
+        }
+        if (!lower) schedule { extend() }
     }
 
     private fun schedule(work: () -> Unit) {
@@ -153,31 +170,51 @@ internal class PreviewMatcher(
         } catch (_: Exception) {
             return false // a featureless page: no previews either
         }
-        val plans = ReferencePreviews.prioritized(ReferencePreviews.plans(width, height, config)) { plan, r, scale ->
-            priorityCost(plan.cameraFromPage, plan.scale, r, scale)
-        }
-        sources += Source(pageNo, luma, width, height, plans)
+        sources += Source(pageNo, luma, width, height)
         buildMs += (System.nanoTime() - t0) / 1_000_000L
         built = true
         return true
     }
 
-    /** Builds previews up to [resolution], [BATCH] at a time, each batch indexed once. */
+    /** [src]'s plans for [max], in priority order; its held views re-placed on them by label. */
+    private fun planFor(src: Source, max: AnticipationResolution) {
+        if (src.plansFor == max) return
+        src.plansFor = max
+        src.plans = ReferencePreviews.prioritized(ReferencePreviews.plans(src.width, src.height, camera, config, max)) { plan, r, scale ->
+            priorityCost(plan.cameraFromPage, plan.scale, r, scale)
+        }
+        val byLabel = src.plans.associateBy { it.label }
+        views = views.map { v ->
+            if (v.pageNo != src.pageNo) v else View(v.pageNo, v.imageNo, v.label, v.cameraFromPage, v.scale, v.referenceWidthPx, byLabel[v.label]?.site, max)
+        }
+    }
+
+    /** Builds the previews the anticipation allows, [BATCH] at a time, each batch indexed once. */
     private fun extend() {
         while (!closed) {
-            val r = resolution
-            val src = sources.firstOrNull { it.next < share(r, it.plans.size) } ?: return
+            val a = anticipation
+            var batch: List<ReferencePreviews.Plan> = emptyList()
+            var src: Source? = null
+            for (s in sources) {
+                planFor(s, a.max)
+                val pending = s.plans.filter { it.label !in s.built && a.decimation.keeps(it.site, a.max) }
+                if (pending.isNotEmpty()) {
+                    batch = pending.take(BATCH)
+                    src = s
+                    break
+                }
+            }
+            val page = src ?: return
             val t0 = System.nanoTime()
-            val end = minOf(src.next + BATCH, share(r, src.plans.size))
             val added = ArrayList<View>()
             var full = false
-            for (i in src.next until end) {
+            for (plan in batch) {
                 if (closed) return
-                val plan = src.plans[i]
-                val preview = ReferencePreviews.render(src.luma, src.width, src.height, plan, useOpenCv)
+                page.built += plan.label // tried: a featureless view is not retried
+                val preview = ReferencePreviews.render(page.luma, page.width, page.height, plan, useOpenCv)
                 val buf = ByteBuffer.allocateDirect(preview.luma.size).apply { put(preview.luma); flip() }
-                val imageNo = src.nextImage++
-                val n = backend.addView(buf, preview.width, preview.height, src.pageNo, imageNo, preview.pageFromView, config.previewMaxFeatures, reindex = false)
+                val imageNo = page.nextImage++
+                val n = backend.addView(buf, preview.width, preview.height, page.pageNo, imageNo, preview.pageFromView, config.previewMaxFeatures, reindex = false)
                 if (n == ERROR_FULL) {
                     full = true
                     break
@@ -185,17 +222,16 @@ internal class PreviewMatcher(
                 if (n > 0) {
                     images++
                     features += n
-                    added += View(src.pageNo, imageNo, plan.label, plan.cameraFromPage, plan.scale, src.width, i, src.plans.size)
+                    added += View(page.pageNo, imageNo, plan.label, plan.cameraFromPage, plan.scale, page.width, plan.site, a.max)
                 }
             }
-            src.next = end
             // Index the batch once, whichever of its previews succeeded.
             if (added.isNotEmpty()) backend.reindex()
             views = views + added
             buildMs += (System.nanoTime() - t0) / 1_000_000L
             if (full) {
                 // KPM holds its limit of images: build no more, for any page.
-                sources.forEach { it.next = it.plans.size }
+                sources.forEach { s -> s.built += s.plans.map { it.label } }
                 return
             }
         }
@@ -215,15 +251,11 @@ internal class PreviewMatcher(
         /** KPM refused: the session holds its limit of reference images. */
         private const val ERROR_FULL = -8
 
-        /** Previews built and indexed together; [resolution] is read again between batches. */
+        /** Previews built and indexed together; the anticipation is read again between batches. */
         const val BATCH = 4
 
         /** Degrees of view angle that weigh as much as a doubling of size in [nearest]. */
         const val DEG_PER_OCTAVE = 30.0
-
-        /** How many of [count] plans [resolution] keeps. */
-        fun share(resolution: Float, count: Int): Int =
-            kotlin.math.ceil(resolution.toDouble() * count - 1e-6).toInt().coerceIn(0, count)
 
         /**
          * How far apart two views are: the angle between their rotations, plus [DEG_PER_OCTAVE] per

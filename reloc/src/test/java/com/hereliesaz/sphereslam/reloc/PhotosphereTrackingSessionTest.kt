@@ -80,10 +80,10 @@ class PhotosphereTrackingSessionTest {
             verdicts += accepted
         }
 
-        val resolutions = mutableListOf<Float>()
+        val anticipations = mutableListOf<AnticipationStatus>()
 
-        override fun setAnticipationResolution(resolution: Float) {
-            resolutions += resolution
+        override fun setAnticipation(status: AnticipationStatus) {
+            anticipations += status
         }
 
         override fun fork(): PlanarFrontEnd? {
@@ -231,18 +231,30 @@ class PhotosphereTrackingSessionTest {
     }
 
     @Test
-    fun `anticipation resolution starts from the config and a change reaches the matcher on the next frame`() {
-        val s = session(PhotosphereTrackingSession.Config(matchSpeed = KpmMatchSpeedConfig(anticipationResolution = 0.5f)))
-        assertEquals(0.5f, s.anticipationResolution)
+    fun `the anticipation reaches the matcher every frame, throttled by device pressure`() {
+        val start = AnticipationResolution(2, 4, 1)
+        val s = session(PhotosphereTrackingSession.Config(matchSpeed = KpmMatchSpeedConfig(anticipationResolution = start)))
+        assertEquals(start, s.anticipationResolution)
         s.onFrame(frame(yaw(0.0)))
         s.updatePrecisionLayer(reference)
         s.onFrame(frame(yaw(0.0)))
-        assertEquals(0.5f, fronts.single().resolutions.last())
-        s.anticipationResolution = 0.2f
+        assertEquals(start, fronts.single().anticipations.last().max)
+        assertEquals(AnticipationDecimation.FULL, fronts.single().anticipations.last().decimation)
+        // A new maximum applies on the next frame.
+        s.anticipationResolution = AnticipationResolution(1, 8, 2)
         s.onFrame(frame(yaw(0.0)))
-        assertEquals(0.2f, fronts.single().resolutions.last())
-        s.anticipationResolution = 7f
-        assertEquals(1f, s.anticipationResolution)
+        assertEquals(AnticipationResolution(1, 8, 2), fronts.single().anticipations.last().max)
+        // A hot device throttles it to nothing at the next reading.
+        s.devicePressure = DevicePressureSource { DevicePressure(battery = 0f, heat = 1f) }
+        advance(2_500)
+        s.onFrame(frame(yaw(0.0)))
+        assertEquals(AnticipationDecimation.NONE, fronts.single().anticipations.last().decimation)
+        assertEquals(1f, s.anticipation.heatPressure)
+        // Heat ignored: full again once relief has held.
+        s.anticipationThrottle = AnticipationThrottle(battery = 0f, heat = 0f, compute = 0f)
+        advance(2_500); s.onFrame(frame(yaw(0.0)))
+        advance(10_500); s.onFrame(frame(yaw(0.0)))
+        assertEquals(AnticipationDecimation.FULL, s.anticipation.decimation)
     }
 
     @Test

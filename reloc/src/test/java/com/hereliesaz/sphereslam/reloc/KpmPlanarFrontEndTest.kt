@@ -345,8 +345,8 @@ class KpmPlanarFrontEndTest {
     @Test
     fun `once lost every other full solve searches the previews and a hit relocks there`() {
         val pb = FakeBackend(k).apply { answer = { null } }
-        val matcher = PreviewMatcher(pb, KpmMatchSpeedConfig(), java.util.concurrent.Executor { it.run() }, useOpenCv = false)
-        val fe = frontEnd(KpmMatchSpeedConfig(flowTracking = false, obliqueSearchAfterMisses = 0), previews = { matcher })
+        lateinit var matcher: PreviewMatcher
+        val fe = frontEnd(KpmMatchSpeedConfig(flowTracking = false, obliqueSearchAfterMisses = 0), previews = { mk -> previewsFor(pb, mk).also { matcher = it } })
         fe.addPage(ByteBuffer.allocateDirect(400 * 300), 400, 300, 1f, false, 0, RigidMath.identity())
         assertTrue(matcher.isReady)
         val live = backend!!
@@ -362,7 +362,7 @@ class KpmPlanarFrontEndTest {
         pb.answer = { solve(0) }
         val r = fe.match(input(40))!!
         assertEquals(VisualMatchMethod.KPM_PREVIEW, r.method)
-        assertTrue(fe.diagnosticsAndReset()!!.contains("previews{images=27 features=") )
+        assertTrue(fe.diagnosticsAndReset()!!.contains("previews{images=${matcher.views.size + 1} features="))
         // A hit ends the search: back to direct solves.
         val before = pb.calls.size
         fe.match(input(50))
@@ -372,10 +372,10 @@ class KpmPlanarFrontEndTest {
     @Test
     fun `a lost search starts with the previews nearest the predicted view and widens on each miss`() {
         val pb = FakeBackend(k).apply { answer = { null } }
-        val matcher = PreviewMatcher(pb, KpmMatchSpeedConfig(), java.util.concurrent.Executor { it.run() }, useOpenCv = false)
+        lateinit var matcher: PreviewMatcher
         val fe = frontEnd(
             KpmMatchSpeedConfig(flowTracking = false, obliqueSearchAfterMisses = 0, obliqueRectificationDeg = 0f),
-            previews = { matcher },
+            previews = { mk -> previewsFor(pb, mk).also { matcher = it } },
         )
         val g = fe.addPage(ByteBuffer.allocateDirect(400 * 300), 400, 300, 1f, false, 0, RigidMath.identity().also { it[12] = 0.4f }).geometry
         val centre = doubleArrayOf(g.centerXmm.toDouble(), g.centerYmm.toDouble(), 0.0)
@@ -399,10 +399,11 @@ class KpmPlanarFrontEndTest {
         assertNull(fe.match(input(t, predicted))); t += 10
         assertEquals(guided, pb.imageCalls.size)
         assertEquals(1, pb.calls.size) // all of them
-        // The first set was the side tilts on the camera's side, nearest first.
+        // The first set was the cuts on the camera's side (meridian 0), nearest first: 67.5° on the
+        // half-sphere nearest the predicted distance (1.5 widths: 1.41).
         val labels = pb.imageCalls.first().map { im -> matcher.views.single { it.imageNo == im.imageNo }.label }
-        assertEquals("tilt side 60°", labels.first().replace("-", ""))
-        assertTrue(labels.toString(), labels.take(2).all { it.startsWith("tilt side") })
+        assertEquals("1.414w tilt 67.5° toward 0°", labels.first())
+        assertTrue(labels.toString(), labels.take(2).all { it.endsWith("toward 0°") })
         assertTrue(fe.diagnosticsAndReset()!!.contains("guided=$guided "))
         // A hit resets the search: the next one starts from the nearest n again.
         pb.answer = { solve(0) }
@@ -418,26 +419,32 @@ class KpmPlanarFrontEndTest {
     }
 
     @Test
-    fun `the anticipation resolution limits the previews a lost search uses, 0 none`() {
+    fun `the anticipation limits the previews a lost search uses, none when throttled out`() {
         val pb = FakeBackend(k).apply { answer = { null } }
-        val matcher = PreviewMatcher(pb, KpmMatchSpeedConfig(), java.util.concurrent.Executor { it.run() }, useOpenCv = false)
-        val fe = frontEnd(KpmMatchSpeedConfig(flowTracking = false, obliqueSearchAfterMisses = 0), previews = { matcher })
+        lateinit var matcher: PreviewMatcher
+        val fe = frontEnd(KpmMatchSpeedConfig(flowTracking = false, obliqueSearchAfterMisses = 0), previews = { mk -> previewsFor(pb, mk).also { matcher = it } })
         fe.addPage(ByteBuffer.allocateDirect(400 * 300), 400, 300, 1f, false, 0, RigidMath.identity())
         backend!!.answer = { null }
-        fe.setAnticipationResolution(0.25f)
+        val max = KpmMatchSpeedConfig().anticipationResolution
+        val throttled = AnticipationDecimation.chain(max)[3]
+        fe.setAnticipation(AnticipationStatus(max, throttled, 0.3f, 0f, 1f, 0f))
         var t = 0L
         repeat(3) { fe.match(input(t)); t += 10 } // two direct misses, then the previews
         // No prediction: every searchable preview, named, since not all the held ones are.
         assertEquals(0, pb.calls.size)
         assertEquals(matcher.searchable().map { PlanarImage(it.pageNo, it.imageNo) }, pb.imageCalls.single())
-        assertEquals(7, pb.imageCalls.single().size)
-        // At 0 the previews are not searched: direct solves only.
-        fe.setAnticipationResolution(0f)
+        assertTrue(pb.imageCalls.single().size < matcher.views.size)
+        // Throttled to nothing: the previews are not searched, direct solves only.
+        fe.setAnticipation(AnticipationStatus(max, AnticipationDecimation.NONE, 0f, 0f, 1f, 0f))
         repeat(4) { fe.match(input(t)); t += 10 }
         assertEquals(1, pb.imageCalls.size)
         assertEquals(0, pb.calls.size)
-        assertTrue(fe.diagnosticsAndReset()!!.contains("resolution=0.00 searchable=0"))
+        assertTrue(fe.diagnosticsAndReset()!!.contains("anticipation=0d×0lat×0lon/3d×8lat×3lon factor=0.00 battery=0.00 heat=1.00 compute=0.00 searchable=0"))
     }
+
+    /** A previews matcher over [pb] for the front end's match intrinsics, built at once. */
+    private fun previewsFor(pb: FakeBackend, mk: CameraIntrinsics) =
+        PreviewMatcher(pb, KpmMatchSpeedConfig(), mk, java.util.concurrent.Executor { it.run() }, useOpenCv = false)
 
     @Test
     fun `previews off builds none`() {
