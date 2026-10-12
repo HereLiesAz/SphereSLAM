@@ -116,4 +116,92 @@ class ChecklistTest {
         assertTrue(json.contains("\"log\":\"a\\tb\""))
         assertEquals(c.checks.size, Regex("\"status\":").findAll(json).count())
     }
+
+    @Test
+    fun `off-wall needs the target out of view, not a relock still confirming`() {
+        val c = Checklist()
+        c.observe(sample(0L, "LOCKED", "KPM", "KPM_FULL"))
+        // A photosphere pose while relocking, the target only just gone: not off the wall yet.
+        c.observe(sample(500L, "REACQUIRING", "PHOTOSPHERE"))
+        c.observe(sample(1_000L, "LOCKED", "PHOTOSPHERE"))
+        assertEquals(Status.UNTESTED, c["off_wall"].status)
+        c.observe(sample(1_600L, "REACQUIRING", "HELD"))
+        assertEquals(Status.PASS, c["off_wall"].status)
+    }
+
+    @Test
+    fun `a new capture starts the lock history over`() {
+        val c = Checklist()
+        c.observe(sample(0L, "LOCKED", "KPM", "KPM_FULL"))
+        c.onCapture(20_000L, 0f, "lock_wall")
+        // First lock on the new target: not a relock after being away.
+        c.observe(sample(21_000L, "LOCKED", "KPM", "KPM_FULL"))
+        assertEquals(Status.UNTESTED, c["relock_after_away"].status)
+        assertEquals(Status.PASS, c["lock_wall"].status)
+    }
+
+    @Test
+    fun `match speed stops collecting once graded and counts locked frames only`() {
+        val c = Checklist()
+        repeat(50) { c.observe(sample(it.toLong(), "REACQUIRING", "KPM", "KPM_FULL", matchMs = 90f)) }
+        assertTrue(c.progress("match_speed", 0L)!!.startsWith("0 of"))
+        repeat(Checklist.MATCH_SAMPLES) { c.observe(sample(100L + it, "LOCKED", "KPM", "FLOW", matchMs = 8f).copy(frameMs = 50f)) }
+        // Matching fits, the whole frame doesn't.
+        assertEquals(Status.FAIL, c["match_speed"].status)
+        assertTrue(c["match_speed"].evidence, c["match_speed"].evidence.contains("whole frame p50 50.0 ms"))
+    }
+
+    @Test
+    fun `tile localization reported disabled fails its check`() {
+        val c = Checklist()
+        c.onDiagnostic("… tiles{stations=0 active=0 tiles=0 anchored=0 landmarks=0 depthPoints=0 rotFixes=0 poseFixes=0 disabled}")
+        assertEquals(Status.FAIL, c["tile_fixes"].status)
+    }
+
+    @Test
+    fun `the attitude sensor passes only once it reports medium accuracy or better`() {
+        val c = Checklist()
+        c.onAttitude(true, null)
+        c.onAttitude(true, 1)
+        assertEquals(Status.UNTESTED, c["attitude_sensor"].status)
+        assertTrue(c.progress("attitude_sensor", 0L)!!.contains("figure-8"))
+        c.onAttitude(true, 2)
+        assertEquals(Status.PASS, c["attitude_sensor"].status)
+        val none = Checklist()
+        none.onAttitude(false, null)
+        assertEquals(Status.FAIL, none["attitude_sensor"].status)
+    }
+
+    @Test
+    fun `the session check passes after a clean first capture and fails on a missing library`() {
+        val ok = Checklist()
+        ok.onCapture(0L, 0f, "lock_wall")
+        ok.observe(sample(1_000L))
+        assertEquals(Status.UNTESTED, ok["native_session"].status)
+        ok.observe(sample(2_500L))
+        assertEquals(Status.PASS, ok["native_session"].status)
+        val broken = Checklist()
+        broken.onCapture(0L, 0f, "lock_wall")
+        broken.onFailure("NATIVE_LIBRARY_UNAVAILABLE", "dlopen failed")
+        broken.observe(sample(3_000L))
+        assertEquals(Status.FAIL, broken["native_session"].status)
+    }
+
+    @Test
+    fun `a timeout fails only what is still undecided`() {
+        val c = Checklist()
+        c.set("bridge", Status.PASS, "bridged")
+        c.timeOut("bridge", "not seen")
+        c.timeOut("rectified", "not seen in 120 s")
+        assertEquals(Status.PASS, c["bridge"].status)
+        assertEquals(Status.FAIL, c["rectified"].status)
+    }
+
+    @Test
+    fun `stillness is a rate, so a fast frame rate can't fake it`() {
+        val c = Checklist()
+        // 0.4° per 10 ms frame is 40°/s: moving, however small each step.
+        for (i in 0..400) c.observe(sample(i * 10L, elevation = -89.5f, facing = 0f, step = 0.4f))
+        assertEquals(Status.UNTESTED, c["pole_facing"].status)
+    }
 }

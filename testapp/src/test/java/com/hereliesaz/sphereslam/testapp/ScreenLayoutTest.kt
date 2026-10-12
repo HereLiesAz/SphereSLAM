@@ -76,7 +76,7 @@ class ScreenLayoutTest {
     }
 
     private fun assertClear(screen: TestScreen, bottomPx: Int) {
-        val (clear, evidence) = screen.layoutCheck()!!
+        val (clear, evidence) = screen.layoutCheck(android.graphics.Rect(0, statusPx, 0, bottomPx))!!
         assertTrue(evidence, clear)
         assertEquals(evidence, statusPx, screen.root.paddingTop)
         assertEquals(evidence, bottomPx, screen.root.paddingBottom)

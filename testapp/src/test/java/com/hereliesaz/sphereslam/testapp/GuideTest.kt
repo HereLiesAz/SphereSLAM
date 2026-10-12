@@ -27,10 +27,12 @@ class GuideTest {
         val device = g.steps[0]
         assertEquals(Status.UNTESTED, g.statusOf(device, c))
         c.onLayout(true, "ok")
-        c.onNativeEngine(true, "loaded")
-        c.onAttitude(available = true, reliable = true)
+        c.onNativePackaged(true, "lib/arm64-v8a/libsphereslam.so present")
+        c.onAttitude(available = true, accuracy = null)
         assertEquals(Status.UNTESTED, g.statusOf(device, c))
-        c.onLens(null, 1.5f, "no correction")
+        c.onAttitude(available = true, accuracy = 3)
+        assertEquals(Status.UNTESTED, g.statusOf(device, c))
+        c.onLens("FAST", 1.5f, "correction FAST")
         assertEquals(Status.PASS, g.statusOf(device, c))
         c.onLayout(false, "overlap")
         assertEquals(Status.FAIL, g.statusOf(device, c))
@@ -123,8 +125,14 @@ class GuideTest {
         assertNull(g.current)
     }
 
-    private fun tracking(state: String?, fatal: String? = null, problem: String? = null, problemAgeMs: Long = Long.MAX_VALUE, sinceLocked: Long? = null) =
-        TrackingStatus(state, fatal, problem, problemAgeMs, sinceLocked)
+    private fun tracking(
+        state: String?,
+        fatal: String? = null,
+        problem: String? = null,
+        problemAgeMs: Long = Long.MAX_VALUE,
+        sinceLocked: Long? = null,
+        reference: String? = "lock_wall",
+    ) = TrackingStatus(state, fatal, problem, problemAgeMs, sinceLocked, reference)
 
     @Test
     fun `the coach puts a stopped tracker first, then a missing target, then a lost lock`() {
@@ -172,5 +180,76 @@ class GuideTest {
         assertEquals("Locked on target" to Status.PASS, Guide.describeState(tracking("LOCKED")))
         assertEquals("Tracking stopped" to Status.FAIL, Guide.describeState(tracking("FATAL", fatal = "X")))
         assertEquals("Starting the camera" to Status.UNTESTED, Guide.describeState(tracking(null)))
+    }
+
+    @Test
+    fun `a step needing a target asks for it when the tracker no longer holds it`() {
+        val g = Guide()
+        val steady = g.steps[2]
+        val c = Checklist()
+        c.set("lock_wall", Status.PASS, "locked")
+        assertNull(g.coach(steady, c, tracking("LOCKED", sinceLocked = 0L), 0L))
+        val restarted = g.coach(steady, c, tracking("INITIALIZING", reference = null), 0L)!!
+        assertEquals(CoachAction.CAPTURE_TARGET, restarted.action)
+        assertTrue(restarted.message, restarted.message.startsWith("Tracking was restarted"))
+        val other = g.coach(steady, c, tracking("LOCKED", reference = "lock_floor"), 0L)!!
+        assertTrue(other.message, other.message.contains("floor target, not the wall one"))
+    }
+
+    @Test
+    fun `the minute away stays met when the tester looks back at the target`() {
+        val c = Checklist()
+        val g = Guide()
+        val at = g.steps.indexOfFirst { it.awayMs == 60_000L }
+        val step = g.steps[at]
+        g.goTo(at, 0L)
+        c.observe(sample(1_000L, "LOCKED", "KPM", "KPM_FULL"))
+        assertNull(g.manualWait(step, c, 61_000L))
+        // Looking back relocks: the target is seen again, yet the verdict stays unlocked.
+        c.observe(sample(62_000L, "LOCKED", "KPM", "KPM_FULL"))
+        assertNull(g.manualWait(step, c, 62_500L))
+        // Retry starts the wait over.
+        g.retry(c, 62_600L)
+        assertEquals("Turn away from the target to start the timer", g.manualWait(step, c, 62_600L))
+    }
+
+    @Test
+    fun `a partly skipped step reads skipped, not passed`() {
+        val c = Checklist()
+        val g = Guide()
+        val device = g.steps[0]
+        c.onLayout(true, "ok"); c.onNativePackaged(true, "ok"); c.onAttitude(true, 3)
+        c.set("lens_correction", Status.SKIPPED, "skipped by the tester")
+        assertEquals(Status.SKIPPED, g.statusOf(device, c))
+        c.onLayout(false, "overlap")
+        assertEquals(Status.FAIL, g.statusOf(device, c))
+    }
+
+    @Test
+    fun `the camera coach covers permission, a failed start and a silent camera`() {
+        assertNull(Guide.cameraCoach(permitted = true, canAsk = true, startError = null, msWithoutFrames = null))
+        assertNull(Guide.cameraCoach(true, true, null, Guide.NO_FRAMES_MS - 1))
+        assertEquals(CoachAction.GRANT_CAMERA, Guide.cameraCoach(false, true, null, null)!!.action)
+        assertEquals(CoachAction.OPEN_SETTINGS, Guide.cameraCoach(false, false, null, null)!!.action)
+        assertEquals(CoachAction.RESTART_CAMERA, Guide.cameraCoach(true, true, "CameraAccessException: busy", null)!!.action)
+        assertEquals(CoachAction.RESTART_CAMERA, Guide.cameraCoach(true, true, null, Guide.NO_FRAMES_MS)!!.action)
+    }
+
+    @Test
+    fun `every check that telemetry can only pass has a timeout`() {
+        for (s in Guide.STEPS) when {
+            s.kind == StepKind.MANUAL -> assertNull(s.title, s.timeoutMs)
+            // A lock fails itself 30 s after its capture.
+            s.kind == StepKind.CAPTURE && s.checks == listOf(s.surface!!.checkId) -> Unit
+            else -> assertTrue(s.title, (s.timeoutMs ?: 0L) > 0L)
+        }
+    }
+
+    @Test
+    fun `failures read as words`() {
+        assertEquals("the native engine isn't loaded", Guide.describeFailure("UnsatisfiedLinkError"))
+        assertEquals("illegal state exception", Guide.describeFailure("IllegalStateException"))
+        assertEquals("reference too weak", Guide.describeFailure("REFERENCE_TOO_WEAK"))
+        assertEquals("Capture rejected" to Status.FAIL, Guide.describeState(tracking("FATAL")))
     }
 }

@@ -14,7 +14,6 @@ import com.hereliesaz.sphereslam.camera.LumaFrameBufferPool
 import com.hereliesaz.sphereslam.math.RigidMath
 import com.hereliesaz.sphereslam.reloc.CameraTimestampSource
 import com.hereliesaz.sphereslam.reloc.PhotosphereTrackingSession
-import com.hereliesaz.sphereslam.reloc.TrackingFailureSeverity
 import kotlin.math.acos
 
 /** What the overlay draws and the telemetry line prints for the latest frame. */
@@ -35,10 +34,11 @@ class TrackedView(
 )
 
 /**
- * The SphereSLAM pipeline on the CameraX analysis thread: pack the Y plane display-upright, read
- * ONE attitude snapshot, run [PhotosphereTrackingSession.onFrame], and hand the result to the
- * checklist ([Sample]) and the UI ([TrackedView]). The app is locked to portrait, so the
- * display-upright frame is display rotation 0.
+ * The SphereSLAM pipeline on the CameraX analysis thread: pack the Y plane display-upright, read one
+ * attitude snapshot (angles and matrix together) plus the latest raw sample for the pose predictor,
+ * run [PhotosphereTrackingSession.onFrame], and hand the result to the checklist ([Sample]) and the
+ * UI ([TrackedView]). The display-upright frame follows [displayRotationDeg] (CameraX rotates the
+ * analysis image to the analysis use case's target rotation, which the activity keeps current).
  */
 class Tracker(
     private val context: Context,
@@ -52,18 +52,17 @@ class Tracker(
 ) : ImageAnalysis.Analyzer, AutoCloseable {
 
     private val pool = LumaFrameBufferPool(slots = 2)
-    private val cameraFromDisplay = DeviceCameraRotation.cameraFromDeviceForDisplayFrame(0)
+
+    /** The display's rotation, degrees (0, 90, 180, 270); set by the activity when it changes. */
+    @Volatile var displayRotationDeg: Int = 0
+    private var cameraFromDisplayDeg = -1
+    private var cameraFromDisplay = DeviceCameraRotation.cameraFromDeviceForDisplayFrame(0)
     /** The lock check the next frame's capture is for (`lock_wall` …), or null. */
     @Volatile private var captureFor: String? = null
     private var pageAspect = 1f
 
-    /** Why the session stopped for good (a fatal failure), or null while it runs. */
-    @Volatile var fatal: String? = null
-        private set
-
-    /** The latest non-transient failure and when it happened (elapsedRealtime ms), or null. */
-    @Volatile var lastProblem: Pair<String, Long>? = null
-        private set
+    /** Stopped, rejected-capture and held-target state from the session's failure callbacks. */
+    val failures = FailureLatch()
     private var lastAxis: FloatArray? = null
 
     private val session = PhotosphereTrackingSession(
@@ -74,19 +73,12 @@ class Tracker(
             onMapFromFingerprintSolved = { mutate { checklist.onMapSolved() } },
             onAtlasPageAdded = { page, _ -> mutate { checklist.onAtlasPage(page.pageNo) } },
             onDiagnostic = { line -> log(line); mutate { checklist.onDiagnostic(line) } },
-            onFatalError = { t ->
-                log("fatal: ${t.javaClass.simpleName}: ${t.message}")
-                if (fatal == null) fatal = t.javaClass.simpleName
-            },
+            // Failures and state changes already reach the log through onDiagnostic; not logged twice.
+            onFatalError = { t -> failures.onFatalError(t.javaClass.simpleName, sessionStopped()) },
             onFailure = { e ->
-                log("failure: ${e.reason}")
-                when (e.severity) {
-                    TrackingFailureSeverity.FATAL -> fatal = e.reason.name
-                    TrackingFailureSeverity.RECOVERABLE -> lastProblem = e.reason.name to SystemClock.elapsedRealtime()
-                    TrackingFailureSeverity.TRANSIENT -> Unit
-                }
+                failures.onFailure(e.reason.name, e.severity.name, SystemClock.elapsedRealtime())
+                mutate { checklist.onFailure(e.reason.name, e.diagnostic) }
             },
-            onTrackingStateChanged = { s -> log("state: $s") },
         ),
     )
 
@@ -94,6 +86,9 @@ class Tracker(
     fun requestCapture(checkId: String) {
         captureFor = checkId
     }
+
+    // The callbacks run inside the session, on the analysis thread; `session` is assigned by then.
+    private fun sessionStopped(): Boolean = session.isFatal && !session.isRecoverable
 
     /** Checklist writes hold its monitor: the UI and the reporter read it from other threads. */
     private inline fun mutate(block: () -> Unit) {
@@ -116,12 +111,18 @@ class Tracker(
             val r = CaptureRotation.rotateIntrinsics(raw.fx, raw.fy, raw.cx, raw.cy, image.width.toFloat(), image.height.toFloat(), rotation)
             val intrinsics = CameraIntrinsics(r[0], r[1], r[2], r[3], luma.width, luma.height)
             val snapshot = attitude.latestAttitude()
+            val displayDeg = displayRotationDeg
+            if (displayDeg != cameraFromDisplayDeg) {
+                cameraFromDisplay = DeviceCameraRotation.cameraFromDeviceForDisplayFrame(displayDeg)
+                cameraFromDisplayDeg = displayDeg
+            }
             val roll = snapshot?.let { CameraAttitudeProvider.cameraRollDegrees(it.deviceToWorld, cameraFromDisplay) }
 
             captureFor?.let { checkId ->
                 captureFor = null
-                capture(luma.bytes, luma.width, luma.height)
+                failures.onCapture(checkId)
                 mutate { checklist.onCapture(SystemClock.elapsedRealtime(), snapshot?.elevationDeg, checkId) }
+                capture(luma.bytes, luma.width, luma.height)
             }
 
             val result = session.onFrame(
@@ -139,8 +140,8 @@ class Tracker(
             )
             val pose = result.pose
             val nowMs = SystemClock.elapsedRealtime()
+            val frameMs = (SystemClock.elapsedRealtimeNanos() - t0) / 1e6f
             mutate {
-                checklist.onAttitude(attitude.isAvailable, attitude.isReliable && snapshot != null)
                 checklist.observe(
                     Sample(
                         timeMs = nowMs,
@@ -154,6 +155,7 @@ class Tracker(
                         facingDeg = snapshot?.facingAzimuthDeg,
                         rebuildErrorDeg = snapshot?.let { rebuildError(it) },
                         axisStepDeg = snapshot?.let { axisStep(it.deviceToWorld) },
+                        frameMs = frameMs,
                     ),
                 )
             }
@@ -218,7 +220,7 @@ class Tracker(
             if (p != null) {
                 append(p.source)
                 if (p.source == PhotosphereTrackingSession.PoseSource.KPM) append(' ').append(p.matchMethod)
-                append(" · ").append("%.1f".format(p.matchDurationMs)).append(" ms · ").append(p.inlierCount).append(" inliers")
+                append(" · ").append(Checklist.fmt1(p.matchDurationMs)).append(" ms · ").append(p.inlierCount).append(" inliers")
             }
         }
     }
