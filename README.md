@@ -485,8 +485,10 @@ allocation-free camera loop use either:
 `midas_v21_small_256_fp16.tflite`) on **LiteRT 1.4.2 with the GPU delegate**. If the GPU delegate
 cannot be initialised (block-listed device, driver failure, failed warm-up inference) it falls back to
 LiteRT's XNNPACK CPU path and logs an error; `activeBackend` says which backend is in use. Output is
-MiDaS **relative inverse depth** (larger = nearer), a building block for `:reloc`'s
-`RadialDepthPlacement` / `DepthScaleFit` (not yet wired into the session).
+MiDaS **relative inverse depth** (larger = nearer). Passed to `PhotosphereTrackingSession` as its
+`TileDepthSource`, it gives each new photosphere tile 3D points, calibrated per tile by `:reloc`'s
+`DepthScaleFit` against known depths. `RadialDepthPlacement` (off-wall points of a `WallFeatureMap`)
+is a building block not yet on the session path.
 
 ~~~kotlin
 @OptIn(ExperimentalSphereSlamModelsApi::class)
@@ -744,7 +746,8 @@ deprecated aliases.
 - Standalone photosphere tracking (downscaled KPM, flow tracking, background atlas growth): built,
   experimental API
 - Photosphere freshness/relock loop: built, experimental API
-- Depth-backed tile triangulation/corroboration: building blocks (not yet wired), experimental API
+- Depth-backed tiles (MiDaS `TileDepthSource`, cross-station triangulation): wired, experimental API;
+  corroboration is a host-side seam
 - Full omnidirectional production map-growth pipeline: still evolving
 
 ## License
