@@ -8,8 +8,10 @@ checkout and is never published.
 
 The **Test app** workflow (`.github/workflows/testapp.yml`) builds it on every push and pull request
 to `main`, and on demand (Actions ▸ Test app ▸ Run workflow). The APK is the run's artifact,
-`sphereslam-testapp-<build>`, kept 30 days. Each run signs with a fresh debug key, so uninstall the
-previous build before installing a new one.
+`sphereslam-testapp-<build>`, kept 30 days. Every build is signed with the same key
+(`testapp/testapp.keystore`, a test-bench key with its password in `build.gradle.kts`) and gets a
+higher versionCode (the commit count), so a new APK installs over the previous one. The app bar shows
+the running build next to the step counter, and the report names it.
 
 Locally:
 
