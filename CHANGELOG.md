@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Fix: native engine not loaded on the session path.** Only `KpmBridge.isAvailable()` (and so
+  `SphereSlam.isAvailable()` / `isOperational()`) loaded `libsphereslam.so`. A host that created a
+  session without calling one first (`SphereSlam.create`, `PhotosphereTrackingSession` on its first
+  capture) failed with `UnsatisfiedLinkError` and went `FATAL` (`NATIVE_LIBRARY_UNAVAILABLE`).
+  `KpmBridge` now loads the library when it is first used.
 - **Test app.** New `:testapp` module (not published): an on-device test bench that tracks a
   captured target, draws its outline, grades most device checks itself from live telemetry and reports
   each run to this repository's issues through the workflows Worker (`docs/TESTAPP.md`).

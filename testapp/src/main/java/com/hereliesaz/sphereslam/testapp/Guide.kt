@@ -4,10 +4,10 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /** The surface a capture step targets, the check its lock grades, and the camera elevation it needs. */
-enum class Surface(val checkId: String) {
-    WALL("lock_wall"),
-    FLOOR("lock_floor"),
-    CEILING("lock_ceiling");
+enum class Surface(val checkId: String, val word: String) {
+    WALL("lock_wall", "wall"),
+    FLOOR("lock_floor", "floor"),
+    CEILING("lock_ceiling", "ceiling");
 
     /**
      * Null when a camera at [elevationDeg] (null: unknown) faces this surface; otherwise what the tester
@@ -50,7 +50,32 @@ class Step(
     val awayMs: Long = 0L,
     /** Shown when nothing has been detected after [Guide.HINT_AFTER_MS]. */
     val hint: String? = null,
+    /** The target this step works on; it cannot run until that surface's lock has passed. */
+    val needs: Surface? = null,
+    /** True when the step only makes progress while locked on [needs] (so being unlocked is a problem to fix). */
+    val lockRequired: Boolean = false,
 )
+
+/** What the tracker is doing, as the coach needs it. */
+class TrackingStatus(
+    /** The session's state name, or null before the first frame. */
+    val state: String?,
+    /** Why tracking stopped for good, or null while it runs. */
+    val fatal: String?,
+    /** The latest recoverable failure and how long ago it happened, or null. */
+    val problem: String?,
+    val problemAgeMs: Long,
+    /** How long since the session was last locked (or bridging); null if it never was. */
+    val msSinceLocked: Long?,
+) {
+    val locked: Boolean get() = state == "LOCKED" || state == "IMU_BRIDGE"
+}
+
+/** A fix the coach can offer as a button. */
+enum class CoachAction(val label: String) { RESTART_TRACKING("Restart tracking"), CAPTURE_TARGET("Capture a target") }
+
+/** Something in the way of the current step: what's wrong, what to do, and an optional button. */
+class Coach(val message: String, val blocking: Boolean, val action: CoachAction? = null)
 
 /**
  * The guided run: one [Step] at a time, in an order where each builds on the last (a lock before
@@ -115,6 +140,57 @@ class Guide(val steps: List<Step> = STEPS) {
         else "Keep looking away: ${formatSeconds(left)} left"
     }
 
+    /**
+     * What, if anything, is stopping [step] from making progress, in the order the tester has to deal
+     * with it: a stopped tracker, a missing target, a weak capture, a lost lock. Null when nothing is.
+     */
+    fun coach(step: Step, checklist: Checklist, tracking: TrackingStatus, nowMs: Long): Coach? {
+        if (statusOf(step, checklist) != Status.UNTESTED) return null
+        tracking.fatal?.let { reason ->
+            return Coach(
+                "Tracking has stopped (${describeFailure(reason)}). Tap Restart tracking. If it stops again, " +
+                    "this build can't run the step; the report has the details.",
+                blocking = true,
+                action = CoachAction.RESTART_TRACKING,
+            )
+        }
+        val needs = step.needs
+        if (needs != null && checklist[needs.checkId].status != Status.PASS) {
+            return Coach(
+                "This step needs a locked ${needs.word} target, and there isn't one yet. Capture one first.",
+                blocking = true,
+                action = CoachAction.CAPTURE_TARGET,
+            )
+        }
+        if (step.kind == StepKind.CAPTURE) {
+            if (tracking.problem == "REFERENCE_TOO_WEAK" && tracking.problemAgeMs < WEAK_TARGET_SHOWN_MS) {
+                return Coach(
+                    "That patch hasn't enough texture to track. Aim at something busier (printed text, a " +
+                        "poster, a bookshelf) and tap Capture again.",
+                    blocking = true,
+                )
+            }
+            val since = checklist.msSincePendingCapture(nowMs)
+            if (since != null && since >= SLOW_LOCK_MS) {
+                return Coach("Still looking for it. Keep the same patch inside the frame and hold still.", blocking = false)
+            }
+            return null
+        }
+        if (step.lockRequired && !tracking.locked) {
+            val lost = tracking.msSinceLocked ?: Long.MAX_VALUE
+            if (lost >= UNLOCKED_GRACE_MS) {
+                val surface = needs?.word ?: "wall"
+                return Coach(
+                    "Not locked on the target. Point the camera back at the $surface patch you captured and " +
+                        "hold still; the white outline appears on it when it locks.",
+                    blocking = false,
+                    action = if (lost >= RECAPTURE_OFFER_MS) CoachAction.CAPTURE_TARGET else null,
+                )
+            }
+        }
+        return null
+    }
+
     /** True once the current step has run [HINT_AFTER_MS] without a verdict. */
     fun showHint(checklist: Checklist, nowMs: Long): Boolean {
         val step = current ?: return false
@@ -123,6 +199,30 @@ class Guide(val steps: List<Step> = STEPS) {
 
     companion object {
         const val HINT_AFTER_MS = 45_000L
+        const val UNLOCKED_GRACE_MS = 3_000L
+        const val RECAPTURE_OFFER_MS = 20_000L
+        const val SLOW_LOCK_MS = 8_000L
+        const val WEAK_TARGET_SHOWN_MS = 15_000L
+
+        fun describeFailure(reason: String): String = when (reason) {
+            "NATIVE_LIBRARY_UNAVAILABLE" -> "the native engine isn't loaded"
+            "INTERNAL_FAILURE" -> "an internal error"
+            "CAMERA_UNAVAILABLE" -> "the camera is unavailable"
+            "INTRINSICS_UNAVAILABLE" -> "no camera calibration"
+            else -> reason.lowercase().replace('_', ' ')
+        }
+
+        /** The tracking state in plain words, and the status that colours it. */
+        fun describeState(tracking: TrackingStatus): Pair<String, Status> = when {
+            tracking.fatal != null -> "Tracking stopped" to Status.FAIL
+            tracking.state == null -> "Starting the camera" to Status.UNTESTED
+            tracking.state == "LOCKED" -> "Locked on target" to Status.PASS
+            tracking.state == "IMU_BRIDGE" -> "Holding on the gyro" to Status.PASS
+            tracking.state == "REACQUIRING" -> "Target lost, searching" to Status.UNTESTED
+            tracking.state == "LOST" -> "Target lost" to Status.UNTESTED
+            tracking.state == "INITIALIZING" -> "Not locked" to Status.UNTESTED
+            else -> tracking.state.lowercase().replaceFirstChar { it.uppercase() } to Status.UNTESTED
+        }
 
         fun formatSeconds(ms: Long): String {
             val s = ((ms + 999) / 1000).toInt()
@@ -141,7 +241,7 @@ class Guide(val steps: List<Step> = STEPS) {
                 "Device check",
                 "Hold the phone upright and still. This step checks the rotation sensor, the camera's " +
                     "lens correction and the screen layout on its own.",
-                listOf("layout_clear", "attitude_sensor", "lens_correction"),
+                listOf("layout_clear", "native_engine", "attitude_sensor", "lens_correction"),
                 hint = "Still waiting on the rotation sensor? Move the phone in a slow figure-8 a few times.",
             ),
             Step(
@@ -156,7 +256,8 @@ class Guide(val steps: List<Step> = STEPS) {
                 "Track steadily",
                 "Keep the target in view and sway slowly left and right for about 10 seconds.",
                 listOf("match_speed", "flow_used"),
-                hint = "Tracking needs the target in view. If the state isn't LOCKED, point back at it.",
+                hint = "The frame count only rises while the status line reads Locked on target.",
+                needs = Surface.WALL, lockRequired = true,
             ),
             Step(
                 "Outline follows the target",
@@ -164,6 +265,7 @@ class Guide(val steps: List<Step> = STEPS) {
                     "does it stay on the target's edges the whole time?",
                 listOf("outline_on_target"),
                 kind = StepKind.MANUAL,
+                needs = Surface.WALL, lockRequired = true,
             ),
             Step(
                 "Outline at the screen edge",
@@ -171,12 +273,14 @@ class Guide(val steps: List<Step> = STEPS) {
                     "right. Does the outline stay on the target there too?",
                 listOf("outline_at_edges"),
                 kind = StepKind.MANUAL,
+                needs = Surface.WALL, lockRequired = true,
             ),
             Step(
                 "Brief blackout",
                 "While locked, cover the camera lens with a fingertip for about half a second, then lift it.",
                 listOf("bridge"),
-                hint = "Cover it only briefly: under a second. Make sure the state reads LOCKED first.",
+                hint = "Cover it only briefly: under a second. Make sure the status line reads Locked on target first.",
+                needs = Surface.WALL, lockRequired = true,
             ),
             Step(
                 "Grow the map",
@@ -184,6 +288,7 @@ class Guide(val steps: List<Step> = STEPS) {
                     "it, then come back.",
                 listOf("atlas_growth"),
                 hint = "Pan slower, and stay on textured parts of the wall.",
+                needs = Surface.WALL, lockRequired = true,
             ),
             Step(
                 "Steep angle",
@@ -191,11 +296,13 @@ class Guide(val steps: List<Step> = STEPS) {
                     "keeping it in view. Hold there for a few seconds.",
                 listOf("rectified"),
                 hint = "Go steeper, but keep the target large in the frame.",
+                needs = Surface.WALL, lockRequired = true,
             ),
             Step(
                 "Look away",
                 "Turn about 90° away from the target and hold for a second.",
                 listOf("off_wall"),
+                needs = Surface.WALL,
             ),
             Step(
                 "Look around the room",
@@ -203,12 +310,14 @@ class Guide(val steps: List<Step> = STEPS) {
                     "the target.",
                 listOf("tile_fixes"),
                 hint = "Move slowly and include textured areas; this builds the room map.",
+                needs = Surface.WALL,
             ),
             Step(
                 "Relock after 10 seconds",
                 "Look away from the target and keep looking away until the timer below passes 10 s. " +
                     "Then point back at the target.",
                 listOf("relock_after_away"),
+                needs = Surface.WALL,
             ),
             Step(
                 "Return after a minute",
@@ -217,6 +326,7 @@ class Guide(val steps: List<Step> = STEPS) {
                 listOf("returns_after_minute"),
                 kind = StepKind.MANUAL,
                 awayMs = 60_000L,
+                needs = Surface.WALL,
             ),
             Step(
                 "Capture a floor target",

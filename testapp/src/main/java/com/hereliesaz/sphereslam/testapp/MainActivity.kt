@@ -26,6 +26,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import com.hereliesaz.sphereslam.CameraAttitudeProvider
+import com.hereliesaz.sphereslam.SphereSlam
 import com.hereliesaz.sphereslam.camera.CameraIntrinsicsEstimator
 import com.hereliesaz.sphereslam.camera.LensDistortion
 import java.time.Instant
@@ -62,6 +63,13 @@ class MainActivity : ComponentActivity() {
     @Volatile private var notesSnapshot = ""
     @Volatile private var reportState = "Report: nothing sent yet"
     private var cameraProblem: String? = null
+    private var analysis: ImageAnalysis? = null
+    private var cameraId: String? = null
+    private var realtimeTimestamps = false
+    private var lastLockedMs = Long.MIN_VALUE
+    /** Shown on the card for a while after a launch that followed a crash. */
+    private var crashNotice: String? = null
+    private var crashNoticeUntilMs = 0L
     private var decidedStep = -1
     private var decidedAtMs = 0L
     private var shownStep = -1
@@ -118,6 +126,12 @@ class MainActivity : ComponentActivity() {
         }
         setContentView(screen.root)
         guide.start(now())
+        CrashLog.takePrevious(this)?.let { trace ->
+            log("previous run crashed:\n$trace")
+            crashNotice = "The app crashed last time. The stack trace is in this run's report, so it reaches the issue."
+            crashNoticeUntilMs = now() + CRASH_NOTICE_MS
+            reporter.schedule()
+        }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             startCamera()
         } else {
@@ -167,17 +181,19 @@ class MainActivity : ComponentActivity() {
             report = reportState,
         )
         val v = lastView
-        screen.telemetry(
-            cameraProblem ?: v?.telemetry ?: "Starting the camera…",
-            v?.elevationDeg?.let { Guide.describeElevation(it) }.orEmpty(),
-        )
-        screen.showCamera(step != null)
+        val tracking = trackingStatus(now)
+        val (label, tone) = if (cameraProblem != null) "Camera unavailable" to Status.FAIL else Guide.describeState(tracking)
+        screen.status(label, tone, v?.telemetry.orEmpty(), v?.elevationDeg?.let { Guide.describeElevation(it) }.orEmpty())
         if (screen.overviewOpen) {
+            overlay.showCaptureGuide = false
             renderOverview()
             screen.actions(primary = Action("Back to step") { screen.showOverview(false); render() })
             return
         }
-        if (step == null) return renderFinished(statuses)
+        if (step == null) {
+            overlay.showCaptureGuide = false
+            return renderFinished(statuses)
+        }
         if (shownStep != guide.index) {
             shownStep = guide.index
             log("step ${guide.index + 1}: ${step.title}")
@@ -186,25 +202,36 @@ class MainActivity : ComponentActivity() {
         val status = statuses[guide.index]
         if (status == Status.UNTESTED) decidedStep = -1
         else if (decidedStep != guide.index) { decidedStep = guide.index; decidedAtMs = now }
+        overlay.showCaptureGuide = step.kind == StepKind.CAPTURE && status == Status.UNTESTED
 
         val progress = synchronized(checklist) { progressLine(step, now) }
         val hint = synchronized(checklist) { if (guide.showHint(checklist, now)) step.hint else null }
         val result = synchronized(checklist) { resultLine(step, status) }
+        val coach = cameraProblem?.let { Coach(it, blocking = true) }
+            ?: synchronized(checklist) { guide.coach(step, checklist, tracking, now) }
+        val notice = crashNotice?.takeIf { now < crashNoticeUntilMs }
         screen.card(
             title = step.title,
             body = step.instruction,
             progressLine = listOfNotNull(progress, hint).joinToString("\n").ifEmpty { null },
             result = result,
             resultTone = Palette.of(status).takeIf { status != Status.UNTESTED } ?: Palette.TEXT,
+            coach = listOfNotNull(notice, coach?.message).joinToString("\n\n").ifEmpty { null },
+            coachBlocking = coach?.blocking == true || notice != null,
         )
 
         val skip = Action("Skip") { mutate { guide.skip(checklist, now()) }; render() }
-        when (status) {
-            Status.UNTESTED -> when (step.kind) {
+        val fix = coach?.action
+        when {
+            status == Status.UNTESTED && fix != null -> screen.actions(
+                primary = Action(fix.label) { apply(fix, step) },
+                tertiary = skip,
+            )
+            status == Status.UNTESTED -> when (step.kind) {
                 StepKind.CAPTURE -> {
                     val surface = step.surface!!
                     val aim = surface.aimHint(v?.elevationDeg)
-                    val capturing = synchronized(checklist) { checklist.progress(surface.checkId, now)?.startsWith("Locking") == true }
+                    val capturing = synchronized(checklist) { checklist.msSincePendingCapture(now) != null }
                     screen.actions(
                         primary = Action(if (capturing) "Capture again" else "Capture", enabled = aim == null && tracker != null) {
                             tracker?.requestCapture(surface.checkId)
@@ -223,15 +250,47 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
-            Status.PASS, Status.SKIPPED -> {
-                screen.actions(primary = Action("Next") { advance() })
-                if (status == Status.PASS && now - decidedAtMs >= AUTO_ADVANCE_MS) advance()
+            else -> when (status) {
+                Status.PASS, Status.SKIPPED -> {
+                    screen.actions(primary = Action("Next") { advance() })
+                    if (status == Status.PASS && now - decidedAtMs >= AUTO_ADVANCE_MS) advance()
+                }
+                Status.FAIL -> screen.actions(
+                    primary = Action("Continue") { advance() },
+                    secondary = Action("Retry") { mutate { guide.retry(checklist, now()) }; render() },
+                )
+                else -> Unit
             }
-            Status.FAIL -> screen.actions(
-                primary = Action("Continue") { advance() },
-                secondary = Action("Retry") { mutate { guide.retry(checklist, now()) }; render() },
-            )
         }
+    }
+
+    /** What the tracker is doing, for the status line and the coach. */
+    private fun trackingStatus(now: Long): TrackingStatus {
+        val t = tracker
+        val state = lastView?.state
+        if (state == "LOCKED" || state == "IMU_BRIDGE") lastLockedMs = now
+        val problem = t?.lastProblem
+        return TrackingStatus(
+            state = state,
+            fatal = t?.fatal,
+            problem = problem?.first,
+            problemAgeMs = problem?.let { now - it.second } ?: Long.MAX_VALUE,
+            msSinceLocked = if (lastLockedMs == Long.MIN_VALUE) null else now - lastLockedMs,
+        )
+    }
+
+    private fun apply(action: CoachAction, step: Step) {
+        when (action) {
+            CoachAction.RESTART_TRACKING -> restartTracker()
+            CoachAction.CAPTURE_TARGET -> {
+                val surface = step.needs ?: step.surface ?: Surface.WALL
+                val at = guide.steps.indexOfFirst { it.kind == StepKind.CAPTURE && it.surface == surface }
+                mutate { checklist.reset(guide.steps[at].checks) }
+                log("back to capture a ${surface.word} target from step ${guide.index + 1}")
+                guide.goTo(at, now())
+            }
+        }
+        render()
     }
 
     private fun advance() {
@@ -338,12 +397,18 @@ class MainActivity : ComponentActivity() {
             )
         }
         log("camera $cameraId realtime=$realtime lens=${synchronized(checklist) { checklist["lens_correction"].evidence }}")
-
-        val t = Tracker(this, cameraId, realtime, attitude, checklist, ::log,
-            onView = { v -> lastView = v; overlay.show(v) },
-            onChecklistChanged = { reporter.schedule() },
-        )
-        tracker = t
+        this.cameraId = cameraId
+        realtimeTimestamps = realtime
+        // The engine the session will need, probed up front so a missing native library fails the
+        // device check instead of the first capture.
+        analysisExecutor.execute {
+            val ok = runCatching { SphereSlam.isOperational() }.getOrDefault(false)
+            val evidence = if (ok) "libsphereslam loaded, KPM engine created"
+            else "SphereSlam.isOperational() is false: libsphereslam not loadable on ${Build.SUPPORTED_ABIS.firstOrNull()} or built without KPM"
+            log("native engine: $evidence")
+            mutate { checklist.onNativeEngine(ok, evidence) }
+        }
+        val t = newTracker(cameraId, realtime)
 
         val providerFuture = ProcessCameraProvider.getInstance(this)
         providerFuture.addListener({
@@ -360,10 +425,29 @@ class MainActivity : ComponentActivity() {
             }
             val previewUseCase = previewBuilder.build().also { it.surfaceProvider = preview.surfaceProvider }
             val analysis = analysisBuilder.build().also { it.setAnalyzer(analysisExecutor, t) }
+            this.analysis = analysis
             provider.unbindAll()
             provider.bindToLifecycle(this, selector, previewUseCase, analysis)
             reporter.schedule()
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    private fun newTracker(cameraId: String, realtime: Boolean): Tracker =
+        Tracker(this, cameraId, realtime, attitude, checklist, ::log,
+            onView = { v -> lastView = v; overlay.show(v) },
+            onChecklistChanged = { reporter.schedule() },
+        ).also { tracker = it }
+
+    /** A fresh session on the same camera; the old one is closed on the analysis thread it ran on. */
+    private fun restartTracker() {
+        val id = cameraId ?: return
+        val old = tracker
+        val fresh = newTracker(id, realtimeTimestamps)
+        lastView = null
+        lastLockedMs = Long.MIN_VALUE
+        analysis?.setAnalyzer(analysisExecutor, fresh)
+        old?.let { analysisExecutor.execute { it.close() } }
+        log("tracking restarted")
     }
 
     private fun backCameraId(): String? {
@@ -402,6 +486,7 @@ class MainActivity : ComponentActivity() {
         const val TICK_MS = 200L
         /** How long a passed step's result stays up before the next step. */
         const val AUTO_ADVANCE_MS = 1_800L
+        const val CRASH_NOTICE_MS = 20_000L
         val CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault())
     }
 }

@@ -11,10 +11,16 @@ import com.hereliesaz.sphereslam.camera.CameraFillCenter
 /**
  * Draws the captured target's outline where SphereSLAM says it is: the page's corners (centred
  * fingerprint frame, 1 unit wide) through camera-from-fingerprint and the frame projection, then
- * from frame pixels onto the FILL_CENTER preview. A square crosshair marks the capture region.
+ * from frame pixels onto the FILL_CENTER preview. On capture steps a square marks the capture region.
  */
 class OverlayView(context: Context) : View(context) {
     @Volatile private var view: TrackedView? = null
+
+    /** Draw the capture square: only while a capture step is waiting for Capture. */
+    var showCaptureGuide = false
+        set(value) {
+            if (field != value) { field = value; postInvalidateOnAnimation() }
+        }
 
     private val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -35,7 +41,7 @@ class OverlayView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         val v = view ?: return
-        drawCaptureGuide(canvas, v)
+        if (showCaptureGuide) drawCaptureGuide(canvas, v)
         val m = v.cameraFromFingerprint ?: return
         val p = v.projection ?: return
         val h = v.pageAspect / 2f

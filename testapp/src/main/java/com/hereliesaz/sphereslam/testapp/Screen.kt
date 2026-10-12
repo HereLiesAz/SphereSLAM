@@ -170,6 +170,10 @@ class TestScreen(
     private val progress = StepProgressView(context)
 
     private val camera = FrameLayout(context).apply { setBackgroundColor(Color.BLACK) }
+    private val statusLabel = text(13f, Palette.MUTED).apply {
+        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        isSingleLine = true
+    }
     private val telemetry = text(12f, Palette.MUTED).apply {
         typeface = Typeface.MONOSPACE
         isSingleLine = true
@@ -182,6 +186,11 @@ class TestScreen(
 
     private val cardTitle = text(20f, Palette.TEXT).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }
     private val cardBody = text(15f, Palette.TEXT).apply { setLineSpacing(0f, 1.15f) }
+    private val cardCoach = text(14f, Palette.TEXT).apply {
+        setLineSpacing(0f, 1.1f)
+        val p = context.dp(12)
+        setPadding(p, context.dp(10), p, context.dp(10))
+    }
     private val cardProgress = text(14f, Palette.GOLD)
     private val cardResult = text(14f, Palette.TEXT)
     private val notes = EditText(context).apply {
@@ -200,6 +209,7 @@ class TestScreen(
         setPadding(p, context.dp(16), p, context.dp(8))
         addView(cardTitle)
         addView(cardBody, lp(top = 8))
+        addView(cardCoach, lp(top = 12))
         addView(cardProgress, lp(top = 12))
         addView(cardResult, lp(top = 6))
         addView(notes, lp(top = 12))
@@ -261,7 +271,9 @@ class TestScreen(
         camera.addView(cameraView, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         val telemetryBar = LinearLayout(context).apply {
             setBackgroundColor(Palette.SURFACE)
-            setPadding(context.dp(16), context.dp(6), context.dp(16), context.dp(6))
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(context.dp(16), context.dp(8), context.dp(16), context.dp(8))
+            addView(statusLabel, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginEnd = context.dp(10) })
             addView(telemetry, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
             addView(elevationLabel, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = context.dp(12) })
         }
@@ -270,7 +282,7 @@ class TestScreen(
         root.addView(camera, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1.15f))
         root.addView(telemetryBar, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         root.addView(cardScroll, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
-        root.addView(overview, LinearLayout.LayoutParams(MATCH_PARENT, 0, 2.15f))
+        root.addView(overview, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
         root.addView(View(context).apply { setBackgroundColor(Palette.OUTLINE) }, LinearLayout.LayoutParams(MATCH_PARENT, 1))
         root.addView(actions, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         padding.attach()
@@ -301,9 +313,9 @@ class TestScreen(
         return out
     }
 
+    /** The overview takes the step card's place; the camera stays up (and keeps running). */
     fun showOverview(open: Boolean) {
         overview.visibility = if (open) View.VISIBLE else View.GONE
-        camera.visibility = if (open) View.GONE else View.VISIBLE
         cardScroll.visibility = if (open) View.GONE else View.VISIBLE
         overviewButton.text = if (open) "Back to step" else "All steps"
     }
@@ -316,22 +328,44 @@ class TestScreen(
         reportLine.text = report
     }
 
-    /** [line]: tracking state and pose; [elevationText]: the camera's elevation, kept whole at the right. */
-    fun telemetry(line: String, elevationText: String = "") {
-        setIfChanged(telemetry, line)
+    /**
+     * The status line under the camera: the tracking state in words ([label], coloured by [tone]), the
+     * pose details, and the camera's elevation kept whole at the right.
+     */
+    fun status(label: String, tone: Status, detail: String, elevationText: String = "") {
+        setIfChanged(statusLabel, "● $label")
+        statusLabel.setTextColor(if (tone == Status.UNTESTED) Palette.TEXT else Palette.of(tone))
+        setIfChanged(telemetry, detail)
         setIfChanged(elevationLabel, elevationText)
     }
 
-    /** The camera has nothing to show once the run is over; the card gets its space. */
-    fun showCamera(show: Boolean) {
-        if (overviewOpen) return
-        camera.visibility = if (show) View.VISIBLE else View.GONE
-    }
-
-    /** [resultTone]: the colour of [result] where it has no colour spans of its own (see [verdict]). */
-    fun card(title: String, body: String, progressLine: String?, result: CharSequence?, resultTone: Int, showNotes: Boolean = false) {
+    /**
+     * [coach]: what is in the way and what to do, boxed under the instruction ([coachBlocking] colours
+     * it as a stop). [resultTone]: the colour of [result] where it has no colour spans of its own.
+     */
+    fun card(
+        title: String,
+        body: String,
+        progressLine: String?,
+        result: CharSequence?,
+        resultTone: Int,
+        showNotes: Boolean = false,
+        coach: String? = null,
+        coachBlocking: Boolean = false,
+    ) {
         setIfChanged(cardTitle, title)
         setIfChanged(cardBody, body)
+        cardCoach.visibility = if (coach.isNullOrEmpty()) View.GONE else View.VISIBLE
+        setIfChanged(cardCoach, coach.orEmpty())
+        val accent = if (coachBlocking) Palette.FAIL else Palette.GOLD
+        if (cardCoach.tag != accent) {
+            cardCoach.tag = accent
+            cardCoach.background = GradientDrawable().apply {
+                setColor(Palette.SURFACE_HI)
+                cornerRadius = context.dp(10f)
+                setStroke(context.dp(1), accent)
+            }
+        }
         cardProgress.visibility = if (progressLine.isNullOrEmpty()) View.GONE else View.VISIBLE
         setIfChanged(cardProgress, progressLine.orEmpty())
         cardResult.visibility = if (result.isNullOrEmpty()) View.GONE else View.VISIBLE
@@ -347,7 +381,13 @@ class TestScreen(
     }
 
     /** One row per step: verdict, title, and each check's evidence. */
+    private var overviewKey: String? = null
+
     fun overview(rows: List<Triple<String, Status, List<CharSequence>>>, current: Int) {
+        // Rebuilt only when something in it changed: the render loop calls this five times a second.
+        val key = "$current|" + rows.joinToString("|") { (t, st, d) -> "$t$st${d.joinToString()}" }
+        if (key == overviewKey) return
+        overviewKey = key
         overviewList.removeAllViews()
         overviewList.addView(text(13f, Palette.MUTED).apply { text = "Tap a step to go to it." }, lp(bottom = 8))
         rows.forEachIndexed { i, (title, status, details) ->

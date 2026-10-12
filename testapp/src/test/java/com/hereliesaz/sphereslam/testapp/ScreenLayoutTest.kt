@@ -88,7 +88,7 @@ class ScreenLayoutTest {
     fun `capture step clears the status and navigation bars`() {
         val s = render("1-capture") { screen ->
             screen.header("Step 2 of 15", Guide.STEPS.indices.map { if (it == 0) Status.PASS else Status.UNTESTED }, 1, "Report sent 14:02:11")
-            screen.telemetry("INITIALIZING", "41° up")
+            screen.status("Not locked", Status.UNTESTED, "", "41° up")
             screen.card(wall.title, wall.instruction, "Tilt down 11° to face the wall", null, Palette.TEXT)
             screen.actions(primary = Action("Capture", enabled = false) {}, tertiary = Action("Skip") {})
         }
@@ -100,7 +100,7 @@ class ScreenLayoutTest {
         val step = Guide.STEPS.first { it.awayMs > 0 }
         val s = render("2-manual") { screen ->
             screen.header("Step 12 of 15", Guide.STEPS.indices.map { if (it < 11) Status.PASS else Status.UNTESTED }, 11, "Report sent 14:09:40")
-            screen.telemetry("REACQUIRING · PHOTOSPHERE · 4.1 ms · 0 inliers", "level")
+            screen.status("Target lost, searching", Status.UNTESTED, "PHOTOSPHERE · 4.1 ms · 0 inliers", "level")
             screen.card(step.title, step.instruction, "Keep looking away: 42 s left", null, Palette.TEXT)
             screen.actions(primary = Action("Yes, it did", enabled = false) {}, secondary = Action("No", enabled = false) {}, tertiary = Action("Skip") {})
         }
@@ -112,7 +112,7 @@ class ScreenLayoutTest {
         val step = Guide.STEPS[2]
         val s = render("3-failed") { screen ->
             screen.header("Step 3 of 15", Guide.STEPS.indices.map { when { it < 2 -> Status.PASS; it == 2 -> Status.FAIL; else -> Status.UNTESTED } }, 2, "Report sent 14:04:02")
-            screen.telemetry("LOCKED · KPM KPM_FULL · 41.7 ms · 88 inliers", "level")
+            screen.status("Locked on target", Status.PASS, "KPM KPM_FULL · 41.7 ms · 88 inliers", "level")
             screen.card(step.title, step.instruction, null,
                 screen.verdict("Failed", Status.FAIL, listOf(
                     "KPM/flow median match time fits a 30 fps frame: p50 41.7 ms, p95 63.0 ms over 100 poses" to Status.FAIL,
@@ -128,8 +128,7 @@ class ScreenLayoutTest {
     fun `finished run with the keyboard open over the notes`() {
         val s = render("4-finished-keyboard", imeDp = 300) { screen ->
             screen.header("Run complete", Guide.STEPS.indices.map { if (it == 14) Status.SKIPPED else Status.PASS }, 15, "Report sent 14:20:13")
-            screen.telemetry("LOCKED · KPM FLOW · 6.3 ms · 211 inliers", "88° down")
-            screen.showCamera(false)
+            screen.status("Locked on target", Status.PASS, "KPM FLOW · 6.3 ms · 211 inliers", "88° down")
             screen.card("Run complete", "14 passed, 0 failed, 1 skipped. The report is filed automatically; add notes below if anything looked wrong.",
                 null, "Report sent 14:20:13", Palette.MUTED, showNotes = true)
             screen.actions(primary = Action("Start over") {}, secondary = Action("Review steps") {})
@@ -138,14 +137,42 @@ class ScreenLayoutTest {
     }
 
     @Test
+    fun `stopped tracking says why and offers the fix`() {
+        val step = Guide.STEPS[2]
+        val c = Checklist().apply { set("lock_wall", Status.PASS, "locked") }
+        val coach = Guide().coach(step, c, TrackingStatus("FATAL", "NATIVE_LIBRARY_UNAVAILABLE", null, Long.MAX_VALUE, null), 0L)!!
+        val s = render("6-stopped") { screen ->
+            screen.header("Step 3 of 15", Guide.STEPS.indices.map { if (it < 2) Status.PASS else Status.UNTESTED }, 2, "Report sent 09:32:29")
+            screen.status("Tracking stopped", Status.FAIL, "", "6° up")
+            screen.card(step.title, step.instruction, "0 of 100 tracked frames", null, Palette.TEXT, coach = coach.message, coachBlocking = coach.blocking)
+            screen.actions(primary = Action(coach.action!!.label) {}, tertiary = Action("Skip") {})
+        }
+        assertClear(s, navPx)
+    }
+
+    @Test
+    fun `not locked says where to point`() {
+        val step = Guide.STEPS[2]
+        val c = Checklist().apply { set("lock_wall", Status.PASS, "locked") }
+        val coach = Guide().coach(step, c, TrackingStatus("REACQUIRING", null, null, Long.MAX_VALUE, 25_000L), 0L)!!
+        val s = render("7-not-locked") { screen ->
+            screen.header("Step 3 of 15", Guide.STEPS.indices.map { if (it < 2) Status.PASS else Status.UNTESTED }, 2, "Report sent 09:40:12")
+            screen.status("Target lost, searching", Status.UNTESTED, "PHOTOSPHERE · 3.2 ms · 0 inliers", "level")
+            screen.card(step.title, step.instruction, "37 of 100 tracked frames, median 9.4 ms", null, Palette.TEXT, coach = coach.message, coachBlocking = coach.blocking)
+            screen.actions(primary = Action(coach.action!!.label) {}, tertiary = Action("Skip") {})
+        }
+        assertClear(s, navPx)
+    }
+
+    @Test
     fun `overview lists every step`() {
         val s = render("5-overview") { screen ->
             screen.header("Step 6 of 15", Guide.STEPS.indices.map { if (it < 5) Status.PASS else Status.UNTESTED }, 5, "Report sent 14:06:30")
-            screen.telemetry("LOCKED · KPM FLOW · 7.9 ms · 160 inliers", "level")
+            screen.status("Locked on target", Status.PASS, "KPM FLOW · 7.9 ms · 160 inliers", "level")
             screen.showOverview(true)
             val c = Checklist()
             screen.overview(Guide.STEPS.map { st -> Triple(st.title, if (Guide.STEPS.indexOf(st) < 5) Status.PASS else Status.UNTESTED, st.checks.map { screen.mark(c[it].title, if (Guide.STEPS.indexOf(st) < 5) Status.PASS else Status.UNTESTED) }) }, 5)
-            screen.actions(primary = null, tertiary = Action("Skip") {})
+            screen.actions(primary = Action("Back to step") {})
         }
         assertClear(s, navPx)
     }

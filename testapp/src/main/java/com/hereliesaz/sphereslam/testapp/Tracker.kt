@@ -14,6 +14,7 @@ import com.hereliesaz.sphereslam.camera.LumaFrameBufferPool
 import com.hereliesaz.sphereslam.math.RigidMath
 import com.hereliesaz.sphereslam.reloc.CameraTimestampSource
 import com.hereliesaz.sphereslam.reloc.PhotosphereTrackingSession
+import com.hereliesaz.sphereslam.reloc.TrackingFailureSeverity
 import kotlin.math.acos
 
 /** What the overlay draws and the telemetry line prints for the latest frame. */
@@ -25,8 +26,10 @@ class TrackedView(
     val frameHeight: Int,
     /** Page height / width of the captured reference (its width is 1 unit). */
     val pageAspect: Float,
-    /** One line: state, pose source and method, match time, inliers. */
+    /** One line: pose source and method, match time, inliers (empty without a pose). */
     val telemetry: String,
+    /** The session's tracking state (`INITIALIZING`, `LOCKED`, `IMU_BRIDGE`, `REACQUIRING`, `LOST`, `FATAL`). */
+    val state: String,
     /** Camera elevation from the attitude snapshot, degrees; null without one. */
     val elevationDeg: Float?,
 )
@@ -53,6 +56,14 @@ class Tracker(
     /** The lock check the next frame's capture is for (`lock_wall` …), or null. */
     @Volatile private var captureFor: String? = null
     private var pageAspect = 1f
+
+    /** Why the session stopped for good (a fatal failure), or null while it runs. */
+    @Volatile var fatal: String? = null
+        private set
+
+    /** The latest non-transient failure and when it happened (elapsedRealtime ms), or null. */
+    @Volatile var lastProblem: Pair<String, Long>? = null
+        private set
     private var lastAxis: FloatArray? = null
 
     private val session = PhotosphereTrackingSession(
@@ -63,8 +74,18 @@ class Tracker(
             onMapFromFingerprintSolved = { mutate { checklist.onMapSolved() } },
             onAtlasPageAdded = { page, _ -> mutate { checklist.onAtlasPage(page.pageNo) } },
             onDiagnostic = { line -> log(line); mutate { checklist.onDiagnostic(line) } },
-            onFatalError = { t -> log("fatal: ${t.javaClass.simpleName}: ${t.message}") },
-            onFailure = { e -> log("failure: ${e.reason}") },
+            onFatalError = { t ->
+                log("fatal: ${t.javaClass.simpleName}: ${t.message}")
+                if (fatal == null) fatal = t.javaClass.simpleName
+            },
+            onFailure = { e ->
+                log("failure: ${e.reason}")
+                when (e.severity) {
+                    TrackingFailureSeverity.FATAL -> fatal = e.reason.name
+                    TrackingFailureSeverity.RECOVERABLE -> lastProblem = e.reason.name to SystemClock.elapsedRealtime()
+                    TrackingFailureSeverity.TRANSIENT -> Unit
+                }
+            },
             onTrackingStateChanged = { s -> log("state: $s") },
         ),
     )
@@ -150,6 +171,7 @@ class Tracker(
                     frameHeight = luma.height,
                     pageAspect = pageAspect,
                     telemetry = telemetry(result),
+                    state = result.state.name,
                     elevationDeg = snapshot?.elevationDeg,
                 ),
             )
@@ -193,13 +215,11 @@ class Tracker(
     private fun telemetry(result: PhotosphereTrackingSession.FrameResult): String {
         val p = result.pose
         return buildString {
-            append(result.state)
             if (p != null) {
-                append(" · ").append(p.source)
+                append(p.source)
                 if (p.source == PhotosphereTrackingSession.PoseSource.KPM) append(' ').append(p.matchMethod)
                 append(" · ").append("%.1f".format(p.matchDurationMs)).append(" ms · ").append(p.inlierCount).append(" inliers")
             }
-            result.failure?.let { append(" · ").append(it.reason) }
         }
     }
 
