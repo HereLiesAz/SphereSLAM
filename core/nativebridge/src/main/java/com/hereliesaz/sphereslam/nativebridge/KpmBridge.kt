@@ -14,11 +14,12 @@ import java.nio.ByteBuffer
  * homography-handle constructor, so runtime sessions are deliberately calibrated from fx/fy/cx/cy.
  * When the artoolkitX submodule is absent, every KPM entry point safely reports unavailable.
  *
- * ABI support: libsphereslam is built for `arm64-v8a` and `armeabi-v7a` only. On any other ABI
- * (e.g. x86/x86_64 emulators), or whenever the native library fails to load for any reason, class
- * initialization still succeeds and [isAvailable] returns false; no ExceptionInInitializerError is
- * thrown. Callers must check [isAvailable] before using the session entry points, which otherwise
- * fail with UnsatisfiedLinkError.
+ * Loading: first use of this object loads libsphereslam ([NativeLibLoader.loadAll]), so every entry
+ * point works without the host loading it first. libsphereslam is built for `arm64-v8a` and
+ * `armeabi-v7a` only. On any other ABI (e.g. x86/x86_64 emulators), or whenever the native library
+ * fails to load for any reason, class initialization still succeeds and [isAvailable] returns false;
+ * no ExceptionInInitializerError is thrown. Callers must check [isAvailable] before using the session
+ * entry points, which then fail with UnsatisfiedLinkError.
  *
  * Threading: every call on one session is serialized by that session's own native lock; different
  * sessions run concurrently. Destroying a session while another thread is inside a call on it is
@@ -26,6 +27,12 @@ import java.nio.ByteBuffer
  */
 @InternalSphereSlamApi
 object KpmBridge {
+    // Before this, only isAvailable() loaded the library: a host that went straight to a session
+    // (SphereSlam.create, the standalone session) hit UnsatisfiedLinkError. loadAll() never throws.
+    init {
+        NativeLibLoader.loadAll()
+    }
+
     /**
      * Whether libsphereslam is loaded and was built with KPM. Never throws. Each call asks
      * [NativeLibLoader.loadAll], which returns at once after a successful load and retries a failed

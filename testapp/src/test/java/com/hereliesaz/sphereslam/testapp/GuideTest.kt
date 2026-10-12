@@ -27,6 +27,7 @@ class GuideTest {
         val device = g.steps[0]
         assertEquals(Status.UNTESTED, g.statusOf(device, c))
         c.onLayout(true, "ok")
+        c.onNativeEngine(true, "loaded")
         c.onAttitude(available = true, reliable = true)
         assertEquals(Status.UNTESTED, g.statusOf(device, c))
         c.onLens(null, 1.5f, "no correction")
@@ -120,5 +121,56 @@ class GuideTest {
         g.next(1L)
         assertTrue(g.finished)
         assertNull(g.current)
+    }
+
+    private fun tracking(state: String?, fatal: String? = null, problem: String? = null, problemAgeMs: Long = Long.MAX_VALUE, sinceLocked: Long? = null) =
+        TrackingStatus(state, fatal, problem, problemAgeMs, sinceLocked)
+
+    @Test
+    fun `the coach puts a stopped tracker first, then a missing target, then a lost lock`() {
+        val g = Guide()
+        val steady = g.steps[2]
+        val c = Checklist()
+        // No wall target yet: go capture one.
+        assertEquals(CoachAction.CAPTURE_TARGET, g.coach(steady, c, tracking("INITIALIZING"), 0L)!!.action)
+        // A stopped tracker outranks everything.
+        val stopped = g.coach(steady, c, tracking("FATAL", fatal = "NATIVE_LIBRARY_UNAVAILABLE"), 0L)!!
+        assertEquals(CoachAction.RESTART_TRACKING, stopped.action)
+        assertTrue(stopped.message, stopped.message.contains("native engine"))
+        assertTrue(stopped.blocking)
+        // With a target: briefly unlocked is fine, then point back, then offer a recapture.
+        c.set("lock_wall", Status.PASS, "locked")
+        assertNull(g.coach(steady, c, tracking("LOCKED", sinceLocked = 0L), 0L))
+        assertNull(g.coach(steady, c, tracking("REACQUIRING", sinceLocked = 1_000L), 0L))
+        val lost = g.coach(steady, c, tracking("REACQUIRING", sinceLocked = 5_000L), 0L)!!
+        assertTrue(lost.message.startsWith("Not locked"))
+        assertNull(lost.action)
+        assertEquals(CoachAction.CAPTURE_TARGET, g.coach(steady, c, tracking("LOST", sinceLocked = 25_000L), 0L)!!.action)
+        // Steps that are about looking away don't nag about the lock.
+        val lookAway = g.steps.first { it.checks == listOf("off_wall") }
+        assertNull(g.coach(lookAway, c, tracking("REACQUIRING", sinceLocked = 60_000L), 0L))
+        // A decided step has nothing to coach.
+        c.set("match_speed", Status.PASS, "x"); c.set("flow_used", Status.PASS, "x")
+        assertNull(g.coach(steady, c, tracking("FATAL", fatal = "INTERNAL_FAILURE"), 0L))
+    }
+
+    @Test
+    fun `capture steps coach a weak patch and a slow lock`() {
+        val g = Guide()
+        val wall = g.steps[1]
+        val c = Checklist()
+        assertNull(g.coach(wall, c, tracking("INITIALIZING"), 0L))
+        val weak = g.coach(wall, c, tracking("INITIALIZING", problem = "REFERENCE_TOO_WEAK", problemAgeMs = 2_000L), 0L)!!
+        assertTrue(weak.message.contains("texture"))
+        c.onCapture(0L, 0f, "lock_wall")
+        assertNull(g.coach(wall, c, tracking("INITIALIZING"), 5_000L))
+        assertTrue(g.coach(wall, c, tracking("INITIALIZING"), 9_000L)!!.message.startsWith("Still looking"))
+    }
+
+    @Test
+    fun `states read as plain words`() {
+        assertEquals("Locked on target" to Status.PASS, Guide.describeState(tracking("LOCKED")))
+        assertEquals("Tracking stopped" to Status.FAIL, Guide.describeState(tracking("FATAL", fatal = "X")))
+        assertEquals("Starting the camera" to Status.UNTESTED, Guide.describeState(tracking(null)))
     }
 }

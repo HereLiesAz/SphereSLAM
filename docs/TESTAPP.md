@@ -30,10 +30,16 @@ judge asks a yes/no question, and its buttons unlock only when the step's condit
 one-minute look-away, for example). A failed step shows its evidence with Retry and Continue. Skip
 records the step as skipped.
 
+- When something is in the way, a boxed line under the instruction says what and what to do, with
+  a button when there is a fix: **Restart tracking** if the tracker has stopped, **Capture a
+  target** if the step needs a lock that doesn't exist (or keeps failing), a nudge to point back at
+  the target when the lock drops, and a request for a busier patch when a capture is too plain.
 - The segmented bar under the title shows every step's result; **All steps** lists them with their
-  evidence, and tapping one goes to it.
-- The line under the camera shows tracking state, pose source and match method, match time,
-  inliers, and the camera's elevation.
+  evidence in place of the step (the camera keeps running), and tapping one goes to it.
+- The status line under the camera says what tracking is doing in words (Locked on target, Target
+  lost, Tracking stopped …), then pose source and match method, match time, inliers, and the
+  camera's elevation. The capture square shows only on capture steps.
+- If the app crashes, the next launch files the stack trace in that run's report.
 - When the run is complete, add notes if something looked wrong. There is nothing to copy: every
   change is reported.
 
@@ -48,6 +54,7 @@ Graded automatically from live telemetry:
 
 | Check | Passes when |
 |---|---|
+| `native_engine` | `SphereSlam.isOperational()`: libsphereslam loads and a KPM engine can be created |
 | `layout_clear` | no control overlaps the status bar, navigation bar, display cutout or keyboard (evidence: the measured insets and padding) |
 | `attitude_sensor` | the rotation-vector sensor reports reliable samples |
 | `lens_correction` | the camera delivers a distortion-corrected stream (skipped when it cannot; evidence gives the uncorrected residual) |

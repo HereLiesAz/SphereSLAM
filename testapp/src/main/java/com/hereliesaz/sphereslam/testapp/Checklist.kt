@@ -51,6 +51,7 @@ data class Sample(
 class Checklist {
     val checks: List<Check> = listOf(
         Check("layout_clear", "Every control clears the system bars and display cutout", "Automatic at start."),
+        Check("native_engine", "The native tracking engine loads (libsphereslam, KPM)", "Automatic at start."),
         Check("attitude_sensor", "Rotation-vector sensor delivers reliable samples", "Open the app; wave the phone in a figure-8 if it says unreliable."),
         Check("lens_correction", "Camera delivers a distortion-corrected stream", "Automatic at camera start."),
         Check("lock_wall", "Locks a wall target within 30 s", "Point at a textured wall, tap Capture, keep it in view."),
@@ -116,6 +117,10 @@ class Checklist {
 
     // --- events ---------------------------------------------------------------------------------
 
+    /** [ok] when `SphereSlam.isOperational()` holds; [evidence] says what failed otherwise. */
+    fun onNativeEngine(ok: Boolean, evidence: String) =
+        decide("native_engine", if (ok) Status.PASS else Status.FAIL, evidence)
+
     /** [clear] when no control overlaps a system bar or the display cutout; [evidence] gives the measurements. */
     fun onLayout(clear: Boolean, evidence: String) =
         set("layout_clear", if (clear) Status.PASS else Status.FAIL, evidence)
@@ -150,6 +155,9 @@ class Checklist {
     /** The latest sample's tracking state, or null before the first frame. */
     val trackingState: String? get() = lastState
 
+    /** Milliseconds since the pending capture (one still waiting for its lock), or null when none is pending. */
+    fun msSincePendingCapture(nowMs: Long): Long? = if (captureCheck == null) null else nowMs - captureMs
+
     /** Milliseconds since the last KPM pose (the target was last seen), or null if it never was. */
     fun msSinceTargetSeen(nowMs: Long): Long? = if (lastKpmMs == Long.MIN_VALUE) null else nowMs - lastKpmMs
 
@@ -180,6 +188,7 @@ class Checklist {
             "pole_facing" -> if (stillStartMs == Long.MIN_VALUE) "Hold still, pointing straight down"
                 else "Still for ${"%.1f".format((nowMs - stillStartMs) / 1000f)} s of ${STILL_WINDOW_MS / 1000} s"
             "attitude_sensor" -> "Waiting for reliable rotation samples"
+            "native_engine" -> "Loading the native engine"
             else -> null
         }
     }
