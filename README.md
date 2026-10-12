@@ -379,11 +379,34 @@ result.pose?.let { draw(it.cameraFromMap, it.projection) }
   from the side never matched. When the predicted view is at least `obliqueRectificationDeg` (30°)
   off the wall's normal, the full solve warps the frame to a virtual camera facing the wall square-on
   (same intrinsics, same distance, aimed where the real optical axis meets it), matches that, maps
-  the correspondences back to real pixels and solves the real pose from them by RANSAC PnP. The
-  result is exact however rough the prediction: the prediction only chooses the warp. Needs a
-  predicted pose (gyro bridge or last lock); 0 disables. The virtual view is rendered from the
-  full-resolution frame (2 × 2 sub-samples per pixel), not its downscaled copy, so the
-  foreshortened side of the wall keeps the detail the frame has.
+  the correspondences back to real pixels and solves the real pose from them. The solve starts from
+  the matches' own plane homography as well as the prediction and keeps the fit that explains more of
+  them, so the result is exact however rough the prediction: the prediction only chooses the warp.
+  The prediction is the gyro-carried last lock, or once lost the photosphere's placement (right in
+  rotation, wrong in position after the camera has walked). When it gives no oblique view and direct
+  solves have missed three times running, every other full solve rectifies a guessed view instead
+  (45° and 65° each way along the wall, then up and down it), so a steep relock does not depend on
+  the guess. 0 disables. The virtual view is rendered from the full-resolution frame (2 × 2
+  sub-samples per pixel), not its downscaled copy, so the foreshortened side of the wall keeps the
+  detail the frame has.
+- **Previews** — the reference rendered as the camera may see it, so a lost camera relocks without a
+  prediction of where it is: tilted in perspective (30°, 45°, 60°, 70° each way about both axes;
+  `previewTiltsDeg`), at `previewScales` (½, ¼: far off; 2×: its centre, close up) and turned every
+  `previewRotationStepDeg` (45°). Rendered with OpenCV's `warpPerspective` (area-shrunk first when
+  small), each preview joins KPM as another image of its page, every feature's millimetres mapped back
+  through the warp, so a match against one solves the real pose directly. They live in a second KPM
+  session built off the camera thread (KPM checks every image on every query; the live matcher stays
+  fast) and are searched on every other full solve once direct solves have missed
+  `previewSearchAfterMisses` (2) times running. 0 builds none. `previewAtlasPages` previews grown
+  atlas pages too; `previewMaxFeatures` (600) caps each.
+  The search is guided by the phone's rotation, which stays right while the target is lost (only the
+  position goes stale). Assuming the target is in view, the rotation fixes how the camera sees the
+  page: how steep, from which side, how turned. Each preview records the camera rotation it stands
+  for, and the first search matches only the `previewNearest` (4) previews nearest the predicted one
+  (the angle between the two rotations, plus 30° per doubling of size off the scale the last lock's
+  distance predicts). Each missed search adds as many again until every preview is searched; a lock
+  starts over. The native side matches a chosen image set with a matcher built from those images'
+  features (`KpmBridge.matchPlanarImages`), keeping the 8 most recently used.
 - **Reference scale** — a reference far larger than the matched frame (a full-resolution camera
   still against a 320 × 240 match) leaves the wall outside KPM's scale range. A page is registered
   from an area-downscaled copy whose long side is at most `maxReferenceScale` (3) × the matched
@@ -470,6 +493,15 @@ SphereSLAM standalone KPM page=0 inliers=87 error=3.1 ageMs=41.2 matchMs=18.4 me
 
 `tiles{…}` (with tile localization): stations opened, the active one, tiles, anchor tiles, triangulated landmarks,
 monocular-depth points, and rotation / 6-DoF tile fixes adopted in the window.
+
+`rect{planned swept kpm solved frontal maxObliq}` (once a full solve has considered rectification):
+frames rectified from the prediction (`maxObliq` its steepest, degrees) and from a guessed view, how
+many of those KPM matched and how many gave a pose, and predictions too frontal to rectify.
+
+`previews{images features builtMs ready tried guided solved}` (with previews): reference images the
+preview session holds (pages and previews), their features, the last build's time, whether it is
+searchable, and the lost-frame searches made (`guided` of them over only the previews nearest the
+predicted view) and solved in the window (`method=KPM_PREVIEW`).
 
 `attempts` frames ran the matcher and `matched` of them got a pose back (before gating). `error` is
 the mean squared reprojection error in pixels² of the image the pose was solved in (KPM: the
@@ -752,7 +784,9 @@ deprecated aliases.
 
 `:testapp` is an on-device test bench: a live standalone tracker, a checklist that grades itself from
 telemetry (lock on wall, floor and ceiling, match speed, rectified matching, gyro bridge, off-wall
-hold, pole attitude, …) and reports every run to this repository's issues. See
+hold, pole attitude, …) and reports every run to this repository's issues. Its tuning kit records
+sessions and replays the library over them on the phone under a grid of `Config` values, scoring each
+on continuous measures (locked % by viewing angle, relock time, jitter, frame time). See
 [docs/TESTAPP.md](docs/TESTAPP.md).
 
 ## Project status

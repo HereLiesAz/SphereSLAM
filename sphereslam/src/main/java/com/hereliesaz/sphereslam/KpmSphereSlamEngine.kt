@@ -46,6 +46,11 @@ internal class KpmSphereSlamEngine private constructor(
         return result
     }
 
+    override fun addPageView(luma: ByteBuffer, width: Int, height: Int, view: PlanarPageView): Int {
+        val active = requireOpen()
+        return api.addPageView(active, packedView(luma, width, height), width, height, view)
+    }
+
     override fun match(luma: ByteBuffer): PlanarMatch? {
         val active = requireOpen()
         val packed = packedView(luma, frameWidth, frameHeight)
@@ -75,12 +80,17 @@ internal class KpmSphereSlamEngine private constructor(
     }
 
     override fun match(luma: ByteBuffer, request: PlanarMatchRequest): PlanarMatch? {
-        if (request.pageNo == PlanarMatchRequest.ALL_PAGES && request.maxCorrespondences == 0) return match(luma)
+        if (request.pageNo == PlanarMatchRequest.ALL_PAGES && request.maxCorrespondences == 0 && request.images.isEmpty()) return match(luma)
         val active = requireOpen()
         val packed = packedView(luma, frameWidth, frameHeight)
         val corr = if (request.maxCorrespondences > 0) FloatArray(request.maxCorrespondences * 4) else null
         scratch[14] = 0f
-        val pageNo = api.matchEx(active, packed, request.pageNo, scratch, corr)
+        val pageNo = if (request.images.isEmpty()) {
+            api.matchEx(active, packed, request.pageNo, scratch, corr)
+        } else {
+            val images = request.images
+            api.matchImages(active, packed, IntArray(images.size) { images[it].pageNo }, IntArray(images.size) { images[it].imageNo }, scratch, corr)
+        }
         if (pageNo < 0) return null
         val written = scratch[14].toInt().coerceIn(0, request.maxCorrespondences)
         return PlanarMatch(

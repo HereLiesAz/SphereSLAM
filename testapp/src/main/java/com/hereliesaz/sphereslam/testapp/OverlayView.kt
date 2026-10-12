@@ -3,6 +3,7 @@ package com.hereliesaz.sphereslam.testapp
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
 import android.view.View
@@ -11,7 +12,9 @@ import com.hereliesaz.sphereslam.camera.CameraFillCenter
 /**
  * Draws the captured target's outline where SphereSLAM says it is: the page's corners (centred
  * fingerprint frame, 1 unit wide) through camera-from-fingerprint and the frame projection, then
- * from frame pixels onto the FILL_CENTER preview. On capture steps a square marks the capture region.
+ * from frame pixels onto the FILL_CENTER preview: solid for a visual lock, dashed and dimmed for an
+ * estimate (gyro bridge, held lock, photosphere placement), which can sit beside the target once the
+ * camera has moved. On capture steps a square marks the capture region.
  */
 class OverlayView(context: Context) : View(context) {
     @Volatile private var view: TrackedView? = null
@@ -26,6 +29,12 @@ class OverlayView(context: Context) : View(context) {
         style = Paint.Style.STROKE
         strokeWidth = 6f
         color = Color.WHITE
+    }
+    private val estimate = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 4f
+        color = Color.argb(170, 255, 255, 255)
+        pathEffect = DashPathEffect(floatArrayOf(18f, 14f), 0f)
     }
     private val guide = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -52,7 +61,7 @@ class OverlayView(context: Context) : View(context) {
             if (i == 0) path.moveTo(pt[0], pt[1]) else path.lineTo(pt[0], pt[1])
         }
         path.close()
-        canvas.drawPath(path, outline)
+        canvas.drawPath(path, if (v.estimated) estimate else outline)
     }
 
     /** The square [Tracker.capture] takes, in view pixels. */

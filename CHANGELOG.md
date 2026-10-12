@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- **Previews.** Each reference (and, with `previewAtlasPages`, each grown page) is rendered tilted in
+  perspective, resized and turned, with OpenCV, and each preview joins KPM as another image of its
+  page with its features' millimetres mapped back through the warp
+  (`KpmBridge.addPlanarPageView`, `SphereSlamEngine.addPageView`). They live in a second KPM session
+  built off the camera thread and searched on every other full solve once direct solves have missed
+  twice running, so a lost camera relocks from a steep, near, far or turned view with no prediction.
+  `KpmMatchSpeedConfig.previewSearchAfterMisses` (0 builds none), `previewTiltsDeg`, `previewScales`,
+  `previewRotationStepDeg`, `previewMaxFeatures`, `previewAtlasPages`; `VisualMatchMethod.KPM_PREVIEW`.
+  The periodic diagnostic gains `previews{images features builtMs ready tried guided solved}`. The
+  test app's tuning panel gains a Previews group.
+- **Previews nearest the sensors first.** The phone's rotation stays right while the target is lost,
+  and with the target in view it fixes how the camera sees the page (tilt, side, turn). Each preview
+  records the rotation it stands for; a lost search first matches only the
+  `KpmMatchSpeedConfig.previewNearest` (4) nearest the predicted view (sizes nearest the last lock's
+  distance), and each miss adds as many again until all are searched. New
+  `PlanarMatchRequest.images` / `PlanarImage` and `KpmBridge.matchPlanarImages` match a chosen set of
+  reference images.
+- **Steep relocks.** A lost camera's predicted pose is the photosphere's placement: right in rotation,
+  but where the lock was in position. The oblique solve (`ObliqueRectifier.solve`) now also starts
+  from the plane homography of the matches themselves and keeps the fit that explains more of them,
+  so a prediction metres off cannot stop it. When no prediction gives an oblique view and direct
+  full solves have missed three times running, every other full solve rectifies a guessed steep view
+  (±45° and ±65° along the wall, then up and down it; `KpmMatchSpeedConfig.obliqueSearchAfterMisses`,
+  0 disables, and `obliqueSearchTiltsDeg`). The periodic diagnostic gains
+  `rect{planned swept kpm solved frontal maxObliq}`.
+
 - **Fix: native engine not loaded on the session path.** Only `KpmBridge.isAvailable()` (and so
   `SphereSlam.isAvailable()` / `isOperational()`) loaded `libsphereslam.so`. A host that created a
   session without calling one first (`SphereSlam.create`, `PhotosphereTrackingSession` on its first
@@ -9,7 +35,10 @@
   `KpmBridge` now loads the library when it is first used.
 - **Test app.** New `:testapp` module (not published): an on-device test bench that tracks a
   captured target, draws its outline, grades most device checks itself from live telemetry and reports
-  each run to this repository's issues through the workflows Worker (`docs/TESTAPP.md`).
+  each run to this repository's issues through the workflows Worker (`docs/TESTAPP.md`). Its tuning
+  kit records sessions, replays the library over them on the phone under other settings (one
+  recording, a grid of knob values), and compares continuous measures: locked % by viewing angle,
+  relock time, jitter, jumps, frame time.
 - **Floors and ceilings track like walls.** Painting on a horizontal surface puts the camera at the
   photosphere's nadir or zenith, where the camera-axis heading is sensor noise. Several paths keyed or
   oriented on it:

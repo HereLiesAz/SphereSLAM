@@ -1,5 +1,6 @@
 package com.hereliesaz.sphereslam.reloc
 
+import com.hereliesaz.sphereslam.PlanarImage
 import com.hereliesaz.sphereslam.PlanarMatchRequest
 import com.hereliesaz.sphereslam.SphereSlamStandaloneSession
 import com.hereliesaz.sphereslam.camera.CameraIntrinsics
@@ -27,12 +28,25 @@ internal class KpmPlanarFrontEnd(
     private val backendFactory: (CameraIntrinsics) -> KpmMatcherBackend = KpmMatcherBackend::standalone,
     // A forked backend (see [fork]) instead of a fresh one.
     forkedBackend: KpmMatcherBackend? = null,
+    // The previews matcher, shared with the front end this one was forked from.
+    sharedPreviews: PreviewMatcher? = null,
+    // Builds the previews matcher for the matcher's intrinsics; null result = none (tests inject theirs).
+    private val previewsFactory: ((CameraIntrinsics) -> PreviewMatcher?)? = null,
 ) : PlanarFrontEnd {
 
     /** Downscale factor KPM matches at for this frame size. */
     val factor = KpmMatchScale.effectiveFactor(intrinsics.width, intrinsics.height, config.matchDownscale, config.minMatchShortSidePx)
     private val matchIntrinsics = KpmMatchScale.scaleIntrinsics(intrinsics, factor)
     private val backend = forkedBackend ?: backendFactory(matchIntrinsics)
+
+    /** Previews of every page in their own matcher, searched while the target is lost; null when off. */
+    private val previews: PreviewMatcher? = sharedPreviews
+        ?: if (config.previewSearchAfterMisses > 0) {
+            if (previewsFactory != null) previewsFactory.invoke(matchIntrinsics) else PreviewMatcher(backendFactory(matchIntrinsics), config)
+        } else null
+    private var previewTurn = 0
+    // Preview searches missed since the last lock: each widens the nearest-first set (previewImages).
+    private var previewRing = 0
     private val small: ByteBuffer? =
         if (factor > 1) ByteBuffer.allocateDirect(matchIntrinsics.width * matchIntrinsics.height) else null
 
@@ -51,6 +65,12 @@ internal class KpmPlanarFrontEnd(
 
     // The previous full solve tried only the predicted page and missed: search every page next time.
     private var focusMissPending = false
+
+    // Full solves missed in a row, and the next steep-angle guess to rectify (see sweepPlan).
+    private var missStreak = 0
+    private var sweepTurn = 0
+    private var sweepIndex = 0
+    private val rect = RectStats()
 
     /** Whether flow tracking has been switched off (disabled by config, or OpenCV is missing). */
     val isFlowUnavailable: Boolean get() = flowUnavailable
@@ -80,6 +100,11 @@ internal class KpmPlanarFrontEnd(
             KpmMatchScale.resampleArea(bytes, width, height, rw, rh)
         }
         val r = backend.addReference(refLuma, rw, rh, referenceWidthUnits, physicallyMetric, pageNo, canonicalFromPage)
+        // Previews of the captured reference (page 0) and, when asked, of every page the atlas grows.
+        if (previews != null && (pageNo == 0 || config.previewAtlasPages)) {
+            val bytes = ByteArray(rw * rh).also { refLuma.duplicate().get(it) }
+            previews.addPage(bytes, rw, rh, referenceWidthUnits, physicallyMetric, pageNo, canonicalFromPage)
+        }
         pages[pageNo] = KpmPagePriority.PageWindow(
             pageNo, canonicalFromPage[12], canonicalFromPage[13], r.geometry.widthMeters, r.geometry.heightMeters,
         )
@@ -118,7 +143,7 @@ internal class KpmPlanarFrontEnd(
      */
     override fun fork(): PlanarFrontEnd? {
         val forked = backend.fork() ?: return null
-        return KpmPlanarFrontEnd(intrinsics, config, flowFactory, backendFactory, forked).also {
+        return KpmPlanarFrontEnd(intrinsics, config, flowFactory, backendFactory, forked, previews?.retain(), previewsFactory).also {
             it.pages.putAll(pages)
             it.pageFrames.putAll(pageFrames)
         }
@@ -138,11 +163,18 @@ internal class KpmPlanarFrontEnd(
         nowMs: Long,
         predicted: FloatArray?,
     ): PlanarMatchResult? {
-        // Oblique: KPM matches a virtual frontal view rendered from the full frame (no downscale needed).
-        rectificationPlan(predicted)?.let { plan ->
+        // Lost: every other full solve searches the previews, which need no prediction at all.
+        val p = previews
+        if (p != null && p.isReady && missStreak >= config.previewSearchAfterMisses && previewTurn++ % 2 == 0) {
+            return previewSolve(p, luma, lumaBytes, timestampNs, nowMs, predicted)
+        }
+        // Oblique: KPM matches a virtual frontal view rendered from the full frame (no downscale needed),
+        // from the prediction, or from a guessed steep view once direct solves keep missing.
+        val planned = rectificationPlan(predicted)?.let { it to predicted } ?: sweepPlan(predicted)?.let { it to null }
+        planned?.let { (plan, prior) ->
             val frame = lumaBytes ?: ByteArray(luma.remaining()).also { luma.duplicate().get(it) }
             val wantCorr = !flowUnavailable && lumaBytes != null && config.maxCorrespondences > 0
-            return rectifiedSolve(plan, frame, lumaBytes, timestampNs, nowMs, predicted!!, wantCorr)
+            return rectifiedSolve(plan, frame, lumaBytes, timestampNs, nowMs, prior, wantCorr)
         }
         val matchLuma = if (small != null) {
             val bytes = lumaBytes ?: ByteArray(luma.remaining()).also { luma.duplicate().get(it) }
@@ -172,10 +204,13 @@ internal class KpmPlanarFrontEnd(
             pose = backend.match(matchLuma.duplicate(), timestampNs, PlanarMatchRequest.ALL_PAGES, maxCorr)
         }
         if (pose == null) {
+            missStreak++
             if (nowMs != Long.MIN_VALUE) scheduler.onFullSolve(nowMs, success = false, seeded = false)
             if (!scheduler.isArmed) flow?.reset()
             return null
         }
+        missStreak = 0
+        previewRing = 0
 
         var seeded = false
         if (wantCorrespondences && lumaBytes != null) {
@@ -198,16 +233,127 @@ internal class KpmPlanarFrontEnd(
         )
     }
 
+    /**
+     * One full solve against the [previews] matcher (the frame downscaled as for a direct solve), with
+     * a direct solve's bookkeeping: a hit seeds flow and ends the search, a miss extends it.
+     */
+    private fun previewSolve(p: PreviewMatcher, luma: ByteBuffer, lumaBytes: ByteArray?, timestampNs: Long, nowMs: Long, predicted: FloatArray?): PlanarMatchResult? {
+        rect.previewTried++
+        val images = previewImages(p, predicted)
+        if (images != null) rect.previewGuided++
+        val matchLuma = if (small != null) {
+            val bytes = lumaBytes ?: ByteArray(luma.remaining()).also { luma.duplicate().get(it) }
+            KpmMatchScale.downsample(bytes, intrinsics.width, intrinsics.height, factor, small)
+        } else {
+            luma
+        }
+        val wantCorrespondences = !flowUnavailable && lumaBytes != null && config.maxCorrespondences > 0
+        val pose = p.match(matchLuma.duplicate(), timestampNs, if (wantCorrespondences) config.maxCorrespondences else 0, images)
+        if (pose == null) {
+            previewRing++
+            missStreak++
+            if (nowMs != Long.MIN_VALUE) scheduler.onFullSolve(nowMs, success = false, seeded = false)
+            if (!scheduler.isArmed) flow?.reset()
+            return null
+        }
+        missStreak = 0
+        previewRing = 0
+        previewTurn = 0
+        rect.previewSolved++
+        var seeded = false
+        if (wantCorrespondences && lumaBytes != null) {
+            val corr = KpmMatchScale.correspondencesToFramePixels(pose.correspondences, factor)
+            seeded = withFlow { it.seed(lumaBytes, pose.pageNo, corr, pose.cameraFromPage3x4) } == true
+        }
+        if (nowMs != Long.MIN_VALUE) {
+            scheduler.onFullSolve(nowMs, success = true, seeded = seeded)
+            lastLockMs = nowMs
+        }
+        lastLockedPage = pose.pageNo
+        return PlanarMatchResult(
+            pageNo = pose.pageNo,
+            cameraFromCanonical = pose.cameraFromCanonical,
+            reprojectionError = pose.reprojectionError,
+            inlierCount = pose.inlierCount,
+            method = VisualMatchMethod.KPM_PREVIEW,
+        )
+    }
+
+    /**
+     * The previews to search on this frame: the [KpmMatchSpeedConfig.previewNearest] nearest the view
+     * the sensors predict, as many again for each preview search missed since the last lock; null
+     * (search them all) once that covers every preview, with no prediction, or with the lever off.
+     */
+    private fun previewImages(p: PreviewMatcher, predicted: FloatArray?): List<PlanarImage>? {
+        val nearest = config.previewNearest
+        if (nearest <= 0 || predicted == null) return null
+        val views = p.views
+        val count = nearest.toLong() * (previewRing + 1L)
+        if (count >= views.size) return null
+        val ranked = PreviewMatcher.nearest(views, { page, referenceWidthPx -> predictedView(predicted, page, referenceWidthPx) }, lastLockedPage)
+        return ranked.take(count.toInt()).map { PlanarImage(it.pageNo, it.imageNo) }
+    }
+
+    /**
+     * How the predicted camera sees page [pageNo]: its rotation from the page's millimetre frame (the
+     * photosphere's, right even when lost) and the scale a preview needs to look like the frame at the
+     * predicted distance (the last lock's while lost), from a [referenceWidthPx]-wide reference.
+     */
+    private fun predictedView(predicted: FloatArray, pageNo: Int, referenceWidthPx: Int): Pair<DoubleArray, Double?>? {
+        val frame = pageFrames[pageNo] ?: return null
+        val (r, t) = ObliqueRectifier.pagePose(predicted, frame.canonicalFromPage, frame.centerXmm, frame.centerYmm) ?: return null
+        // Depth of the page centre along the optical axis; frame pixels per mm over reference pixels per mm.
+        val depth = r[6] * frame.centerXmm + r[7] * frame.centerYmm + t[2]
+        val widthMm = (pages[pageNo]?.width ?: 0f) * 1000.0
+        val scale = if (depth > 1.0 && widthMm > 0.0 && referenceWidthPx > 0) matchIntrinsics.fx * widthMm / (depth * referenceWidthPx) else null
+        return r to scale
+    }
+
     /** The rectification for this frame's predicted pose, or null when it is frontal enough (or unknown). */
     private fun rectificationPlan(predicted: FloatArray?): ObliqueRectifier.Plan? {
         if (predicted == null || config.obliqueRectificationDeg <= 0f) return null
-        val pageNo = lastLockedPage?.takeIf { it in pageFrames } ?: pageFrames.keys.firstOrNull() ?: return null
-        val frame = pageFrames.getValue(pageNo)
+        val frame = planPage()?.let { pageFrames.getValue(it) } ?: return null
         val (r, t) = ObliqueRectifier.pagePose(predicted, frame.canonicalFromPage, frame.centerXmm, frame.centerYmm)
             ?: return null
         val pageCentre = doubleArrayOf(frame.centerXmm.toDouble(), frame.centerYmm.toDouble(), 0.0)
-        return ObliqueRectifier.plan(r, t, matchK, config.obliqueRectificationDeg, pageCentre)
+        val plan = ObliqueRectifier.plan(r, t, matchK, config.obliqueRectificationDeg, pageCentre)
+        if (plan == null) rect.frontal++ else rect.planned(plan.obliquityDeg)
+        return plan
     }
+
+    /**
+     * A guessed steep view to rectify, when the prediction gave none and direct solves have missed
+     * [KpmMatchSpeedConfig.obliqueSearchAfterMisses] times running: every other full solve, the next
+     * of [ObliqueRectifier.hypotheses] in turn. A lost camera's prediction can say "frontal" from the
+     * wrong place, or there is none; this keeps a steep relock possible either way, at no cost while
+     * locked (flow tracks, and a hit resets the streak).
+     */
+    private fun sweepPlan(predicted: FloatArray?): ObliqueRectifier.Plan? {
+        val after = config.obliqueSearchAfterMisses
+        if (config.obliqueRectificationDeg <= 0f || after == 0 || config.obliqueSearchTiltsDeg.isEmpty() || missStreak < after) return null
+        if (sweepTurn++ % 2 == 0) return null // alternate with the direct solve
+        val frame = planPage()?.let { pageFrames.getValue(it) } ?: return null
+        val target = doubleArrayOf(frame.centerXmm.toDouble(), frame.centerYmm.toDouble(), 0.0)
+        // As far as the prediction puts the camera, else two page widths.
+        val distance = predicted
+            ?.let { ObliqueRectifier.pagePose(it, frame.canonicalFromPage, frame.centerXmm, frame.centerYmm) }
+            ?.let { (r, t) -> ObliqueRectifier.centreOf(r, t) }
+            ?.let { c -> kotlin.math.sqrt((c[0] - target[0]) * (c[0] - target[0]) + (c[1] - target[1]) * (c[1] - target[1]) + c[2] * c[2]) }
+            ?.takeIf { it.isFinite() && it > 1.0 }
+            ?: (4.0 * frame.centerXmm)
+        val guesses = ObliqueRectifier.hypotheses(target, distance, config.obliqueSearchTiltsDeg.toFloatArray())
+        if (guesses.isEmpty()) return null
+        val (r, t) = guesses[sweepIndex++ % guesses.size]
+        return ObliqueRectifier.plan(r, t, matchK, config.obliqueRectificationDeg, target)?.also { rect.swept++ }
+    }
+
+    private fun planPage(): Int? = lastLockedPage?.takeIf { it in pageFrames } ?: pageFrames.keys.firstOrNull()
+
+    /** `rect{…}` for the session's periodic diagnostic, then reset; null before any full solve was planned. */
+    override fun diagnosticsAndReset(): String? = listOfNotNull(
+        rect.summaryAndReset(),
+        previews?.let { p -> rect.previewSummaryAndReset(p) },
+    ).joinToString(" ").ifEmpty { null }
 
     /**
      * The full solve of an oblique frame: KPM on its virtual frontal view, the real pose solved from
@@ -220,7 +366,7 @@ internal class KpmPlanarFrontEnd(
         lumaBytes: ByteArray?,
         timestampNs: Long,
         nowMs: Long,
-        predicted: FloatArray,
+        predicted: FloatArray?,
         wantCorrespondences: Boolean,
     ): PlanarMatchResult? {
         val w = matchIntrinsics.width
@@ -229,18 +375,22 @@ internal class KpmPlanarFrontEnd(
         ObliqueRectifier.warp(frame, intrinsics.width, intrinsics.height, factor, w, h, plan, buffer)
         val pageRequest = lastLockedPage?.takeIf { it in pageFrames } ?: PlanarMatchRequest.ALL_PAGES
         val raw = backend.match(buffer.duplicate(), timestampNs, pageRequest, maxOf(config.maxCorrespondences, MIN_RECTIFIED_CORRESPONDENCES))
+        if (raw != null) rect.kpm++
         val solved = raw?.let { m ->
             val frame = pageFrames[m.pageNo] ?: return@let null
-            val (pr, pt) = ObliqueRectifier.pagePose(predicted, frame.canonicalFromPage, frame.centerXmm, frame.centerYmm)
-                ?: return@let null
-            ObliqueRectifier.solve(plan, m.correspondences, matchK, pr, ObliqueRectifier.centreOf(pr, pt))
+            val prior = predicted?.let { ObliqueRectifier.pagePose(it, frame.canonicalFromPage, frame.centerXmm, frame.centerYmm) }
+            ObliqueRectifier.solve(plan, m.correspondences, matchK, prior?.first, prior?.let { (pr, pt) -> ObliqueRectifier.centreOf(pr, pt) })
                 ?.let { s -> backend.cameraFromCanonical(m.pageNo, s.cameraFromPage3x4)?.let { view -> Triple(m.pageNo, s, view) } }
         }
         if (solved == null) {
+            missStreak++
             if (nowMs != Long.MIN_VALUE) scheduler.onFullSolve(nowMs, success = false, seeded = false)
             if (!scheduler.isArmed) flow?.reset()
             return null
         }
+        missStreak = 0
+        previewRing = 0
+        rect.solved++
         val (pageNo, s, view) = solved
         var seeded = false
         if (wantCorrespondences && lumaBytes != null) {
@@ -289,6 +439,50 @@ internal class KpmPlanarFrontEnd(
         }
     }
 
+    /** What the rectified path did since the last diagnostic. */
+    private class RectStats {
+        var planned = 0
+        var swept = 0
+        var kpm = 0
+        var solved = 0
+        var frontal = 0
+        var maxObliquity = 0.0
+        var previewTried = 0
+        var previewGuided = 0
+        var previewSolved = 0
+
+        /**
+         * `previews{images=I features=F builtMs=B ready=R tried=T guided=G solved=S}`: the previews
+         * matcher's reference images and features, how long its last build took, whether it is ready,
+         * the full solves that searched it (G of them only the previews nearest the predicted view) and
+         * found a pose. Every window, so a report shows it was built.
+         */
+        fun previewSummaryAndReset(p: PreviewMatcher): String {
+            val out = "previews{images=${p.images} features=${p.features} builtMs=${p.buildMs} ready=${p.isReady} " +
+                "tried=$previewTried guided=$previewGuided solved=$previewSolved}"
+            previewTried = 0; previewGuided = 0; previewSolved = 0
+            return out
+        }
+
+        fun planned(obliquityDeg: Double) {
+            planned++
+            maxObliquity = maxOf(maxObliquity, obliquityDeg)
+        }
+
+        /**
+         * `rect{planned=P swept=S kpm=K solved=V frontal=F maxObliq=D}`: P frames rectified from the
+         * prediction (D its steepest, degrees), S from a guess; KPM matched K of those virtual views
+         * and V gave a pose; F predictions were too frontal to rectify. Null when all are zero.
+         */
+        fun summaryAndReset(): String? {
+            if (planned + swept + frontal == 0) return null
+            val out = "rect{planned=$planned swept=$swept kpm=$kpm solved=$solved frontal=$frontal " +
+                "maxObliq=${String.format(java.util.Locale.ROOT, "%.0f", maxObliquity)}}"
+            planned = 0; swept = 0; kpm = 0; solved = 0; frontal = 0; maxObliquity = 0.0
+            return out
+        }
+    }
+
     private companion object {
         /** Correspondences requested from a rectified solve (its pose is solved from them). */
         const val MIN_RECTIFIED_CORRESPONDENCES = 120
@@ -298,6 +492,7 @@ internal class KpmPlanarFrontEnd(
         runCatching { flow?.close() }
         flow = null
         backend.close()
+        previews?.release()
     }
 }
 
@@ -329,8 +524,17 @@ internal interface KpmMatcherBackend : AutoCloseable {
         canonicalFromPage: FloatArray,
     ): PhotosphereTrackingSession.RegisteredPage
 
+    /**
+     * Adds a preview of registered page [pageNo] as its image [imageNo] ([SphereSlamStandaloneSession.addReferenceView]).
+     * Returns the features added, or < 0 (unsupported, refused, −8 at KPM's image limit).
+     */
+    fun addView(luma: ByteBuffer, width: Int, height: Int, pageNo: Int, imageNo: Int, pageFromView: FloatArray, maxFeatures: Int, reindex: Boolean): Int = -1
+
     /** Match [pageNo] only, or every page for [PlanarMatchRequest.ALL_PAGES]. */
     fun match(luma: ByteBuffer, timestampNs: Long, pageNo: Int, maxCorrespondences: Int): Solve?
+
+    /** Match only [images] (pages and their views); null when nothing matched or unsupported. */
+    fun matchImages(luma: ByteBuffer, timestampNs: Long, images: List<PlanarImage>, maxCorrespondences: Int): Solve? = null
 
     fun cameraFromCanonical(pageNo: Int, cameraFromPage3x4: FloatArray): FloatArray?
 
@@ -364,8 +568,16 @@ internal interface KpmMatcherBackend : AutoCloseable {
             return PhotosphereTrackingSession.RegisteredPage(r.pageNo, r.featureCount, r.geometry, r.physicallyMetric)
         }
 
+        override fun addView(luma: ByteBuffer, width: Int, height: Int, pageNo: Int, imageNo: Int, pageFromView: FloatArray, maxFeatures: Int, reindex: Boolean): Int =
+            runCatching { session.addReferenceView(luma, width, height, pageNo, imageNo, pageFromView, maxFeatures, reindex) }.getOrDefault(-1)
+
         override fun match(luma: ByteBuffer, timestampNs: Long, pageNo: Int, maxCorrespondences: Int): Solve? {
             val p = session.match(luma, timestampNs, PlanarMatchRequest(pageNo, maxCorrespondences)) ?: return null
+            return Solve(p.pageNo, p.cameraFromCanonical, p.reprojectionError, p.inlierCount, p.cameraFromPage3x4, p.correspondences)
+        }
+
+        override fun matchImages(luma: ByteBuffer, timestampNs: Long, images: List<PlanarImage>, maxCorrespondences: Int): Solve? {
+            val p = session.match(luma, timestampNs, PlanarMatchRequest(maxCorrespondences = maxCorrespondences, images = images)) ?: return null
             return Solve(p.pageNo, p.cameraFromCanonical, p.reprojectionError, p.inlierCount, p.cameraFromPage3x4, p.correspondences)
         }
 

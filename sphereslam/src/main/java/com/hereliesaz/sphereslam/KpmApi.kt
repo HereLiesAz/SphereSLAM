@@ -17,6 +17,15 @@ internal interface KpmApi {
     ): Int
     fun match(session: Long, luma: ByteBuffer, out: FloatArray): Int
 
+    /** [KpmBridge.addPlanarPageView]; the default does not support previews. */
+    fun addPageView(
+        session: Long,
+        luma: ByteBuffer,
+        width: Int,
+        height: Int,
+        view: PlanarPageView,
+    ): Int = -1
+
     /**
      * [KpmBridge.matchPlanarEx]: optional single-page restriction ([pageNo] >= 0) and inlier
      * correspondences. The default ignores both (all pages, zero correspondences in out[14]).
@@ -26,6 +35,12 @@ internal interface KpmApi {
         if (out.size > 14) out[14] = 0f
         return page
     }
+
+    /**
+     * [KpmBridge.matchPlanarImages]: [matchEx] against only the images named by [pageNos] / [imageNos].
+     * The default cannot (−1).
+     */
+    fun matchImages(session: Long, luma: ByteBuffer, pageNos: IntArray, imageNos: IntArray, out: FloatArray, correspondences: FloatArray?): Int = -1
 
     fun destroy(session: Long)
 
@@ -70,6 +85,12 @@ internal object NativeKpmApi : KpmApi {
     override fun match(session: Long, luma: ByteBuffer, out: FloatArray): Int =
         KpmBridge.matchPlanar(session, luma, out)
 
+    override fun addPageView(session: Long, luma: ByteBuffer, width: Int, height: Int, view: PlanarPageView): Int =
+        KpmBridge.addPlanarPageView(
+            session, luma, width, height, view.pageNo, view.imageNo, view.maxFeatures,
+            view.pageFromView, view.pageHeightPixels, view.referenceDpi, view.reindex,
+        )
+
     override fun matchEx(
         session: Long,
         luma: ByteBuffer,
@@ -77,6 +98,15 @@ internal object NativeKpmApi : KpmApi {
         out: FloatArray,
         correspondences: FloatArray?,
     ): Int = KpmBridge.matchPlanarEx(session, luma, pageNo, out, correspondences)
+
+    override fun matchImages(
+        session: Long,
+        luma: ByteBuffer,
+        pageNos: IntArray,
+        imageNos: IntArray,
+        out: FloatArray,
+        correspondences: FloatArray?,
+    ): Int = KpmBridge.matchPlanarImages(session, luma, pageNos, imageNos, out, correspondences)
 
     override fun destroy(session: Long) = KpmBridge.destroySession(session)
 

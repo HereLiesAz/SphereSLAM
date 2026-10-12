@@ -1,7 +1,8 @@
 # SphereSLAM test app (`:testapp`)
 
 An on-device test bench for the library: a live standalone tracker, a checklist that grades itself,
-and automatic reporting to this repository's issues. It builds against the library source in this
+automatic reporting to this repository's issues, and a tuning kit (record a session, replay the library
+over it under other settings, compare continuous measures). It builds against the library source in this
 checkout and is never published.
 
 ## Build and install
@@ -54,6 +55,9 @@ the last step can't land on the next one.
 - The status line under the camera says what tracking is doing in words (Locked on target, Target
   lost, Tracking stopped, Capture rejected …), then pose source and match method, match time,
   inliers, and the camera's elevation. The capture square shows only on capture steps.
+- The outline is solid on a visual lock and dashed when it is an estimate (gyro bridge, held lock,
+  the photosphere's placement): an estimate can sit beside the target once you have walked, since
+  the photosphere knows how the phone turned, not where it went.
 - The run belongs to the process, not the screen: rotation, folding, resizing or a theme change
   keeps it, and the camera's frame follows the display's rotation.
 - When the run is complete, add notes if something looked wrong. There is nothing to copy: every
@@ -111,13 +115,89 @@ the report.
 | 20 s | Wall capture (after the lock) | the session check and map solve follow the lock at once |
 | 60–120 s | the other automatic steps | each asks for something a person does in well under a minute |
 
+## Tuning
+
+Pass/fail checks say whether something works; tuning needs to know how well, and whether a change
+made it better. The kit: live knobs, recording, replay, sweeps and continuous measures.
+
+### Knobs
+
+**Tune** (app bar) opens the tuning panel in the step card's place. Each knob (`Knobs.kt`) is one
+field of `PhotosphereTrackingSession.Config`, with its range, step, what it does, and the library's
+own default:
+
+| Group | Knobs |
+|---|---|
+| Steep angles | rectify from (`obliqueRectificationDeg`), guess steep views after N misses (`obliqueSearchAfterMisses`) |
+| Previews | search previews after N misses (`previewSearchAfterMisses`, 0 builds none), search nearest first (`previewNearest`), tilt previews, size previews, turn previews every N° (`previewRotationStepDeg`), features per preview, preview atlas pages |
+| Matching | match downscale, flow tracking, full solve every N frames / at least every N ms, flow alone for at most N ms, flow inliers at least, flow error at most |
+| Acceptance | pose error at most, pose inliers at least, frame age at most (`ObservationAgeConfig.maxRealtimeAgeMs`) |
+| Lock | confirm a lock over N frames, searching becomes lost after N ms, gyro bridge up to N ms |
+| Photosphere | tile localization, atlas growth |
+
+A change applies once the slider settles (0.6 s): the session restarts with the new values and keeps
+its target. The values are kept across launches. The panel's live measures (below) restart with it.
+
+### Recording
+
+**Record** (in the panel's action bar) writes every camera frame and sensor reading the session is
+given, exactly as given (`Recording.kt`, `.sslrec`): the upright luma (deflated), intrinsics,
+timestamp, attitude sample and angles, and the camera-from-device rotation, plus the events between
+frames: target captures (with the reference image), restarts, and knob changes. The camera hands
+each frame to the recorder and to tracking separately, so a slow frame never costs the recording a
+frame. A recording stops itself at 5 minutes; it takes a few hundred MB a minute. The newest 8 are
+kept, in `Android/data/com.hereliesaz.sphereslam.testapp/files/recordings/` (`adb pull` reaches them).
+A target already held when recording starts goes in first.
+
+### Replay and sweeps
+
+**Recordings** opens the tuning screen: the recordings, a sweep's setup, its progress and its
+results. A sweep varies up to three knobs over one recording: every combination of their values on
+top of a base (the recording's own settings, or the live ones), plus the base itself as the
+baseline, at most 36 replays.
+
+A replay (`Replay.kt`) runs on the phone, so its timings are real. It keeps the recording's time:
+a virtual clock starts at the first frame and advances by what each frame really costs; frames that
+arrived while the session was busy are skipped, as the camera skips them live, so a slower setting
+sees fewer frames exactly as it would. The session runs on the same clock, so frame-age checks,
+bridge windows and cadences hold. Captures replay before the frame they were taken on; a restart for
+new knobs keeps the target, as it did live. A replay takes about as long as the recording.
+
+When a sweep finishes its results are saved beside the recording and reported to the build's issue
+as tables (by configuration, by viewing angle, failures by reason). The results screen ranks the
+configurations by any measure; one tap applies a configuration to live tracking. Its detail shows
+locked % by viewing angle against the baseline and both runs over time.
+
+### Measures
+
+`RunMetrics` scores a live session and a replay with the same code, from the first capture on:
+
+| Measure | What it is |
+|---|---|
+| Locked % | share of time with a visual (KPM) pose; also per viewing-angle band (0–15°, 15–30°, 30–45°, 45–60°, 60–90°), and at 45°+ |
+| Steepest lock | largest viewing angle of any visual pose |
+| Relocks | losses of the visual pose over 300 ms that ended; median and longest time to relock; a loss still open at the end is counted apart |
+| Off at relock | how far the estimate shown just before a relock was from the relocked pose (target widths, degrees) |
+| Jitter | camera position spread while the phone is still (under 3°/s for 15+ visual frames), % of the target's width |
+| Jumps | consecutive visual poses ≤ 150 ms apart that moved over 0.25 target widths or turned over 8° |
+| Error | median reprojection error of the visual poses, px² |
+| Frame, match | median and 95th percentile ms (frame: packing plus the session's work) |
+| Dropped | frames skipped while the session was busy |
+| Failures | the session's failures by reason (`STALE_OBSERVATION`, `NO_CURRENT_PAGE_MATCH` …) |
+
+The viewing angle is the angle between the camera's axis and the target's normal, from the visual
+pose or, without one, from the estimate (its rotation is the gyro's, so the angle is right even when
+its position is not).
+
 ## Reporting
 
 The app posts the run to `https://workflows.hereliesaz.workers.dev/test-report/SphereSLAM`
 (`HereLiesAz/workflows`, `worker/src/test-report.js`) 3 s after any change and when it leaves the
 foreground. The Worker files one issue per tested build (label `device-test-<build>`) and one comment
-per run, updated in place as the run progresses, with the result table, notes and the last 200 log
-lines. The key in `BuildConfig.REPORT_KEY` ships in the APK: it filters spam, it is not a secret.
+per run, updated in place as the run progresses, with the result table, notes and the newest log
+lines (the app keeps 400 lines or 60 000 characters, the issue shows the newest 50 000). Transient
+misses (`severity=TRANSIENT`, several a second while searching) are counted by reason onto the next
+`timing{…}` line as `transient{…}` instead of one line each. The key in `BuildConfig.REPORT_KEY` ships in the APK: it filters spam, it is not a secret.
 
 Nothing is lost to a dead network or a dead process (`Reporter.kt`, `TestApp.kt`):
 

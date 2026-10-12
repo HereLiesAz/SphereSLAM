@@ -106,6 +106,41 @@ class KpmBridgeInstrumentedTest {
     }
 
     @Test
+    fun aPreviewJoinsItsPageAndAFrameLikeItMatchesThatPage() {
+        val s = session()
+        val page = texture(w, h, 7)
+        try {
+            assertTrue(KpmBridge.addPlanarPage(s, page, w, h, 72f, 0, 0, 500) > 0)
+            // The page turned 90°, h × w: preview pixel (u, v) shows page pixel (v, h − 1 − u), so every
+            // feature's millimetres come back through pageFromView.
+            val bytes = ByteArray(w * h).also { page.duplicate().get(it) }
+            val turned = ByteArray(w * h)
+            for (v in 0 until w) for (u in 0 until h) turned[v * h + u] = bytes[(h - 1 - u) * w + v]
+            val view = ByteBuffer.allocateDirect(turned.size).apply { put(turned); flip() }
+            val pageFromView = floatArrayOf(0f, 1f, 0f, -1f, 0f, (h - 1).toFloat(), 0f, 0f, 1f)
+            val added = KpmBridge.addPlanarPageView(s, view, h, w, 0, 1, 300, pageFromView, h, 72f)
+            assertTrue("added=$added", added > 0)
+            // The page itself still matches as page 0, and so does a frame showing the preview's view.
+            val out = FloatArray(KpmBridge.MATCH_OUTPUT_FLOATS)
+            assertEquals(0, KpmBridge.matchPlanar(s, page.duplicate(), out))
+            val frame = ByteBuffer.allocateDirect(w * h).apply {
+                // The turned page cropped into the frame's top-left (it is h × w).
+                val f = ByteArray(w * h) { 90 }
+                for (v in 0 until minOf(w, h)) for (u in 0 until minOf(w, h)) f[v * w + u] = turned[v * h + u]
+                put(f); flip()
+            }
+            assertEquals(0, KpmBridge.matchPlanar(s, frame, out))
+            // Matched against the preview alone, through the image-set matcher (built, then cached).
+            val ex = FloatArray(KpmBridge.MATCH_EX_OUTPUT_FLOATS)
+            repeat(2) { assertEquals(0, KpmBridge.matchPlanarImages(s, frame.duplicate(), intArrayOf(0), intArrayOf(1), ex, null)) }
+            // An image the session does not hold matches nothing.
+            assertEquals(-1, KpmBridge.matchPlanarImages(s, frame.duplicate(), intArrayOf(0), intArrayOf(9), ex, null))
+        } finally {
+            KpmBridge.destroySession(s)
+        }
+    }
+
+    @Test
     fun theSinglePageHandlePathMatchesOnlyThatPage() {
         val s = session()
         val page0 = texture(w, h, 5)

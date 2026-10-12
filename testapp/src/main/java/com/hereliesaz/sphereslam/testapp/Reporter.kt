@@ -22,9 +22,19 @@ class RunInfo(
     val startedAt: String,
 )
 
+/** A table for the report (a tuning sweep's results): plain text cells, rendered escaped by the Worker. */
+class ReportTable(val title: String, val columns: List<String>, val rows: List<List<String>>)
+
 /** The report body the workflows Worker's `/test-report/<repo>` route takes (pure, unit-tested). */
 object ReportJson {
-    fun build(info: RunInfo, checks: List<Check>, updatedAt: String, notes: String, log: String): String {
+    fun build(
+        info: RunInfo,
+        checks: List<Check>,
+        updatedAt: String,
+        notes: String,
+        log: String,
+        tables: List<ReportTable> = emptyList(),
+    ): String {
         val sb = StringBuilder()
         sb.append('{')
         field(sb, "packageName", info.packageName); sb.append(',')
@@ -52,9 +62,28 @@ object ReportJson {
             sb.append('}')
         }
         sb.append("],")
+        if (tables.isNotEmpty()) {
+            sb.append("\"tables\":[")
+            tables.forEachIndexed { i, t ->
+                if (i > 0) sb.append(',')
+                sb.append('{')
+                field(sb, "title", t.title); sb.append(',')
+                sb.append("\"columns\":"); strings(sb, t.columns); sb.append(',')
+                sb.append("\"rows\":[")
+                t.rows.forEachIndexed { j, row -> if (j > 0) sb.append(','); strings(sb, row) }
+                sb.append("]}")
+            }
+            sb.append("],")
+        }
         field(sb, "log", log)
         sb.append('}')
         return sb.toString()
+    }
+
+    private fun strings(sb: StringBuilder, values: List<String>) {
+        sb.append('[')
+        values.forEachIndexed { i, v -> if (i > 0) sb.append(','); quote(sb, v) }
+        sb.append(']')
     }
 
     /** The run's notes with a crash, when there was one, at the top where the issue shows it. */

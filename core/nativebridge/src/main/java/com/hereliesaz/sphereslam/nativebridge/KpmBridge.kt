@@ -96,6 +96,37 @@ object KpmBridge {
     }
 
     /**
+     * Adds a preview of an existing page: [luma] is page [pageNo]'s reference image seen through a
+     * warp (a perspective tilt, a size, a rotation). Its features join the page as image [imageNo],
+     * each mapped back through [pageFromView] (row-major 3×3, preview pixel → page reference pixel) to
+     * the page's own millimetres ([pageDpi], [pageHeight] px), so a match on the preview solves the
+     * page's pose. [reindex] false defers rebuilding the matcher's index to the next call that asks
+     * for it, so a batch of previews indexes once; nothing may match the session in between. Returns
+     * the features added, or < 0 (−8: the session is at KPM's limit of 1024 reference images).
+     */
+    fun addPlanarPageView(
+        session: Long,
+        luma: ByteBuffer,
+        width: Int,
+        height: Int,
+        pageNo: Int,
+        imageNo: Int,
+        maxFeatures: Int,
+        pageFromView: FloatArray,
+        pageHeight: Int,
+        pageDpi: Float,
+        reindex: Boolean = true,
+    ): Int {
+        require(session != 0L)
+        require(luma.isDirect)
+        require(width > 0 && height > 0)
+        require(pageNo >= 0 && imageNo >= 0 && maxFeatures > 0)
+        require(pageFromView.size == 9 && pageFromView.all { it.isFinite() })
+        require(pageHeight > 0 && pageDpi > 0f)
+        return nativeAddPlanarPageView(session, luma, width, height, pageNo, imageNo, maxFeatures, pageFromView, pageHeight, pageDpi, reindex)
+    }
+
+    /**
      * Matches one tightly packed direct luma frame.
      *
      * On success returns pageNo and writes 14 floats to out:
@@ -126,6 +157,21 @@ object KpmBridge {
         require(luma.isDirect)
         require(out.size >= MATCH_EX_OUTPUT_FLOATS)
         return nativeMatchPlanarEx(session, luma, pageNo, out, correspondences)
+    }
+
+    /**
+     * [matchPlanarEx] against only the reference images named by [pageNos] / [imageNos] (parallel
+     * arrays: image `imageNos[i]` of page `pageNos[i]`, as given to [addPlanarPage] or
+     * [addPlanarPageView]). The native side builds a matcher over just those images on first use and
+     * keeps the few most recently used, so the query's FREAK search runs against them alone. Returns
+     * pageNo, or -1 on no match (also when none of the images exist).
+     */
+    fun matchPlanarImages(session: Long, luma: ByteBuffer, pageNos: IntArray, imageNos: IntArray, out: FloatArray, correspondences: FloatArray?): Int {
+        require(session != 0L)
+        require(luma.isDirect)
+        require(pageNos.isNotEmpty() && pageNos.size == imageNos.size)
+        require(out.size >= MATCH_EX_OUTPUT_FLOATS)
+        return nativeMatchPlanarImages(session, luma, pageNos, imageNos, out, correspondences)
     }
 
     /**
@@ -164,6 +210,20 @@ object KpmBridge {
         cx: Float,
         cy: Float,
     ): Long
+    private external fun nativeAddPlanarPageView(
+        session: Long,
+        luma: ByteBuffer,
+        width: Int,
+        height: Int,
+        pageNo: Int,
+        imageNo: Int,
+        maxFeatures: Int,
+        pageFromView: FloatArray,
+        pageHeight: Int,
+        pageDpi: Float,
+        reindex: Boolean,
+    ): Int
+
     private external fun nativeAddPlanarPage(
         session: Long,
         luma: ByteBuffer,
@@ -180,6 +240,14 @@ object KpmBridge {
         session: Long,
         luma: ByteBuffer,
         pageNo: Int,
+        out: FloatArray,
+        correspondences: FloatArray?,
+    ): Int
+    private external fun nativeMatchPlanarImages(
+        session: Long,
+        luma: ByteBuffer,
+        pageNos: IntArray,
+        imageNos: IntArray,
         out: FloatArray,
         correspondences: FloatArray?,
     ): Int

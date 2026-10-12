@@ -1,5 +1,6 @@
 package com.hereliesaz.sphereslam.reloc
 
+import com.hereliesaz.sphereslam.PlanarImage
 import com.hereliesaz.sphereslam.PlanarMatchRequest
 import com.hereliesaz.sphereslam.SphereSlamPoseMath
 import com.hereliesaz.sphereslam.camera.CameraIntrinsics
@@ -42,10 +43,19 @@ class KpmPlanarFrontEndTest {
             return PhotosphereTrackingSession.RegisteredPage(pageNo, 100, SphereSlamPoseMath.pageGeometry(width, height, dpi), physicallyMetric)
         }
 
+        override fun addView(luma: ByteBuffer, width: Int, height: Int, pageNo: Int, imageNo: Int, pageFromView: FloatArray, maxFeatures: Int, reindex: Boolean): Int = 50
+
         override fun match(luma: ByteBuffer, timestampNs: Long, pageNo: Int, maxCorrespondences: Int): KpmMatcherBackend.Solve? {
             calls += Call(pageNo, maxCorrespondences, luma.remaining())
             lastLuma = ByteArray(luma.remaining()).also { luma.duplicate().get(it) }
             return answer(pageNo)
+        }
+
+        val imageCalls = mutableListOf<List<PlanarImage>>()
+
+        override fun matchImages(luma: ByteBuffer, timestampNs: Long, images: List<PlanarImage>, maxCorrespondences: Int): KpmMatcherBackend.Solve? {
+            imageCalls += images
+            return answer(images.first().pageNo)
         }
 
         override fun cameraFromCanonical(pageNo: Int, cameraFromPage3x4: FloatArray): FloatArray = view.copyOf()
@@ -97,7 +107,8 @@ class KpmPlanarFrontEndTest {
     private fun frontEnd(
         config: KpmMatchSpeedConfig = KpmMatchSpeedConfig(),
         flowFactory: (CameraIntrinsics, KpmMatchSpeedConfig) -> FlowTracker = { _, _ -> flowCreations++; flow },
-    ) = KpmPlanarFrontEnd(k, config, flowFactory, { mk -> FakeBackend(mk).also { backend = it } })
+        previews: ((CameraIntrinsics) -> PreviewMatcher?) = { null },
+    ) = KpmPlanarFrontEnd(k, config, flowFactory, { mk -> FakeBackend(mk).also { backend = it } }, previewsFactory = previews)
 
     private fun input(nowMs: Long, predicted: FloatArray? = null) =
         PlanarFrameInput(frameBuffer.duplicate(), frameBytes, nowMs * 1_000_000L, nowMs, predicted)
@@ -277,6 +288,148 @@ class KpmPlanarFrontEndTest {
         off.addPage(ByteBuffer.allocateDirect(4), 800, 600, 1f, false, 0, RigidMath.identity().also { it[12] = 0.4f })
         val oblique = ObliqueGeometry.pose(70.0, centre, 1_500.0)
         assertEquals(VisualMatchMethod.KPM_FULL, off.match(input(0, canonicalView(oblique, centre)))!!.method)
+    }
+
+    @Test
+    fun `with no usable prediction, repeated misses bring guessed steep views into the search`() {
+        val (fe, centre, _) = obliqueScene(50.0)
+        val mk = backend!!.intrinsics
+        val km = floatArrayOf(mk.fx, mk.fy, mk.cx, mk.cy)
+        val b = backend!!
+        b.answer = { null }
+        // Three direct misses, then guesses alternate with direct solves.
+        repeat(3) { assertNull(fe.match(input(it * 10L))) }
+        assertEquals(null, fe.diagnosticsAndReset()) // nothing rectified yet, no prediction to judge
+        assertNull(fe.match(input(30))) // direct
+        // The first guess: 45° along the wall, two page widths out. The camera really is 50° along it.
+        val truth = ObliqueGeometry.pose(50.0, centre, 1_200.0)
+        val guess = ObliqueRectifier.hypotheses(centre, 4.0 * centre[0], KpmMatchSpeedConfig().obliqueSearchTiltsDeg.toFloatArray()).first()
+        val plan = ObliqueRectifier.plan(guess.first, guess.second, km, 30f, centre)!!
+        val virtualFromReal = ObliqueRectifier.invert3(plan.realFromVirtual)!!
+        val corr = ArrayList<Float>()
+        for (gx in -8..8) for (gy in -8..8) {
+            val px = centre[0] + gx * 30.0
+            val py = centre[1] + gy * 30.0
+            val real = ObliqueGeometry.project(km, truth.first, truth.second, px, py)
+            if (real[0] < 0 || real[0] >= mk.width || real[1] < 0 || real[1] >= mk.height) continue
+            val w = virtualFromReal[6] * real[0] + virtualFromReal[7] * real[1] + virtualFromReal[8]
+            corr += ((virtualFromReal[0] * real[0] + virtualFromReal[1] * real[1] + virtualFromReal[2]) / w).toFloat()
+            corr += ((virtualFromReal[3] * real[0] + virtualFromReal[4] * real[1] + virtualFromReal[5]) / w).toFloat()
+            corr += px.toFloat()
+            corr += py.toFloat()
+        }
+        assertTrue("visible ${corr.size / 4}", corr.size / 4 >= 20)
+        b.answer = { KpmMatcherBackend.Solve(0, view, 0.5f, corr.size / 4, FloatArray(12), corr.toFloatArray()) }
+        val r = fe.match(input(40))!!
+        assertEquals(VisualMatchMethod.KPM_RECTIFIED, r.method)
+        assertTrue(r.reprojectionError < 0.01f)
+        assertEquals("rect{planned=0 swept=1 kpm=1 solved=1 frontal=0 maxObliq=0}", fe.diagnosticsAndReset())
+        // A hit ends the search: the next miss is direct again.
+        b.answer = { null }
+        flow.trackResult = null
+        val before = b.calls.size
+        assertNull(fe.match(input(50)))
+        assertNull(fe.diagnosticsAndReset())
+        assertEquals(before + 1, b.calls.size)
+    }
+
+    @Test
+    fun `the guessed-view search can be switched off`() {
+        val fe = frontEnd(KpmMatchSpeedConfig(obliqueSearchAfterMisses = 0))
+        fe.addPage(ByteBuffer.allocateDirect(4), 800, 600, 1f, false, 0, RigidMath.identity())
+        backend!!.answer = { null }
+        repeat(8) { fe.match(input(it * 10L)) }
+        assertNull(fe.diagnosticsAndReset())
+    }
+
+    @Test
+    fun `once lost every other full solve searches the previews and a hit relocks there`() {
+        val pb = FakeBackend(k).apply { answer = { null } }
+        val matcher = PreviewMatcher(pb, KpmMatchSpeedConfig(), java.util.concurrent.Executor { it.run() }, useOpenCv = false)
+        val fe = frontEnd(KpmMatchSpeedConfig(flowTracking = false, obliqueSearchAfterMisses = 0), previews = { matcher })
+        fe.addPage(ByteBuffer.allocateDirect(400 * 300), 400, 300, 1f, false, 0, RigidMath.identity())
+        assertTrue(matcher.isReady)
+        val live = backend!!
+        live.answer = { null }
+        // Two direct misses, then previews and direct take turns.
+        assertNull(fe.match(input(0))); assertNull(fe.match(input(10)))
+        assertEquals(0, pb.calls.size)
+        assertNull(fe.match(input(20)))
+        assertEquals(1, pb.calls.size)
+        assertNull(fe.match(input(30)))
+        assertEquals(1, pb.calls.size)
+        assertEquals(4, live.calls.size + pb.calls.size)
+        pb.answer = { solve(0) }
+        val r = fe.match(input(40))!!
+        assertEquals(VisualMatchMethod.KPM_PREVIEW, r.method)
+        assertTrue(fe.diagnosticsAndReset()!!.contains("previews{images=27 features=") )
+        // A hit ends the search: back to direct solves.
+        val before = pb.calls.size
+        fe.match(input(50))
+        assertEquals(before, pb.calls.size)
+    }
+
+    @Test
+    fun `a lost search starts with the previews nearest the predicted view and widens on each miss`() {
+        val pb = FakeBackend(k).apply { answer = { null } }
+        val matcher = PreviewMatcher(pb, KpmMatchSpeedConfig(), java.util.concurrent.Executor { it.run() }, useOpenCv = false)
+        val fe = frontEnd(
+            KpmMatchSpeedConfig(flowTracking = false, obliqueSearchAfterMisses = 0, obliqueRectificationDeg = 0f),
+            previews = { matcher },
+        )
+        val g = fe.addPage(ByteBuffer.allocateDirect(400 * 300), 400, 300, 1f, false, 0, RigidMath.identity().also { it[12] = 0.4f }).geometry
+        val centre = doubleArrayOf(g.centerXmm.toDouble(), g.centerYmm.toDouble(), 0.0)
+        // Upright (the synthetic pose is rolled half a turn), 58° off the wall's normal from its right.
+        val predicted = canonicalView(ObliqueGeometry.pose(58.0, centre, 1_500.0, rollDeg = 180.0), centre)
+        backend!!.answer = { null }
+        val n = KpmMatchSpeedConfig().previewNearest
+        val all = matcher.views.size
+        var t = 0L
+        repeat(2) { assertNull(fe.match(input(t, predicted))); t += 10 }
+        // Preview searches (every other full solve) take the nearest n, then 2n, 3n …, then all.
+        var expected = n
+        while (expected < all) {
+            assertNull(fe.match(input(t, predicted))); t += 10
+            assertEquals(expected, pb.imageCalls.last().size)
+            assertNull(fe.match(input(t, predicted))); t += 10 // direct
+            expected += n
+        }
+        val guided = pb.imageCalls.size
+        assertEquals(0, pb.calls.size)
+        assertNull(fe.match(input(t, predicted))); t += 10
+        assertEquals(guided, pb.imageCalls.size)
+        assertEquals(1, pb.calls.size) // all of them
+        // The first set was the side tilts on the camera's side, nearest first.
+        val labels = pb.imageCalls.first().map { im -> matcher.views.single { it.imageNo == im.imageNo }.label }
+        assertEquals("tilt side 60°", labels.first().replace("-", ""))
+        assertTrue(labels.toString(), labels.take(2).all { it.startsWith("tilt side") })
+        assertTrue(fe.diagnosticsAndReset()!!.contains("guided=$guided "))
+        // A hit resets the search: the next one starts from the nearest n again.
+        pb.answer = { solve(0) }
+        assertNull(fe.match(input(t, predicted))); t += 10 // direct
+        assertEquals(VisualMatchMethod.KPM_PREVIEW, fe.match(input(t, predicted))!!.method); t += 10
+        pb.answer = { null }
+        repeat(3) { fe.match(input(t, predicted)); t += 10 } // two direct misses, then the previews
+        assertEquals(n, pb.imageCalls.last().size)
+        // Without a prediction, every preview is searched.
+        val before = pb.calls.size
+        repeat(2) { fe.match(input(t)); t += 10 }
+        assertEquals(before + 1, pb.calls.size)
+    }
+
+    @Test
+    fun `previews off builds none`() {
+        var asked = false
+        val fe = frontEnd(KpmMatchSpeedConfig(previewSearchAfterMisses = 0), previews = { asked = true; null })
+        fe.addPage(ByteBuffer.allocateDirect(4), 2, 2, 1f, false, 0, RigidMath.identity())
+        assertTrue(!asked)
+    }
+
+    @Test
+    fun `a frontal prediction is counted for the diagnostic`() {
+        val (fe, centre, frontal) = obliqueScene(10.0)
+        fe.match(input(0, canonicalView(frontal, centre)))
+        assertEquals("rect{planned=0 swept=0 kpm=0 solved=0 frontal=1 maxObliq=0}", fe.diagnosticsAndReset())
     }
 
     @Test

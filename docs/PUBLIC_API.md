@@ -22,6 +22,8 @@ Recommended entry points:
 - `PlanarPage`
 - `PlanarMatch`
 - `PlanarMatchRequest`
+- `PlanarPageView`
+- `PlanarImage`
 - `SphereSlamStandaloneSession`
 - `AnchoredStandaloneSession`
 - `SphereSlamTracker`
@@ -169,7 +171,8 @@ OpenCV's native library (`opencv_java5`) loaded, as for `Relocalizer`; without i
 off and every frame is a full KPM solve. Flow poses never grow the atlas.
 `KpmMatchSpeedConfig.FULL_KPM_EVERY_FRAME` restores the previous every-frame full-resolution solve.
 `SphereSlamStandaloneSession.match(luma, timestampNs, PlanarMatchRequest(pageNo, maxCorrespondences))`
-exposes the underlying single-page match and inlier correspondences, and
+exposes the underlying single-page match and inlier correspondences (`PlanarMatchRequest(images = …)`
+matches only the given `PlanarImage`s: pages and their `addReferenceView` previews), and
 `SphereSlamStandaloneSession.cameraFromCanonical(pageNo, cameraFromPage3x4)` converts an externally
 solved page pose with the same conversion as `match`.
 
@@ -191,7 +194,8 @@ Every `Config.metricsIntervalMs` (5 s) `Callbacks.onDiagnostic` receives the las
 `timing{frames attempts matched convertMs setupMs matchMs keyframeMs growthMs}` (`attempts` frames
 ran the matcher, `matched` got a pose back; `mean/max` ms over the
 window; `convertMs` comes from `Frame.convertDurationNs`, `growthMs` is only the analyzer-side cost of
-starting a growth attempt). The line is a diagnostic, not a stable format.
+starting a growth attempt), then `tiles{…}`, `rect{planned swept kpm solved frontal maxObliq}` and
+`previews{images features builtMs ready tried guided solved}` when they apply (README: Diagnostics). The line is a diagnostic, not a stable format.
 
 #### `:models`
 

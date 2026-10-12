@@ -143,6 +143,16 @@ class MainActivity : ComponentActivity() {
             run.notes = text
             reporter.schedule(NOTES_DEBOUNCE_MS)
         }
+        screen.onMode = { render() }
+        screen.tune.onKnob = { id, value ->
+            tuning.knobs = tuning.knobs + (id to value)
+            scheduleApply()
+        }
+        screen.tune.onReset = {
+            tuning.knobs = Knobs.DEFAULTS
+            scheduleApply()
+            render()
+        }
         setContentView(screen.root)
 
         if (!app.launchHandled) {
@@ -173,6 +183,8 @@ class MainActivity : ComponentActivity() {
         attitude.start(SensorManager.SENSOR_DELAY_GAME)
         // Back from Settings with the camera now allowed: start without a relaunch.
         if (!cameraStarted && hasCameraPermission()) startCamera()
+        // Settings chosen on the tuning screen ("Use these live") take effect on return.
+        if (tracker != null && tuning.knobs != appliedKnobs) applyKnobs.run()
         ui.post(tick)
     }
 
@@ -188,7 +200,9 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        tracker?.let { t -> analysisExecutor.execute { t.close() } }
+        ui.removeCallbacks(applyKnobs)
+        if (isFinishing && tuning.recorder != null) Thread { tuning.stopRecording() }.start()
+        tracker?.close()
         analysisExecutor.shutdown()
         reporter.close()
         super.onDestroy()
@@ -227,6 +241,11 @@ class MainActivity : ComponentActivity() {
         val (label, tone) = if (camera != null) "Camera unavailable" to Status.FAIL else Guide.describeState(tracking)
         screen.status(label, tone, v?.telemetry.orEmpty(), v?.elevationDeg?.let { Guide.describeElevation(it) }.orEmpty())
 
+        if (screen.tuneOpen) {
+            overlay.showCaptureGuide = false
+            renderTune()
+            return
+        }
         if (screen.overviewOpen) {
             overlay.showCaptureGuide = false
             renderOverview()
@@ -382,7 +401,10 @@ class MainActivity : ComponentActivity() {
 
     private fun apply(action: CoachAction, step: Step) {
         when (action) {
-            CoachAction.RESTART_TRACKING -> restartTracker()
+            CoachAction.RESTART_TRACKING -> {
+                tracker?.let { t -> tuning.recorder?.event(RecordEvent.Restart(t.lastFrameNs, Replayer.RESTART_TRACKING)) }
+                restartTracker()
+            }
             CoachAction.CAPTURE_TARGET -> {
                 val surface = step.needs ?: step.surface ?: Surface.WALL
                 val at = guide.steps.indexOfFirst { it.kind == StepKind.CAPTURE && it.surface == surface }
@@ -451,6 +473,80 @@ class MainActivity : ComponentActivity() {
             run.log("run complete: $passed passed, $failed failed, $skipped skipped")
             reporter.flush()
         }
+    }
+
+    // --- tuning ---------------------------------------------------------------------------------
+
+    private val tuning get() = app.tuning
+    /** The knob values the running session was built with. */
+    private var appliedKnobs: Map<String, Float> = emptyMap()
+    @Volatile private var savingRecording = false
+    private var lastSaved: String? = null
+
+    /** Knob changes apply once the slider settles, not on every step of a drag. */
+    private val applyKnobs = Runnable {
+        val t = tracker ?: return@Runnable
+        if (tuning.knobs == appliedKnobs) return@Runnable
+        tuning.recorder?.let { r ->
+            r.event(RecordEvent.Knobs(t.lastFrameNs, tuning.knobs))
+            r.event(RecordEvent.Restart(t.lastFrameNs, Replayer.RESTART_KNOBS))
+        }
+        run.log("tuning: ${Knobs.describe(tuning.knobs)}")
+        restartTracker(carryTarget = true)
+        render()
+    }
+
+    private fun scheduleApply() {
+        ui.removeCallbacks(applyKnobs)
+        ui.postDelayed(applyKnobs, APPLY_DELAY_MS)
+    }
+
+    private fun renderTune() {
+        val r = tuning.recorder
+        val recording = when {
+            savingRecording -> "Saving the recording…"
+            r != null -> "Recording ${Tuning.formatDuration(r.durationMs)} · ${Tuning.formatBytes(r.bytes)} · ${r.frames} frames" +
+                (if (r.full) " · full, stopped taking frames" else "")
+            lastSaved != null -> lastSaved!!
+            else -> "Not recording. A recording keeps every camera frame and sensor reading (a few hundred MB a " +
+                "minute) so the library can be replayed over it with other settings."
+        }
+        val summary = tracker?.metricsSummary()?.takeIf { it.frames > 0 }
+        screen.tune.bind(tuning.knobs, summary, recording, r != null, applying = tuning.knobs != appliedKnobs)
+        screen.actions(
+            primary = Action("Back to step") { screen.show(TestScreen.Mode.STEP) },
+            secondary = when {
+                savingRecording -> Action("Saving…", enabled = false) {}
+                r != null -> Action("Stop") { stopRecording() }
+                else -> Action("Record", enabled = cameraId != null) { startRecording() }
+            },
+            tertiary = Action("Recordings") { startActivity(Intent(this, TuningActivity::class.java)) },
+        )
+    }
+
+    private fun startRecording() {
+        val id = cameraId ?: return
+        val writer = tuning.startRecording(id, realtimeTimestamps)
+        lastSaved = null
+        // A target already held goes in first: a replay needs it from the start.
+        tracker?.let { t -> t.reference?.let { ref -> writer.event(RecordEvent.Capture(CaptureRecord(t.lastFrameNs, ref.checkId, ref.side, ref.crop))) } }
+        run.log("recording to ${writer.file.name}")
+        render()
+    }
+
+    private fun stopRecording() {
+        savingRecording = true
+        Thread {
+            val file = tuning.stopRecording()
+            val info = file?.let { tuning.info(it) }
+            runOnUiThread {
+                savingRecording = false
+                lastSaved = info?.let { "Saved: ${it.describe()}. Open Recordings to sweep it." } ?: "The recording could not be saved."
+                run.log("recording saved: ${info?.describe() ?: "failed"}")
+                render()
+            }
+        }.start()
+        render()
     }
 
     /** A new run with its own report; the finished one stays as it was filed. */
@@ -581,25 +677,35 @@ class MainActivity : ComponentActivity() {
         run.log("camera start failed: $cameraStartError")
     }
 
-    private fun newTracker(cameraId: String, realtime: Boolean): Tracker =
-        Tracker(this, cameraId, realtime, attitude, checklist, run::log,
+    private fun newTracker(cameraId: String, realtime: Boolean, reference: CaptureRecord? = null): Tracker {
+        val knobs = tuning.knobs
+        appliedKnobs = knobs
+        return Tracker(this, cameraId, realtime, attitude, checklist, run::log,
             onView = { v -> lastView = v; lastFrameAtMs = now(); overlay.show(v) },
             onChecklistChanged = { reporter.schedule() },
+            knobs = knobs,
+            reference = reference,
+            recorder = { tuning.recorder },
         ).also {
             it.displayRotationDeg = displayRotationDegrees()
             tracker = it
         }
+    }
 
-    /** A fresh session on the same camera; the old one is closed on the analysis thread it ran on. */
-    private fun restartTracker() {
+    /**
+     * A fresh session on the same camera, built from the live knobs; the old one closes after its
+     * frame in progress. [carryTarget]: the new session starts on the old one's target (a settings
+     * change); otherwise it has none (a restart after tracking stopped).
+     */
+    private fun restartTracker(carryTarget: Boolean = false) {
         val id = cameraId ?: return
         val old = tracker
-        val fresh = newTracker(id, realtimeTimestamps)
+        val fresh = newTracker(id, realtimeTimestamps, if (carryTarget) old?.reference else null)
         lastView = null
         lastLockedMs = Long.MIN_VALUE
         analysis?.setAnalyzer(analysisExecutor, fresh)
-        old?.let { if (!analysisExecutor.isShutdown) analysisExecutor.execute { it.close() } }
-        run.log("tracking restarted")
+        old?.close()
+        run.log("tracking restarted" + if (carryTarget) " with the target kept" else "")
     }
 
     @Suppress("DEPRECATION")
@@ -642,6 +748,8 @@ class MainActivity : ComponentActivity() {
         /** Taps ignored this long after the buttons change under the finger. */
         const val TAP_GUARD_MS = 700L
         const val CRASH_NOTICE_MS = 20_000L
+        /** A knob change applies this long after the slider stops moving. */
+        const val APPLY_DELAY_MS = 600L
         val CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault())
     }
 }
