@@ -27,6 +27,11 @@ class TrackedView(
     val pageAspect: Float,
     /** One line: pose source and method, match time, inliers (empty without a pose). */
     val telemetry: String,
+    /**
+     * True when the outline is not this frame's visual match (a gyro bridge, a held lock or the
+     * photosphere's placement): the overlay draws it dashed, as an estimate.
+     */
+    val estimated: Boolean,
     /** The session's tracking state (`INITIALIZING`, `LOCKED`, `IMU_BRIDGE`, `REACQUIRING`, `LOST`, `FATAL`). */
     val state: String,
     /** Camera elevation from the attitude snapshot, degrees; null without one. */
@@ -63,6 +68,7 @@ class Tracker(
 
     /** Stopped, rejected-capture and held-target state from the session's failure callbacks. */
     val failures = FailureLatch()
+    private val diagnostics = DiagnosticFilter()
     private var lastAxis: FloatArray? = null
 
     private val session = PhotosphereTrackingSession(
@@ -72,7 +78,10 @@ class Tracker(
         PhotosphereTrackingSession.Callbacks(
             onMapFromFingerprintSolved = { mutate { checklist.onMapSolved() } },
             onAtlasPageAdded = { page, _ -> mutate { checklist.onAtlasPage(page.pageNo) } },
-            onDiagnostic = { line -> log(line); mutate { checklist.onDiagnostic(line) } },
+            onDiagnostic = { line ->
+                diagnostics.filter(line)?.let(log)
+                mutate { checklist.onDiagnostic(line) }
+            },
             // Failures and state changes already reach the log through onDiagnostic; not logged twice.
             onFatalError = { t -> failures.onFatalError(t.javaClass.simpleName, sessionStopped()) },
             onFailure = { e ->
@@ -173,6 +182,7 @@ class Tracker(
                     frameHeight = luma.height,
                     pageAspect = pageAspect,
                     telemetry = telemetry(result),
+                    estimated = pose?.source != PhotosphereTrackingSession.PoseSource.KPM,
                     state = result.state.name,
                     elevationDeg = snapshot?.elevationDeg,
                 ),
@@ -219,11 +229,41 @@ class Tracker(
         return buildString {
             if (p != null) {
                 append(p.source)
-                if (p.source == PhotosphereTrackingSession.PoseSource.KPM) append(' ').append(p.matchMethod)
-                append(" · ").append(Checklist.fmt1(p.matchDurationMs)).append(" ms · ").append(p.inlierCount).append(" inliers")
+                // Match time and inliers belong to a visual match; an estimate has neither.
+                if (p.source == PhotosphereTrackingSession.PoseSource.KPM) {
+                    append(' ').append(p.matchMethod)
+                    append(" · ").append(Checklist.fmt1(p.matchDurationMs)).append(" ms · ").append(p.inlierCount).append(" inliers")
+                }
             }
         }
     }
 
     override fun close() = session.close()
+}
+
+/**
+ * Keeps the run's log readable within its line limit: the session reports every transient miss
+ * (`severity=TRANSIENT`, several a second while searching) as its own line, which pushed a step's
+ * history out of the log in seconds. Those are counted by reason instead and added to the next
+ * periodic `timing{…}` line as `transient{REASON=n …}`; every other line passes through.
+ */
+class DiagnosticFilter {
+    private val transient = linkedMapOf<String, Int>()
+
+    /** The line to log, or null when it was only counted. */
+    fun filter(line: String): String? {
+        if ("severity=TRANSIENT" in line) {
+            val reason = REASON_RE.find(line)?.groupValues?.get(1) ?: "OTHER"
+            transient[reason] = (transient[reason] ?: 0) + 1
+            return null
+        }
+        if ("timing{" !in line || transient.isEmpty()) return line
+        val counts = transient.entries.joinToString(" ") { (reason, n) -> "$reason=$n" }
+        transient.clear()
+        return "$line transient{$counts}"
+    }
+
+    private companion object {
+        val REASON_RE = Regex("""failure=([A-Z_]+)""")
+    }
 }

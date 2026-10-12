@@ -64,6 +64,8 @@ class Step(
      * decided) before its undecided checks fail as not seen. Null: never (only the tester decides).
      */
     val timeoutMs: Long? = null,
+    /** What the coach says when a [lockRequired] step loses its lock, in place of the general advice. */
+    val lostAdvice: String? = null,
 )
 
 /** What the tracker is doing, as the coach needs it. */
@@ -216,8 +218,9 @@ class Guide(val steps: List<Step> = STEPS) {
             val lost = tracking.msSinceLocked ?: Long.MAX_VALUE
             if (lost >= UNLOCKED_GRACE_MS) {
                 return Coach(
-                    "Not locked on the target. Point the camera back at the ${needs?.word ?: "wall"} patch you " +
-                        "captured and hold still; the white outline appears on it when it locks.",
+                    step.lostAdvice ?: ("Not locked on the target. Point the camera back at the ${needs?.word ?: "wall"} " +
+                        "patch you captured and hold still; the outline turns solid on it when it locks (dashed " +
+                        "is only an estimate)."),
                     blocking = false,
                     action = if (lost >= RECAPTURE_OFFER_MS) CoachAction.CAPTURE_TARGET else null,
                 )
@@ -350,10 +353,12 @@ class Guide(val steps: List<Step> = STEPS) {
             ),
             Step(
                 "Steep angle",
-                "Walk to one side until you're looking at the target at a steep angle, 45° or more, " +
-                    "keeping it in view. Hold there for a few seconds.",
+                "Walk slowly in an arc to one side, keeping the camera on the target and the solid outline " +
+                    "on it, until you're looking at it at 45° or more. Hold there for a few seconds.",
                 listOf("rectified"),
                 hint = "Go steeper, but keep the target large in the frame.",
+                lostAdvice = "The lock dropped. Step back toward the front of the target until the outline " +
+                    "turns solid again, then walk out more slowly, keeping it in the middle of the frame.",
                 needs = Surface.WALL, lockRequired = true,
                 timeoutMs = 120_000L,
             ),

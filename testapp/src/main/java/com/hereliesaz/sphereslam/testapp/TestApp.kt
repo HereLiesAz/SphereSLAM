@@ -39,13 +39,16 @@ class Run(val info: RunInfo) {
     val checklist = Checklist()
     val guide = Guide()
     private val logLines = ArrayDeque<String>()
+    private var logChars = 0
     @Volatile var notes: String = ""
 
     fun log(line: String) {
         Log.d("SphereSLAM-Test", line)
         synchronized(logLines) {
             logLines.addLast("${Instant.now()} $line")
-            while (logLines.size > MAX_LOG_LINES) logLines.removeFirst()
+            logChars += logLines.last.length + 1
+            // Oldest first to go: the report must fit the Worker's 128 KB body limit.
+            while (logLines.size > MAX_LOG_LINES || logChars > MAX_LOG_CHARS) logChars -= logLines.removeFirst().length + 1
         }
     }
 
@@ -61,7 +64,9 @@ class Run(val info: RunInfo) {
     }
 
     companion object {
-        const val MAX_LOG_LINES = 200
+        const val MAX_LOG_LINES = 400
+        /** The log's size cap; the Worker shows its newest 50 000 characters in the issue. */
+        const val MAX_LOG_CHARS = 60_000
 
         fun start(context: Context): Run = Run(
             RunInfo(

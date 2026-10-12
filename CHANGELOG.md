@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Steep relocks.** A lost camera's predicted pose is the photosphere's placement: right in rotation,
+  but where the lock was in position. The oblique solve (`ObliqueRectifier.solve`) now also starts
+  from the plane homography of the matches themselves and keeps the fit that explains more of them,
+  so a prediction metres off cannot stop it. When no prediction gives an oblique view and direct
+  full solves have missed three times running, every other full solve rectifies a guessed steep view
+  (±45° and ±65° along the wall, then up and down it). The periodic diagnostic gains
+  `rect{planned swept kpm solved frontal maxObliq}`.
+
 - **Fix: native engine not loaded on the session path.** Only `KpmBridge.isAvailable()` (and so
   `SphereSlam.isAvailable()` / `isOperational()`) loaded `libsphereslam.so`. A host that created a
   session without calling one first (`SphereSlam.create`, `PhotosphereTrackingSession` on its first

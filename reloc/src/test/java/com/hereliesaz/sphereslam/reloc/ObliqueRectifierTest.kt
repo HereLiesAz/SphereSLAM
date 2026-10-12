@@ -100,6 +100,75 @@ class ObliqueRectifierTest {
         assertEquals(real0[0], solved.correspondences[0].toDouble(), 0.05)
     }
 
+    /** KPM's answer on [plan]'s virtual image for a camera truly at ([r], [t]): page grid points at virtual pixels. */
+    private fun virtualCorrespondences(plan: ObliqueRectifier.Plan, r: DoubleArray, t: DoubleArray): FloatArray {
+        val virtualFromReal = ObliqueRectifier.invert3(plan.realFromVirtual)!!
+        val corr = ArrayList<Float>()
+        for (gx in -6..6) for (gy in -6..6) {
+            val px = target[0] + gx * 40.0
+            val py = target[1] + gy * 40.0
+            val real = project(r, t, px, py)
+            if (real[0] < 0 || real[0] >= w || real[1] < 0 || real[1] >= h) continue
+            val v = apply(virtualFromReal, real[0], real[1])
+            corr += v[0].toFloat(); corr += v[1].toFloat(); corr += px.toFloat(); corr += py.toFloat()
+        }
+        return corr.toFloatArray()
+    }
+
+    private fun assertPose(r: DoubleArray, t: DoubleArray, solved: ObliqueRectifier.Solved?) {
+        assertNotNull(solved)
+        val p = solved!!.cameraFromPage3x4
+        for (row in 0..2) {
+            for (col in 0..2) assertEquals(r[row * 3 + col], p[row * 4 + col].toDouble(), 1e-3)
+            assertEquals(t[row], p[row * 4 + 3].toDouble(), 1.0)
+        }
+    }
+
+    @Test
+    fun `the solve needs no prediction, and a wildly wrong one does not mislead it`() {
+        val (rTrue, tTrue) = pose(55.0, target, 1300.0)
+        val plan = ObliqueRectifier.plan(rTrue, tTrue, k, 30f, target)!!
+        val corr = virtualCorrespondences(plan, rTrue, tTrue)
+        assertPose(rTrue, tTrue, ObliqueRectifier.solve(plan, corr, k, null, null))
+        // A lost camera's prediction: turned 40° the wrong way and two metres off.
+        val (rBad, tBad) = pose(-15.0, doubleArrayOf(target[0] - 2_000.0, target[1], 0.0), 3_000.0, rollDeg = 20.0)
+        assertPose(rTrue, tTrue, ObliqueRectifier.solve(plan, corr, k, rBad, ObliqueRectifier.centreOf(rBad, tBad)))
+    }
+
+    @Test
+    fun `a homography of the matches gives their pose, outliers aside`() {
+        val (r, t) = pose(62.0, target, 1100.0, rollDeg = -7.0)
+        val points = ArrayList<DoubleArray>()
+        val pixels = ArrayList<FloatArray>()
+        for (gx in -6..6) for (gy in -6..6) {
+            val px = target[0] + gx * 40.0
+            val py = target[1] + gy * 40.0
+            val real = project(r, t, px, py)
+            points += doubleArrayOf(px, py, 0.0)
+            // Every seventh match is wrong by 60 px.
+            val bad = (gx * 13 + gy) % 7 == 0
+            pixels += floatArrayOf((real[0] + if (bad) 60.0 else 0.0).toFloat(), real[1].toFloat())
+        }
+        val hm = ObliqueRectifier.robustHomography(points, pixels)!!
+        val (r2, t2) = ObliqueRectifier.poseFromHomography(hm, k)!!
+        for (i in 0..8) assertEquals(r[i], r2[i], 1e-3)
+        for (i in 0..2) assertEquals(t[i], t2[i], 1.0)
+    }
+
+    @Test
+    fun `guessed steep views are steep, facing the target, and plannable`() {
+        val guesses = ObliqueRectifier.hypotheses(target, 1_000.0, floatArrayOf(45f, -45f, 65f, -65f))
+        assertEquals(8, guesses.size)
+        val obliquities = guesses.map { (r, t) -> ObliqueRectifier.plan(r, t, k, 30f, target)!!.obliquityDeg }
+        assertEquals(listOf(45.0, 45.0, 65.0, 65.0, 45.0, 45.0, 65.0, 65.0), obliquities.map { Math.round(it).toDouble() })
+        // Each looks straight at the target: it projects to the principal point.
+        for ((r, t) in guesses) {
+            val p = project(r, t, target[0], target[1])
+            assertEquals(k[2].toDouble(), p[0], 1e-6)
+            assertEquals(k[3].toDouble(), p[1], 1e-6)
+        }
+    }
+
     @Test
     fun `warp moves a mark from its real pixel to its virtual pixel`() {
         val (r, t) = pose(65.0, target, 1000.0)

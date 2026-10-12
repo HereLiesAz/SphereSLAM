@@ -52,6 +52,12 @@ internal class KpmPlanarFrontEnd(
     // The previous full solve tried only the predicted page and missed: search every page next time.
     private var focusMissPending = false
 
+    // Full solves missed in a row, and the next steep-angle guess to rectify (see sweepPlan).
+    private var missStreak = 0
+    private var sweepTurn = 0
+    private var sweepIndex = 0
+    private val rect = RectStats()
+
     /** Whether flow tracking has been switched off (disabled by config, or OpenCV is missing). */
     val isFlowUnavailable: Boolean get() = flowUnavailable
 
@@ -138,11 +144,13 @@ internal class KpmPlanarFrontEnd(
         nowMs: Long,
         predicted: FloatArray?,
     ): PlanarMatchResult? {
-        // Oblique: KPM matches a virtual frontal view rendered from the full frame (no downscale needed).
-        rectificationPlan(predicted)?.let { plan ->
+        // Oblique: KPM matches a virtual frontal view rendered from the full frame (no downscale needed),
+        // from the prediction, or from a guessed steep view once direct solves keep missing.
+        val planned = rectificationPlan(predicted)?.let { it to predicted } ?: sweepPlan(predicted)?.let { it to null }
+        planned?.let { (plan, prior) ->
             val frame = lumaBytes ?: ByteArray(luma.remaining()).also { luma.duplicate().get(it) }
             val wantCorr = !flowUnavailable && lumaBytes != null && config.maxCorrespondences > 0
-            return rectifiedSolve(plan, frame, lumaBytes, timestampNs, nowMs, predicted!!, wantCorr)
+            return rectifiedSolve(plan, frame, lumaBytes, timestampNs, nowMs, prior, wantCorr)
         }
         val matchLuma = if (small != null) {
             val bytes = lumaBytes ?: ByteArray(luma.remaining()).also { luma.duplicate().get(it) }
@@ -172,10 +180,12 @@ internal class KpmPlanarFrontEnd(
             pose = backend.match(matchLuma.duplicate(), timestampNs, PlanarMatchRequest.ALL_PAGES, maxCorr)
         }
         if (pose == null) {
+            missStreak++
             if (nowMs != Long.MIN_VALUE) scheduler.onFullSolve(nowMs, success = false, seeded = false)
             if (!scheduler.isArmed) flow?.reset()
             return null
         }
+        missStreak = 0
 
         var seeded = false
         if (wantCorrespondences && lumaBytes != null) {
@@ -201,13 +211,44 @@ internal class KpmPlanarFrontEnd(
     /** The rectification for this frame's predicted pose, or null when it is frontal enough (or unknown). */
     private fun rectificationPlan(predicted: FloatArray?): ObliqueRectifier.Plan? {
         if (predicted == null || config.obliqueRectificationDeg <= 0f) return null
-        val pageNo = lastLockedPage?.takeIf { it in pageFrames } ?: pageFrames.keys.firstOrNull() ?: return null
-        val frame = pageFrames.getValue(pageNo)
+        val frame = planPage()?.let { pageFrames.getValue(it) } ?: return null
         val (r, t) = ObliqueRectifier.pagePose(predicted, frame.canonicalFromPage, frame.centerXmm, frame.centerYmm)
             ?: return null
         val pageCentre = doubleArrayOf(frame.centerXmm.toDouble(), frame.centerYmm.toDouble(), 0.0)
-        return ObliqueRectifier.plan(r, t, matchK, config.obliqueRectificationDeg, pageCentre)
+        val plan = ObliqueRectifier.plan(r, t, matchK, config.obliqueRectificationDeg, pageCentre)
+        if (plan == null) rect.frontal++ else rect.planned(plan.obliquityDeg)
+        return plan
     }
+
+    /**
+     * A guessed steep view to rectify, when the prediction gave none and direct solves have missed
+     * [SWEEP_AFTER_MISSES] times running: every other full solve, the next of
+     * [ObliqueRectifier.hypotheses] in turn. A lost camera's prediction can say "frontal" from the
+     * wrong place, or there is none; this keeps a steep relock possible either way, at no cost while
+     * locked (flow tracks, and a hit resets the streak).
+     */
+    private fun sweepPlan(predicted: FloatArray?): ObliqueRectifier.Plan? {
+        if (config.obliqueRectificationDeg <= 0f || missStreak < SWEEP_AFTER_MISSES) return null
+        if (sweepTurn++ % 2 == 0) return null // alternate with the direct solve
+        val frame = planPage()?.let { pageFrames.getValue(it) } ?: return null
+        val target = doubleArrayOf(frame.centerXmm.toDouble(), frame.centerYmm.toDouble(), 0.0)
+        // As far as the prediction puts the camera, else two page widths.
+        val distance = predicted
+            ?.let { ObliqueRectifier.pagePose(it, frame.canonicalFromPage, frame.centerXmm, frame.centerYmm) }
+            ?.let { (r, t) -> ObliqueRectifier.centreOf(r, t) }
+            ?.let { c -> kotlin.math.sqrt((c[0] - target[0]) * (c[0] - target[0]) + (c[1] - target[1]) * (c[1] - target[1]) + c[2] * c[2]) }
+            ?.takeIf { it.isFinite() && it > 1.0 }
+            ?: (4.0 * frame.centerXmm)
+        val guesses = ObliqueRectifier.hypotheses(target, distance, SWEEP_TILTS_DEG)
+        if (guesses.isEmpty()) return null
+        val (r, t) = guesses[sweepIndex++ % guesses.size]
+        return ObliqueRectifier.plan(r, t, matchK, config.obliqueRectificationDeg, target)?.also { rect.swept++ }
+    }
+
+    private fun planPage(): Int? = lastLockedPage?.takeIf { it in pageFrames } ?: pageFrames.keys.firstOrNull()
+
+    /** `rect{…}` for the session's periodic diagnostic, then reset; null before any full solve was planned. */
+    override fun diagnosticsAndReset(): String? = rect.summaryAndReset()
 
     /**
      * The full solve of an oblique frame: KPM on its virtual frontal view, the real pose solved from
@@ -220,7 +261,7 @@ internal class KpmPlanarFrontEnd(
         lumaBytes: ByteArray?,
         timestampNs: Long,
         nowMs: Long,
-        predicted: FloatArray,
+        predicted: FloatArray?,
         wantCorrespondences: Boolean,
     ): PlanarMatchResult? {
         val w = matchIntrinsics.width
@@ -229,18 +270,21 @@ internal class KpmPlanarFrontEnd(
         ObliqueRectifier.warp(frame, intrinsics.width, intrinsics.height, factor, w, h, plan, buffer)
         val pageRequest = lastLockedPage?.takeIf { it in pageFrames } ?: PlanarMatchRequest.ALL_PAGES
         val raw = backend.match(buffer.duplicate(), timestampNs, pageRequest, maxOf(config.maxCorrespondences, MIN_RECTIFIED_CORRESPONDENCES))
+        if (raw != null) rect.kpm++
         val solved = raw?.let { m ->
             val frame = pageFrames[m.pageNo] ?: return@let null
-            val (pr, pt) = ObliqueRectifier.pagePose(predicted, frame.canonicalFromPage, frame.centerXmm, frame.centerYmm)
-                ?: return@let null
-            ObliqueRectifier.solve(plan, m.correspondences, matchK, pr, ObliqueRectifier.centreOf(pr, pt))
+            val prior = predicted?.let { ObliqueRectifier.pagePose(it, frame.canonicalFromPage, frame.centerXmm, frame.centerYmm) }
+            ObliqueRectifier.solve(plan, m.correspondences, matchK, prior?.first, prior?.let { (pr, pt) -> ObliqueRectifier.centreOf(pr, pt) })
                 ?.let { s -> backend.cameraFromCanonical(m.pageNo, s.cameraFromPage3x4)?.let { view -> Triple(m.pageNo, s, view) } }
         }
         if (solved == null) {
+            missStreak++
             if (nowMs != Long.MIN_VALUE) scheduler.onFullSolve(nowMs, success = false, seeded = false)
             if (!scheduler.isArmed) flow?.reset()
             return null
         }
+        missStreak = 0
+        rect.solved++
         val (pageNo, s, view) = solved
         var seeded = false
         if (wantCorrespondences && lumaBytes != null) {
@@ -289,9 +333,41 @@ internal class KpmPlanarFrontEnd(
         }
     }
 
+    /** What the rectified path did since the last diagnostic. */
+    private class RectStats {
+        var planned = 0
+        var swept = 0
+        var kpm = 0
+        var solved = 0
+        var frontal = 0
+        var maxObliquity = 0.0
+
+        fun planned(obliquityDeg: Double) {
+            planned++
+            maxObliquity = maxOf(maxObliquity, obliquityDeg)
+        }
+
+        /**
+         * `rect{planned=P swept=S kpm=K solved=V frontal=F maxObliq=D}`: P frames rectified from the
+         * prediction (D its steepest, degrees), S from a guess; KPM matched K of those virtual views
+         * and V gave a pose; F predictions were too frontal to rectify. Null when all are zero.
+         */
+        fun summaryAndReset(): String? {
+            if (planned + swept + frontal == 0) return null
+            val out = "rect{planned=$planned swept=$swept kpm=$kpm solved=$solved frontal=$frontal " +
+                "maxObliq=${String.format(java.util.Locale.ROOT, "%.0f", maxObliquity)}}"
+            planned = 0; swept = 0; kpm = 0; solved = 0; frontal = 0; maxObliquity = 0.0
+            return out
+        }
+    }
+
     private companion object {
         /** Correspondences requested from a rectified solve (its pose is solved from them). */
         const val MIN_RECTIFIED_CORRESPONDENCES = 120
+        /** Direct full solves missed in a row before guessed steep views join the search. */
+        const val SWEEP_AFTER_MISSES = 3
+        /** The guessed views' angles from the wall normal, each way, degrees. */
+        val SWEEP_TILTS_DEG = floatArrayOf(45f, -45f, 65f, -65f)
     }
 
     override fun close() {

@@ -280,6 +280,56 @@ class KpmPlanarFrontEndTest {
     }
 
     @Test
+    fun `with no usable prediction, repeated misses bring guessed steep views into the search`() {
+        val (fe, centre, _) = obliqueScene(50.0)
+        val mk = backend!!.intrinsics
+        val km = floatArrayOf(mk.fx, mk.fy, mk.cx, mk.cy)
+        val b = backend!!
+        b.answer = { null }
+        // Three direct misses, then guesses alternate with direct solves.
+        repeat(3) { assertNull(fe.match(input(it * 10L))) }
+        assertEquals(null, fe.diagnosticsAndReset()) // nothing rectified yet, no prediction to judge
+        assertNull(fe.match(input(30))) // direct
+        // The first guess: 45° along the wall, two page widths out. The camera really is 50° along it.
+        val truth = ObliqueGeometry.pose(50.0, centre, 1_200.0)
+        val guess = ObliqueRectifier.hypotheses(centre, 4.0 * centre[0], floatArrayOf(45f, -45f, 65f, -65f)).first()
+        val plan = ObliqueRectifier.plan(guess.first, guess.second, km, 30f, centre)!!
+        val virtualFromReal = ObliqueRectifier.invert3(plan.realFromVirtual)!!
+        val corr = ArrayList<Float>()
+        for (gx in -8..8) for (gy in -8..8) {
+            val px = centre[0] + gx * 30.0
+            val py = centre[1] + gy * 30.0
+            val real = ObliqueGeometry.project(km, truth.first, truth.second, px, py)
+            if (real[0] < 0 || real[0] >= mk.width || real[1] < 0 || real[1] >= mk.height) continue
+            val w = virtualFromReal[6] * real[0] + virtualFromReal[7] * real[1] + virtualFromReal[8]
+            corr += ((virtualFromReal[0] * real[0] + virtualFromReal[1] * real[1] + virtualFromReal[2]) / w).toFloat()
+            corr += ((virtualFromReal[3] * real[0] + virtualFromReal[4] * real[1] + virtualFromReal[5]) / w).toFloat()
+            corr += px.toFloat()
+            corr += py.toFloat()
+        }
+        assertTrue("visible ${corr.size / 4}", corr.size / 4 >= 20)
+        b.answer = { KpmMatcherBackend.Solve(0, view, 0.5f, corr.size / 4, FloatArray(12), corr.toFloatArray()) }
+        val r = fe.match(input(40))!!
+        assertEquals(VisualMatchMethod.KPM_RECTIFIED, r.method)
+        assertTrue(r.reprojectionError < 0.01f)
+        assertEquals("rect{planned=0 swept=1 kpm=1 solved=1 frontal=0 maxObliq=0}", fe.diagnosticsAndReset())
+        // A hit ends the search: the next miss is direct again.
+        b.answer = { null }
+        flow.trackResult = null
+        val before = b.calls.size
+        assertNull(fe.match(input(50)))
+        assertNull(fe.diagnosticsAndReset())
+        assertEquals(before + 1, b.calls.size)
+    }
+
+    @Test
+    fun `a frontal prediction is counted for the diagnostic`() {
+        val (fe, centre, frontal) = obliqueScene(10.0)
+        fe.match(input(0, canonicalView(frontal, centre)))
+        assertEquals("rect{planned=0 swept=0 kpm=0 solved=0 frontal=1 maxObliq=0}", fe.diagnosticsAndReset())
+    }
+
+    @Test
     fun `a failed rectified solve returns no pose`() {
         val (fe, centre, truth) = obliqueScene(70.0)
         backend!!.answer = { null }

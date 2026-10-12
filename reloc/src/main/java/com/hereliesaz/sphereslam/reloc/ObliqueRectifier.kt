@@ -17,7 +17,8 @@ import kotlin.math.sqrt
  * the plane, whatever the prediction's error), and the real camera's pose is solved from them.
  *
  * The prediction only chooses the virtual view: an error in it leaves some foreshortening (and moves
- * the wall in the virtual image) but never biases the solved pose.
+ * the wall in the virtual image) but never biases the solved pose, which starts from the matches' own
+ * homography. With no usable prediction, [hypotheses] supplies guessed views to rectify in turn.
  *
  * Conventions: page frame in millimetres (KPM's), z = 0 on the wall; cameras in the image convention
  * (x right, y down, z forward); rotations row-major world→camera; homographies row-major 3×3; pixels
@@ -193,15 +194,21 @@ internal object ObliqueRectifier {
     /**
      * Solve the real camera from KPM [correspondences] found in the virtual image (rows of virtual
      * x, y, page x mm, page y mm): map the pixels back through [plan] and fit the pose with
-     * [PhotosphereGeometry.ransacPose], seeded by the prediction (re-expressed in the matched page's
-     * frame by the caller: [priorRotation] / [priorCentre]).
+     * [PhotosphereGeometry.ransacPose].
+     *
+     * The fit starts from two places and keeps the one that explains more matches: the pose read off
+     * the plane homography of the matches themselves ([poseFromHomography], independent of any
+     * prediction), and the prediction ([priorRotation] / [priorCentre], re-expressed in the matched
+     * page's frame by the caller; null when there is none). A lost camera's prediction can be off by
+     * metres (the photosphere knows where it turned, not where it walked), and a fit started there
+     * may not reach the true pose.
      */
     fun solve(
         plan: Plan,
         correspondences: FloatArray,
         k: FloatArray,
-        priorRotation: DoubleArray,
-        priorCentre: DoubleArray,
+        priorRotation: DoubleArray?,
+        priorCentre: DoubleArray?,
         inlierPx: Double = 3.0,
         minInliers: Int = 8,
     ): Solved? {
@@ -218,9 +225,12 @@ internal object ObliqueRectifier {
             pixels += floatArrayOf(((h[0] * u + h[1] * v + h[2]) / w).toFloat(), ((h[3] * u + h[4] * v + h[5]) / w).toFloat())
             points += doubleArrayOf(correspondences[i * 4 + 2].toDouble(), correspondences[i * 4 + 3].toDouble(), 0.0)
         }
-        val fit = PhotosphereGeometry.ransacPose(
-            points, pixels, k, priorRotation, priorCentre, inlierPx = inlierPx, minInliers = minInliers,
-        ) ?: return null
+        val starts = ArrayList<Pair<DoubleArray, DoubleArray>>(2)
+        robustHomography(points, pixels)?.let { hm -> poseFromHomography(hm, k) }?.let { (r, t) -> starts += r to centreOf(r, t) }
+        if (priorRotation != null && priorCentre != null) starts += priorRotation to priorCentre
+        val fit = starts.mapNotNull { (r0, c0) ->
+            PhotosphereGeometry.ransacPose(points, pixels, k, r0, c0, inlierPx = inlierPx, minInliers = minInliers)
+        }.maxWithOrNull(compareBy<PhotosphereGeometry.PoseFit> { it.inliers.size }.thenByDescending { it.rmsPx }) ?: return null
         val r = fit.rotation
         val c = fit.centre
         val pose = FloatArray(12)
@@ -236,6 +246,145 @@ internal object ObliqueRectifier {
             inlierCorr[j * 4 + 3] = points[i][1].toFloat()
         }
         return Solved(pose, (fit.rmsPx * fit.rmsPx).toFloat(), fit.inliers.size, inlierCorr)
+    }
+
+    /**
+     * Guessed views for a search without a usable prediction: a camera [distanceMm] from page point
+     * [target], turned [tiltsDeg] away from the wall normal about the page's vertical axis (walking
+     * along the wall) and then about its horizontal axis (looking up or down it), image up along
+     * page −y. One is rectified per full solve, in turn; a guess within a few tens of degrees of the
+     * truth leaves foreshortening KPM tolerates, and [solve] does not depend on the guess.
+     */
+    fun hypotheses(target: DoubleArray, distanceMm: Double, tiltsDeg: FloatArray): List<Pair<DoubleArray, DoubleArray>> {
+        val out = ArrayList<Pair<DoubleArray, DoubleArray>>(tiltsDeg.size * 2)
+        for (vertical in listOf(true, false)) for (tilt in tiltsDeg) {
+            val a = Math.toRadians(tilt.toDouble())
+            // Camera centre: back from the target along the tilted normal (+z is the camera side).
+            val c = if (vertical) {
+                doubleArrayOf(target[0] + distanceMm * kotlin.math.sin(a), target[1], distanceMm * kotlin.math.cos(a))
+            } else {
+                doubleArrayOf(target[0], target[1] + distanceMm * kotlin.math.sin(a), distanceMm * kotlin.math.cos(a))
+            }
+            val f = unit(doubleArrayOf(target[0] - c[0], target[1] - c[1], -c[2])) ?: continue
+            // Image y down ↔ page −y: x = f × (0, −1, 0) negated, y = f × x.
+            val x = unit(cross(doubleArrayOf(0.0, -1.0, 0.0), f).map { -it }.toDoubleArray()) ?: continue
+            val y = cross(f, x)
+            val r = doubleArrayOf(x[0], x[1], x[2], y[0], y[1], y[2], f[0], f[1], f[2])
+            val t = DoubleArray(3) { i -> -(r[i * 3] * c[0] + r[i * 3 + 1] * c[1] + r[i * 3 + 2] * c[2]) }
+            out += r to t
+        }
+        return out
+    }
+
+    /**
+     * The plane → pixel homography (page x, y mm → pixels) best fitting [points] / [pixels]: a
+     * Hartley-normalised least-squares fit, refitted twice on the matches within
+     * max(3 × median, 8 px) of the last one. Null under 4 matches or when degenerate.
+     */
+    internal fun robustHomography(points: List<DoubleArray>, pixels: List<FloatArray>): DoubleArray? {
+        var sel = points.indices.toList()
+        var h: DoubleArray? = null
+        repeat(3) {
+            if (sel.size < 4) return h
+            val fit = fitHomography(sel.map { points[it] }, sel.map { pixels[it] }) ?: return h
+            h = fit
+            val res = points.indices.map { i ->
+                val w = fit[6] * points[i][0] + fit[7] * points[i][1] + fit[8]
+                if (w <= 1e-12) Double.POSITIVE_INFINITY else {
+                    val u = (fit[0] * points[i][0] + fit[1] * points[i][1] + fit[2]) / w
+                    val v = (fit[3] * points[i][0] + fit[4] * points[i][1] + fit[5]) / w
+                    sqrt((u - pixels[i][0]).sq() + (v - pixels[i][1]).sq())
+                }
+            }
+            val finite = res.filter { it.isFinite() }.sorted()
+            if (finite.isEmpty()) return null
+            val gate = maxOf(8.0, 3.0 * finite[finite.size / 2])
+            sel = points.indices.filter { res[it] <= gate }
+        }
+        return h
+    }
+
+    /** Least-squares homography (h33 = 1) on Hartley-normalised coordinates; null when degenerate. */
+    private fun fitHomography(points: List<DoubleArray>, pixels: List<FloatArray>): DoubleArray? {
+        val n = points.size
+        fun normaliser(xs: DoubleArray, ys: DoubleArray): DoubleArray? {
+            val mx = xs.average(); val my = ys.average()
+            val d = xs.indices.sumOf { sqrt((xs[it] - mx).sq() + (ys[it] - my).sq()) } / xs.size
+            if (d < 1e-9) return null
+            val s = sqrt(2.0) / d
+            return doubleArrayOf(s, 0.0, -s * mx, 0.0, s, -s * my, 0.0, 0.0, 1.0)
+        }
+        val tp = normaliser(DoubleArray(n) { points[it][0] }, DoubleArray(n) { points[it][1] }) ?: return null
+        val tx = normaliser(DoubleArray(n) { pixels[it][0].toDouble() }, DoubleArray(n) { pixels[it][1].toDouble() }) ?: return null
+        // Normal equations AᵀA h = Aᵀb for h11..h32, two rows per match.
+        val ata = Array(8) { DoubleArray(8) }
+        val atb = DoubleArray(8)
+        for (i in 0 until n) {
+            val x = tp[0] * points[i][0] + tp[2]; val y = tp[4] * points[i][1] + tp[5]
+            val u = tx[0] * pixels[i][0] + tx[2]; val v = tx[4] * pixels[i][1] + tx[5]
+            val rows = arrayOf(
+                doubleArrayOf(x, y, 1.0, 0.0, 0.0, 0.0, -u * x, -u * y) to u,
+                doubleArrayOf(0.0, 0.0, 0.0, x, y, 1.0, -v * x, -v * y) to v,
+            )
+            for ((a, b) in rows) {
+                for (p in 0 until 8) {
+                    atb[p] += a[p] * b
+                    for (q in 0 until 8) ata[p][q] += a[p] * a[q]
+                }
+            }
+        }
+        val hn = solveLinear(ata, atb) ?: return null
+        val hNorm = doubleArrayOf(hn[0], hn[1], hn[2], hn[3], hn[4], hn[5], hn[6], hn[7], 1.0)
+        val txInv = invert3(tx) ?: return null
+        return normalize(mul3(mul3(txInv, hNorm), tp))
+    }
+
+    /**
+     * Camera-from-page pose (row-major R, t mm) read off a plane homography: `K⁻¹H = λ[r1 r2 t]`, the
+     * page in front of the camera, the rotation squared up by Gram–Schmidt. Null when degenerate.
+     */
+    internal fun poseFromHomography(h: DoubleArray, k: FloatArray): Pair<DoubleArray, DoubleArray>? {
+        val kInv = invert3(doubleArrayOf(k[0].toDouble(), 0.0, k[2].toDouble(), 0.0, k[1].toDouble(), k[3].toDouble(), 0.0, 0.0, 1.0)) ?: return null
+        val b = mul3(kInv, h)
+        val b1 = doubleArrayOf(b[0], b[3], b[6])
+        val b2 = doubleArrayOf(b[1], b[4], b[7])
+        val b3 = doubleArrayOf(b[2], b[5], b[8])
+        val n1 = sqrt(b1.sumOf { it * it }); val n2 = sqrt(b2.sumOf { it * it })
+        if (n1 < 1e-12 || n2 < 1e-12) return null
+        var lambda = 2.0 / (n1 + n2)
+        if (lambda * b3[2] < 0) lambda = -lambda
+        val r1 = unit(DoubleArray(3) { lambda * b1[it] }) ?: return null
+        val r2raw = DoubleArray(3) { lambda * b2[it] }
+        val d = r2raw[0] * r1[0] + r2raw[1] * r1[1] + r2raw[2] * r1[2]
+        val r2 = unit(DoubleArray(3) { r2raw[it] - d * r1[it] }) ?: return null
+        val r3 = cross(r1, r2)
+        // Columns r1 r2 r3 are the page axes in the camera frame.
+        val r = doubleArrayOf(r1[0], r2[0], r3[0], r1[1], r2[1], r3[1], r1[2], r2[2], r3[2])
+        val t = DoubleArray(3) { lambda * b3[it] }
+        if (r.any { !it.isFinite() } || t.any { !it.isFinite() }) return null
+        return r to t
+    }
+
+    private fun solveLinear(a: Array<DoubleArray>, b: DoubleArray): DoubleArray? {
+        val n = b.size
+        val m = Array(n) { i -> DoubleArray(n + 1) { j -> if (j < n) a[i][j] else b[i] } }
+        for (col in 0 until n) {
+            var pivot = col
+            for (r in col + 1 until n) if (abs(m[r][col]) > abs(m[pivot][col])) pivot = r
+            if (abs(m[pivot][col]) < 1e-12) return null
+            val tmp = m[col]; m[col] = m[pivot]; m[pivot] = tmp
+            for (r in 0 until n) {
+                if (r == col) continue
+                val f = m[r][col] / m[col][col]
+                if (f != 0.0) for (c in col..n) m[r][c] -= f * m[col][c]
+            }
+        }
+        return DoubleArray(n) { m[it][n] / m[it][it] }.takeIf { x -> x.all { it.isFinite() } }
+    }
+
+    private fun unit(v: DoubleArray): DoubleArray? {
+        val n = sqrt(v.sumOf { it * it })
+        return if (n < 1e-12 || !n.isFinite()) null else DoubleArray(v.size) { v[it] / n }
     }
 
     /** Camera centre (page frame) of a page pose. */

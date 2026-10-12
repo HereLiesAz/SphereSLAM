@@ -379,11 +379,16 @@ result.pose?.let { draw(it.cameraFromMap, it.projection) }
   from the side never matched. When the predicted view is at least `obliqueRectificationDeg` (30°)
   off the wall's normal, the full solve warps the frame to a virtual camera facing the wall square-on
   (same intrinsics, same distance, aimed where the real optical axis meets it), matches that, maps
-  the correspondences back to real pixels and solves the real pose from them by RANSAC PnP. The
-  result is exact however rough the prediction: the prediction only chooses the warp. Needs a
-  predicted pose (gyro bridge or last lock); 0 disables. The virtual view is rendered from the
-  full-resolution frame (2 × 2 sub-samples per pixel), not its downscaled copy, so the
-  foreshortened side of the wall keeps the detail the frame has.
+  the correspondences back to real pixels and solves the real pose from them. The solve starts from
+  the matches' own plane homography as well as the prediction and keeps the fit that explains more of
+  them, so the result is exact however rough the prediction: the prediction only chooses the warp.
+  The prediction is the gyro-carried last lock, or once lost the photosphere's placement (right in
+  rotation, wrong in position after the camera has walked). When it gives no oblique view and direct
+  solves have missed three times running, every other full solve rectifies a guessed view instead
+  (45° and 65° each way along the wall, then up and down it), so a steep relock does not depend on
+  the guess. 0 disables. The virtual view is rendered from the full-resolution frame (2 × 2
+  sub-samples per pixel), not its downscaled copy, so the foreshortened side of the wall keeps the
+  detail the frame has.
 - **Reference scale** — a reference far larger than the matched frame (a full-resolution camera
   still against a 320 × 240 match) leaves the wall outside KPM's scale range. A page is registered
   from an area-downscaled copy whose long side is at most `maxReferenceScale` (3) × the matched
@@ -470,6 +475,10 @@ SphereSLAM standalone KPM page=0 inliers=87 error=3.1 ageMs=41.2 matchMs=18.4 me
 
 `tiles{…}` (with tile localization): stations opened, the active one, tiles, anchor tiles, triangulated landmarks,
 monocular-depth points, and rotation / 6-DoF tile fixes adopted in the window.
+
+`rect{planned swept kpm solved frontal maxObliq}` (once a full solve has considered rectification):
+frames rectified from the prediction (`maxObliq` its steepest, degrees) and from a guessed view, how
+many of those KPM matched and how many gave a pose, and predictions too frontal to rectify.
 
 `attempts` frames ran the matcher and `matched` of them got a pose back (before gating). `error` is
 the mean squared reprojection error in pixels² of the image the pose was solved in (KPM: the

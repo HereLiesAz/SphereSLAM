@@ -54,6 +54,9 @@ the last step can't land on the next one.
 - The status line under the camera says what tracking is doing in words (Locked on target, Target
   lost, Tracking stopped, Capture rejected …), then pose source and match method, match time,
   inliers, and the camera's elevation. The capture square shows only on capture steps.
+- The outline is solid on a visual lock and dashed when it is an estimate (gyro bridge, held lock,
+  the photosphere's placement): an estimate can sit beside the target once you have walked, since
+  the photosphere knows how the phone turned, not where it went.
 - The run belongs to the process, not the screen: rotation, folding, resizing or a theme change
   keeps it, and the camera's frame follows the display's rotation.
 - When the run is complete, add notes if something looked wrong. There is nothing to copy: every
@@ -116,8 +119,10 @@ the report.
 The app posts the run to `https://workflows.hereliesaz.workers.dev/test-report/SphereSLAM`
 (`HereLiesAz/workflows`, `worker/src/test-report.js`) 3 s after any change and when it leaves the
 foreground. The Worker files one issue per tested build (label `device-test-<build>`) and one comment
-per run, updated in place as the run progresses, with the result table, notes and the last 200 log
-lines. The key in `BuildConfig.REPORT_KEY` ships in the APK: it filters spam, it is not a secret.
+per run, updated in place as the run progresses, with the result table, notes and the newest log
+lines (the app keeps 400 lines or 60 000 characters, the issue shows the newest 50 000). Transient
+misses (`severity=TRANSIENT`, several a second while searching) are counted by reason onto the next
+`timing{…}` line as `transient{…}` instead of one line each. The key in `BuildConfig.REPORT_KEY` ships in the APK: it filters spam, it is not a secret.
 
 Nothing is lost to a dead network or a dead process (`Reporter.kt`, `TestApp.kt`):
 

@@ -1129,7 +1129,8 @@ class PhotosphereTrackingSession internal constructor(
             "SphereSLAM standalone KPM no-lock"
         }
         val tiles = stations?.summary()?.let { " $it" } ?: ""
-        callbacks.onDiagnostic("$head ${timing.summaryAndReset()}$tiles")
+        val rect = frontEnd?.diagnosticsAndReset()?.let { " $it" } ?: ""
+        callbacks.onDiagnostic("$head ${timing.summaryAndReset()}$tiles$rect")
     }
 
     private fun nowMs(): Long = elapsedRealtimeNanos() / 1_000_000L
@@ -1299,6 +1300,9 @@ internal interface PlanarFrontEnd : AutoCloseable {
      * be safe to call concurrently with [match] on this matcher.
      */
     fun fork(): PlanarFrontEnd? = null
+
+    /** A fragment for the session's periodic diagnostic line (counters since the last call), or null. */
+    fun diagnosticsAndReset(): String? = null
 }
 
 @ExperimentalSphereSlamRelocApi
