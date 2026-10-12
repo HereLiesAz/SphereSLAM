@@ -19,8 +19,8 @@ import kotlin.math.sqrt
  * (latitude) from the pole to the equator cut by circles (longitude), one preview at the pole and at
  * every cut, each from a camera aimed at the core; nested half-spheres for the distances. Each is
  * what this phone's camera ([CameraIntrinsics] of the matched image) would see from there, cropped to
- * its frame: near ones large and strongly foreshortened, far ones small. Turned copies of the
- * square-on view are an extra ([KpmMatchSpeedConfig.previewRotationStepDeg]). KPM learns each preview
+ * its frame: near ones large and strongly foreshortened, far ones small; each view is taken at every
+ * roll of the resolution, turned about its optical axis. KPM learns each preview
  * as another image of the same page ([com.hereliesaz.sphereslam.SphereSlamStandaloneSession.addReferenceView]),
  * its features mapped back to the page through [Preview.pageFromView], so a frame that looks like a
  * preview matches without any prediction of where the camera is.
@@ -31,8 +31,8 @@ import kotlin.math.sqrt
 @ExperimentalSphereSlamRelocApi
 internal object ReferencePreviews {
 
-    /** What a preview shows: the square-on view (a pole), a view from a cut, or a turned pole. */
-    enum class Kind { POLE, CUT, TURN }
+    /** What a preview shows: the square-on view (a pole) or a view from a cut. */
+    enum class Kind { POLE, CUT }
 
     /**
      * One preview: [luma] ([width] × [height], tightly packed) and [pageFromView], the row-major 3×3
@@ -53,9 +53,9 @@ internal object ReferencePreviews {
     /**
      * Where a plan sits on the half-spheres of an [AnticipationResolution]: half-sphere [shell] (0
      * nearest), circle [circle] (0 the pole, 1 nearest it), meridian [meridian] (0 to the page's right,
-     * counterclockwise), and [turn] (0 none; turned poles count from 1).
+     * counterclockwise), and roll [roll] (0 upright, then evenly round).
      */
-    data class Site(val shell: Int, val circle: Int, val meridian: Int, val turn: Int = 0)
+    data class Site(val shell: Int, val circle: Int, val meridian: Int, val roll: Int = 0)
 
     /**
      * A preview to render: the reference-to-preview homography and the preview's size, and the view it
@@ -94,32 +94,21 @@ internal object ReferencePreviews {
     /**
      * The previews of a [width] × [height] reference (the whole target) at [resolution], as [camera]
      * (the matched image's intrinsics) would see them: on each half-sphere, the pole and every cut of
-     * a meridian by a circle (the equator, edge-on, excluded), then turned poles on the middle
-     * half-sphere every [KpmMatchSpeedConfig.previewRotationStepDeg]. Views that leave the target
-     * too small to match (under [MIN_SIDE_PX]) are dropped.
+     * a meridian by a circle (the equator, edge-on, excluded), each at every roll. Views that leave
+     * the target too small to match (under [MIN_SIDE_PX]) are dropped.
      */
     fun plans(width: Int, height: Int, camera: CameraIntrinsics, config: KpmMatchSpeedConfig, resolution: AnticipationResolution): List<Plan> {
         val out = ArrayList<Plan>()
         val radii = shells(resolution.distance, config.anticipationNearestWidths, config.anticipationFarthestWidths)
-        for ((si, r) in radii.withIndex()) {
-            view(width, height, camera, r, 0.0, 0.0, 0.0, Kind.POLE, Site(si, 0, 0))?.let { out += it }
+        for ((si, r) in radii.withIndex()) for (k in 0 until resolution.roll) {
+            val roll = k * 360.0 / resolution.roll
+            view(width, height, camera, r, 0.0, 0.0, roll, Kind.POLE, Site(si, 0, 0, k))?.let { out += it }
             for (c in 1..resolution.longitude) {
                 val tilt = c * 90.0 / (resolution.longitude + 1)
                 for (m in 0 until resolution.latitude) {
                     val azimuth = m * 360.0 / resolution.latitude
-                    view(width, height, camera, r, tilt, azimuth, 0.0, Kind.CUT, Site(si, c, m))?.let { out += it }
+                    view(width, height, camera, r, tilt, azimuth, roll, Kind.CUT, Site(si, c, m, k))?.let { out += it }
                 }
-            }
-        }
-        val step = config.previewRotationStepDeg
-        if (step > 0f && radii.isNotEmpty()) {
-            val mid = radii.size / 2
-            var a = step.toDouble()
-            var n = 1
-            while (a < 360.0 - 1e-6) {
-                view(width, height, camera, radii[mid], 0.0, 0.0, a, Kind.TURN, Site(mid, 0, 0, n))?.let { out += it }
-                a += step
-                n++
             }
         }
         return out
@@ -177,8 +166,7 @@ internal object ReferencePreviews {
         val label = when (kind) {
             Kind.POLE -> "pole ${fmt(distance)}w"
             Kind.CUT -> "${fmt(distance)}w tilt ${fmt(tiltDeg)}° toward ${fmt(azimuthDeg)}°"
-            Kind.TURN -> "pole ${fmt(distance)}w turn ${fmt(rollDeg)}°"
-        }
+        } + if (rollDeg != 0.0) " roll ${fmt(rollDeg)}°" else ""
         return Plan(kind, label, mul(shift, h), pw, ph, r, camera.fx / (distance * w), site)
     }
 

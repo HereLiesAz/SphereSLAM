@@ -439,7 +439,7 @@ class KpmPlanarFrontEndTest {
         repeat(4) { fe.match(input(t)); t += 10 }
         assertEquals(1, pb.imageCalls.size)
         assertEquals(0, pb.calls.size)
-        assertTrue(fe.diagnosticsAndReset()!!.contains("anticipation=0d×0lat×0lon/3d×8lat×3lon factor=0.00 battery=0.00 heat=1.00 compute=0.00 searchable=0"))
+        assertTrue(fe.diagnosticsAndReset()!!.contains("anticipation=0d×0lat×0lon×1roll/3d×8lat×3lon×1roll factor=0.00 battery=0.00 heat=1.00 compute=0.00 searchable=0"))
     }
 
     /** A previews matcher over [pb] for the front end's match intrinsics, built at once. */

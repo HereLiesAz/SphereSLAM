@@ -15,28 +15,32 @@ import android.os.PowerManager
  * core (none on the equator, where the target is edge-on). [distance] nests that many half-spheres,
  * from [KpmMatchSpeedConfig.anticipationNearestWidths] to
  * [KpmMatchSpeedConfig.anticipationFarthestWidths] target widths, so near and far views are
- * anticipated too. Previews per page: `distance × (1 + latitude × longitude)` ([views]), plus the
- * turned poles ([KpmMatchSpeedConfig.previewRotationStepDeg]).
+ * anticipated too. [roll] takes each of those views turned about its optical axis that many times,
+ * evenly from upright (2: upright and upside down; 4: every quarter turn). KPM's features survive
+ * about ±33° of turn, so 6 covers every turn. Previews per page:
+ * `distance × (1 + latitude × longitude) × roll` ([views]).
  *
  * This is the maximum: the session throttles below it by [AnticipationThrottle].
  */
 @ExperimentalSphereSlamRelocApi
-data class AnticipationResolution(val distance: Int, val latitude: Int, val longitude: Int) {
+data class AnticipationResolution(val distance: Int, val latitude: Int, val longitude: Int, val roll: Int = 1) {
     init {
         require(distance in 0..MAX_DISTANCE) { "distance must be 0..$MAX_DISTANCE" }
         require(latitude in 0..MAX_LATITUDE) { "latitude must be 0..$MAX_LATITUDE" }
         require(longitude in 0..MAX_LONGITUDE) { "longitude must be 0..$MAX_LONGITUDE" }
+        require(roll in 1..MAX_ROLL) { "roll must be 1..$MAX_ROLL" }
     }
 
-    /** Previews per page, turned poles aside. */
-    val views: Int get() = distance * (1 + latitude * longitude)
+    /** Previews per page. */
+    val views: Int get() = distance * (1 + latitude * longitude) * roll
 
-    override fun toString(): String = "${distance}d×${latitude}lat×${longitude}lon"
+    override fun toString(): String = "${distance}d×${latitude}lat×${longitude}lon×${roll}roll"
 
     companion object {
         const val MAX_DISTANCE = 8
         const val MAX_LATITUDE = 36
         const val MAX_LONGITUDE = 8
+        const val MAX_ROLL = 12
         val NONE = AnticipationResolution(0, 0, 0)
     }
 }
@@ -113,12 +117,13 @@ class AndroidDevicePressure(context: Context) : DevicePressureSource {
 
 /**
  * A throttled subset of a resolution's views: every [shellStep]th half-sphere (centred on the middle
- * one), every [circleStep]th circle and every [meridianStep]th meridian (from 0, the page's right).
+ * one), every [circleStep]th circle, every [meridianStep]th meridian (from 0, the page's right) and
+ * every [rollStep]th roll (from upright).
  * The session only uses the nested subsets of [chain], so lowering builds nothing and raising again
  * reuses what was built. [NONE] keeps nothing.
  */
 @ExperimentalSphereSlamRelocApi
-data class AnticipationDecimation(val shellStep: Int, val circleStep: Int, val meridianStep: Int) {
+data class AnticipationDecimation(val shellStep: Int, val circleStep: Int, val meridianStep: Int, val rollStep: Int = 1) {
 
     internal fun keeps(site: ReferencePreviews.Site, max: AnticipationResolution): Boolean {
         if (this == NONE) return false
@@ -126,27 +131,28 @@ data class AnticipationDecimation(val shellStep: Int, val circleStep: Int, val m
         if ((site.shell - mid) % shellStep != 0) return false
         if (site.circle != 0 && site.circle % circleStep != 0) return false
         if (site.circle != 0 && site.meridian % meridianStep != 0) return false
-        if (site.turn != 0 && site.turn % meridianStep != 0) return false
+        if (site.roll % rollStep != 0) return false
         return true
     }
 
-    /** The resolution this subset amounts to: half-spheres, meridians and circles kept. */
+    /** The resolution this subset amounts to: half-spheres, meridians, circles and rolls kept. */
     fun of(max: AnticipationResolution): AnticipationResolution {
         if (this == NONE || max.distance == 0) return AnticipationResolution.NONE
         val mid = (max.distance - 1) / 2
         val shells = (0 until max.distance).count { (it - mid) % shellStep == 0 }
         val circles = (1..max.longitude).count { it % circleStep == 0 }
         val meridians = (0 until max.latitude).count { it % meridianStep == 0 }
-        return AnticipationResolution(shells, meridians, circles)
+        val rolls = (0 until max.roll).count { it % rollStep == 0 }
+        return AnticipationResolution(shells, meridians, circles, rolls)
     }
 
     companion object {
-        val FULL = AnticipationDecimation(1, 1, 1)
-        val NONE = AnticipationDecimation(0, 0, 0)
+        val FULL = AnticipationDecimation(1, 1, 1, 1)
+        val NONE = AnticipationDecimation(0, 0, 0, 0)
 
         /**
          * The throttled subsets of [max], from [FULL] down to [NONE], each a subset of the one before:
-         * each step doubles one step (meridian, circle or half-sphere), the one that keeps the most
+         * each step doubles one step (meridian, circle, half-sphere or roll), the one that keeps the most
          * views, so the chain thins evenly and any lower subset needs no preview a higher one lacks.
          */
         fun chain(max: AnticipationResolution): List<AnticipationDecimation> {
@@ -159,6 +165,7 @@ data class AnticipationDecimation(val shellStep: Int, val circleStep: Int, val m
                     d.copy(meridianStep = d.meridianStep * 2),
                     d.copy(circleStep = d.circleStep * 2),
                     d.copy(shellStep = d.shellStep * 2),
+                    d.copy(rollStep = d.rollStep * 2),
                 ).filter { it.of(max).views < views }.maxByOrNull { it.of(max).views } ?: break
                 d = next
                 out += d

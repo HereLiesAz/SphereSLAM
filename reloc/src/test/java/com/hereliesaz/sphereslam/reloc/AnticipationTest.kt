@@ -7,18 +7,18 @@ import org.junit.Test
 /** [AnticipationResolution], its throttled subsets and the governor that picks them. */
 class AnticipationTest {
 
-    private val max = AnticipationResolution(distance = 3, latitude = 8, longitude = 3)
+    private val max = AnticipationResolution(distance = 3, latitude = 8, longitude = 3, roll = 4)
 
     private fun sites(r: AnticipationResolution) = buildList {
-        for (s in 0 until r.distance) {
-            add(ReferencePreviews.Site(s, 0, 0))
-            for (c in 1..r.longitude) for (m in 0 until r.latitude) add(ReferencePreviews.Site(s, c, m))
+        for (s in 0 until r.distance) for (k in 0 until r.roll) {
+            add(ReferencePreviews.Site(s, 0, 0, k))
+            for (c in 1..r.longitude) for (m in 0 until r.latitude) add(ReferencePreviews.Site(s, c, m, k))
         }
     }
 
     @Test
-    fun `views are distance times the pole plus every cut`() {
-        assertEquals(3 * (1 + 8 * 3), max.views)
+    fun `views are distance times the pole plus every cut, times roll`() {
+        assertEquals(3 * (1 + 8 * 3) * 4, max.views)
         assertEquals(0, AnticipationResolution.NONE.views)
         assertEquals(max.views, sites(max).size)
     }
@@ -37,7 +37,7 @@ class AnticipationTest {
             assertTrue(kept.size < all.count { chain[i - 1].keeps(it, max) })
             assertEquals(chain[i].toString(), chain[i].of(max).views, kept.size)
         }
-        // The middle half-sphere's pole is the last view standing.
+        // The middle half-sphere's upright pole is the last view standing.
         val last = chain[chain.size - 2]
         assertEquals(listOf(ReferencePreviews.Site(1, 0, 0)), all.filter { last.keeps(it, max) })
     }
@@ -84,11 +84,12 @@ class AnticipationTest {
         source.pressure = DevicePressure.NONE
         val busy = g.update(18_000)
         assertTrue("${busy.computePressure}", busy.computePressure > 0.9f)
-        assertEquals(AnticipationDecimation.NONE, busy.decimation)
+        assertTrue("${busy.effective}", busy.effective.views <= 0.05f * max.views)
         // A new maximum applies at once; throttle off ignores every pressure.
         g.throttle = AnticipationThrottle.OFF
         g.max = AnticipationResolution(1, 4, 1)
         assertEquals(AnticipationResolution(1, 4, 1), g.update(18_500).max)
+        assertEquals(1, g.status.max.roll)
         assertEquals(AnticipationDecimation.FULL, g.update(30_000).decimation)
     }
 }

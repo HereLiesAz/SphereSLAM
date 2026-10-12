@@ -3,14 +3,14 @@
 ## Unreleased
 
 - **Anticipation resolution.** Previews are now placed on half-spheres over the target:
-  `AnticipationResolution(distance, latitude, longitude)` (`KpmMatchSpeedConfig.anticipationResolution`,
-  default 3 × 8 × 3). `latitude` meridians from the pole (square-on) to the equator, cut by
+  `AnticipationResolution(distance, latitude, longitude, roll)` (`KpmMatchSpeedConfig.anticipationResolution`,
+  default 3 × 8 × 3 × 1). `latitude` meridians from the pole (square-on) to the equator, cut by
   `longitude` circles; a preview at the pole and at every cut, aimed at the core, none on the equator;
   `distance` nested half-spheres from `anticipationNearestWidths` (0.5) to
   `anticipationFarthestWidths` (4) target widths. Each preview is what the phone's camera would see
   from there, cropped to its frame, so near views are large and strongly foreshortened and far ones
-  small. Replaces `previewTiltsDeg` and `previewScales`; turned square-on views
-  (`previewRotationStepDeg`) remain as an extra.
+  small. `roll` takes each view turned that many times, evenly from upright (2: upright and upside
+  down). Replaces `previewTiltsDeg`, `previewScales` and `previewRotationStepDeg`.
 - **The library throttles anticipation itself.** The resolution is a maximum
   (`PhotosphereTrackingSession.anticipationResolution`); the session cuts it by battery, heat and its
   own frame load, weighted by `AnticipationThrottle(battery, heat, compute)`

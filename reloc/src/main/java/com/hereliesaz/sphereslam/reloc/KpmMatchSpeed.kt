@@ -42,8 +42,8 @@ import kotlin.math.sqrt
  *    up and down it).
  * 5. **Previews** ([previewSearchAfterMisses]): each page's reference is rendered as this phone's
  *    camera would see it from the views of [anticipationResolution] (a half-sphere over the target:
- *    meridians cut by circles, nested half-spheres for distance) plus turned square-on views
- *    ([previewRotationStepDeg]), and KPM learns every preview as another image of the page with its
+ *    meridians cut by circles, nested half-spheres for distance, each view turned by roll), and KPM
+ *    learns every preview as another image of the page with its
  *    features mapped back to the page, in a second matcher built in the background
  *    (`ReferencePreviews`, `PreviewMatcher`). After that many direct misses in a row, every other
  *    full solve matches the frame against the previews: a steep, near, far or turned view relocks
@@ -88,8 +88,6 @@ import kotlin.math.sqrt
  * @property anticipationFarthestWidths the farthest half-sphere's radius, in target widths.
  * @property anticipationThrottle how far battery, heat and compute pressure may throttle the
  *   resolution; the session's starting value ([PhotosphereTrackingSession.anticipationThrottle]).
- * @property previewRotationStepDeg turned square-on previews (an extra to the half-spheres) every this
- *   many degrees, on the middle half-sphere; 0 none.
  * @property previewNearest previews the first search matches, nearest the predicted view; each
  *   missed search adds as many again. 0 searches them all every time.
  * @property previewMaxFeatures most features KPM keeps per preview.
@@ -120,7 +118,6 @@ data class KpmMatchSpeedConfig(
     val anticipationNearestWidths: Float = 0.5f,
     val anticipationFarthestWidths: Float = 4f,
     val anticipationThrottle: AnticipationThrottle = AnticipationThrottle(),
-    val previewRotationStepDeg: Float = 45f,
     val previewNearest: Int = 4,
     val previewMaxFeatures: Int = 600,
     val previewAtlasPages: Boolean = true,
@@ -140,7 +137,6 @@ data class KpmMatchSpeedConfig(
         require(previewSearchAfterMisses >= 0)
         require(anticipationNearestWidths.isFinite() && anticipationNearestWidths > 0f)
         require(anticipationFarthestWidths.isFinite() && anticipationFarthestWidths >= anticipationNearestWidths)
-        require(previewRotationStepDeg.isFinite() && previewRotationStepDeg >= 0f && previewRotationStepDeg < 360f)
         require(previewNearest >= 0)
         require(previewMaxFeatures > 0)
         require(obliqueSearchTiltsDeg.all { it.isFinite() && kotlin.math.abs(it) < 89f })

@@ -32,7 +32,7 @@ class ReferencePreviewsTest {
     private val camera = CameraIntrinsics(260f, 260f, 159.5f, 119.5f, 320, 240)
 
     /** Half-spheres 0.7 to 2 target widths, near enough that every view keeps the target large. */
-    private val config = KpmMatchSpeedConfig(anticipationNearestWidths = 0.7f, anticipationFarthestWidths = 2f, previewRotationStepDeg = 0f)
+    private val config = KpmMatchSpeedConfig(anticipationNearestWidths = 0.7f, anticipationFarthestWidths = 2f)
 
     private fun plans(resolution: AnticipationResolution, c: KpmMatchSpeedConfig = config) = ReferencePreviews.plans(w, h, camera, c, resolution)
 
@@ -44,6 +44,11 @@ class ReferencePreviewsTest {
         val x = cross(f, doubleArrayOf(0.0, 1.0, 0.0)).let { v -> val l = kotlin.math.sqrt(v.sumOf { it * it }); DoubleArray(3) { v[it] / l } }
         val y = cross(f, x)
         return doubleArrayOf(x[0], x[1], x[2], y[0], y[1], y[2], f[0], f[1], f[2])
+    }
+
+    private fun rollBy(deg: Double): DoubleArray {
+        val a = Math.toRadians(deg)
+        return doubleArrayOf(kotlin.math.cos(a), -kotlin.math.sin(a), 0.0, kotlin.math.sin(a), kotlin.math.cos(a), 0.0, 0.0, 0.0, 1.0)
     }
 
     private fun dir(tiltDeg: Double, azimuthDeg: Double): DoubleArray {
@@ -69,10 +74,15 @@ class ReferencePreviewsTest {
         // Three circles split the quarter into four: 22.5°, 45°, 67.5°.
         val three = plans(AnticipationResolution(1, 4, 3), config.copy(anticipationNearestWidths = 1f, anticipationFarthestWidths = 1f))
         assertEquals(setOf("22.5", "45", "67.5"), three.filter { it.kind == ReferencePreviews.Kind.CUT }.map { it.label.substringAfter("tilt ").substringBefore("°") }.toSet())
-        // Turned poles are an extra, on the middle half-sphere.
-        val turned = plans(AnticipationResolution(3, 4, 1), config.copy(previewRotationStepDeg = 90f))
-        assertEquals(3, turned.count { it.kind == ReferencePreviews.Kind.TURN })
-        assertTrue(turned.filter { it.kind == ReferencePreviews.Kind.TURN }.all { it.site.shell == 1 && it.site.turn > 0 })
+        // Roll takes every view turned evenly from upright: 2 is upright and upside down.
+        val rolled = plans(AnticipationResolution(3, 4, 1, roll = 2))
+        assertEquals(2 * p.size, rolled.size)
+        assertEquals(setOf(0, 1), rolled.map { it.site.roll }.toSet())
+        assertTrue(rolled.filter { it.site.roll == 1 }.all { it.label.endsWith(" roll 180°") })
+        for (plan in rolled.filter { it.site.roll == 1 }) {
+            val upright = rolled.single { it.site == plan.site.copy(roll = 0) }
+            assertEquals(plan.label, 180.0, ReferencePreviews.viewAngleDeg(upright.cameraFromPage, plan.cameraFromPage), 1e-6)
+        }
         // Nothing at distance 0; labels name views uniquely.
         assertTrue(plans(AnticipationResolution.NONE).isEmpty())
         assertEquals(p.size, p.map { it.label }.distinct().size)
@@ -81,14 +91,14 @@ class ReferencePreviewsTest {
 
     @Test
     fun `each preview is what this phone's camera sees from its place on the half-sphere, cropped`() {
-        val res = AnticipationResolution(3, 8, 3)
+        val res = AnticipationResolution(3, 8, 3, roll = 3)
         val radii = ReferencePreviews.shells(3, config.anticipationNearestWidths, config.anticipationFarthestWidths)
         for (plan in plans(res)) {
             val site = plan.site
             val tilt = site.circle * 90.0 / (res.longitude + 1)
             val azimuth = site.meridian * 360.0 / res.latitude
             val d = dir(tilt, azimuth)
-            val r = lookingFrom(d)
+            val r = ObliqueRectifier.mul3(rollBy(site.roll * 360.0 / res.roll), lookingFrom(d))
             assertEquals(plan.label, 0.0, ReferencePreviews.viewAngleDeg(r, plan.cameraFromPage), 1e-4)
             val c = DoubleArray(3) { radii[site.shell] * d[it] }
             // Reference pixel → page (target widths, y up) → camera → this camera's pixels, up to the crop.
@@ -107,7 +117,7 @@ class ReferencePreviewsTest {
             // Within the camera's frame.
             assertTrue(plan.label, plan.width <= camera.width && plan.height <= camera.height)
             // Square-on, the target is fx / distance pixels wide.
-            if (plan.kind == ReferencePreviews.Kind.POLE) assertEquals(plan.label, camera.fx / radii[site.shell] / w, plan.scale, 1e-9)
+            if (plan.kind == ReferencePreviews.Kind.POLE && site.roll == 0) assertEquals(plan.label, camera.fx / radii[site.shell] / w, plan.scale, 1e-9)
         }
     }
 
@@ -131,7 +141,7 @@ class ReferencePreviewsTest {
     @Test
     fun `every preview shows each reference point where its homography puts it, and maps back`() {
         val ref = reference()
-        for (plan in plans(AnticipationResolution(3, 4, 3), config.copy(previewRotationStepDeg = 90f))) {
+        for (plan in plans(AnticipationResolution(3, 4, 3, roll = 4))) {
             val p = ReferencePreviews.render(ref, w, h, plan) // no OpenCV on the JVM: the Kotlin warp
             assertEquals(plan.width * plan.height, p.luma.size)
             var checked = 0
@@ -169,16 +179,16 @@ class ReferencePreviewsTest {
 
     @Test
     fun `previews are built farthest first, so a partial build spreads over the views`() {
-        val all = plans(AnticipationResolution(3, 8, 3), config.copy(previewRotationStepDeg = 45f))
+        val all = plans(AnticipationResolution(3, 8, 3, roll = 2))
         val ordered = ReferencePreviews.prioritized(all) { p, r, s -> PreviewMatcher.priorityCost(p.cameraFromPage, p.scale, r, s) }
         assertEquals(all.toSet(), ordered.toSet())
         // Each pick is at least as far from those before it as every later one is (farthest first).
         fun gap(i: Int, j: Int) = (listOf(ReferencePreviews.FRONTAL to 1.0) + ordered.take(i).map { it.cameraFromPage to it.scale })
             .minOf { (r, s) -> PreviewMatcher.priorityCost(ordered[j].cameraFromPage, ordered[j].scale, r, s) }
         for (i in 1 until ordered.size) assertEquals("pick $i", (i until ordered.size).maxOf { gap(i, it) }, gap(i, i), 1e-9)
-        // Turns weigh a quarter: the steepest cuts come before any turned pole.
+        // A steepest cut first: tilt counts in full.
         assertEquals(ReferencePreviews.Kind.CUT, ordered.first().kind)
-        assertTrue(ordered.indexOfFirst { it.kind == ReferencePreviews.Kind.TURN } > 8)
+        assertTrue(ordered.first().label, ordered.first().label.contains("tilt 67.5°"))
     }
 
     // --- the previews matcher -------------------------------------------------------------------

@@ -391,14 +391,15 @@ result.pose?.let { draw(it.cameraFromMap, it.projection) }
   detail the frame has.
 - **Previews** — the reference rendered as the camera may see it, so a lost camera relocks without a
   prediction of where it is. Where from is the **anticipation resolution**
-  (`AnticipationResolution(distance, latitude, longitude)`, default 3 × 8 × 3). Picture a
+  (`AnticipationResolution(distance, latitude, longitude, roll)`, default 3 × 8 × 3 × 1). Picture a
   half-sphere over the target, the target at its core and the square-on view at its pole: `latitude`
   meridians run from the pole to the equator, cut by `longitude` circles (3 circles: 22.5°, 45°,
   67.5° from square-on); a preview is taken at the pole and at every cut, aimed at the core, none on
   the equator (edge-on). `distance` nests that many half-spheres from `anticipationNearestWidths`
-  (0.5) to `anticipationFarthestWidths` (4) target widths, evenly in log distance. Previews per page:
-  `distance × (1 + latitude × longitude)` (75), plus turned square-on views every
-  `previewRotationStepDeg` (45°) on the middle half-sphere. Each is what this phone's camera (the
+  (0.5) to `anticipationFarthestWidths` (4) target widths, evenly in log distance. `roll` takes each
+  view turned about its optical axis that many times, evenly from upright (2: upright and upside
+  down); KPM's features survive about ±33° of turn, so 6 covers every turn. Previews per page:
+  `distance × (1 + latitude × longitude) × roll` (75). Each is what this phone's camera (the
   matched image's intrinsics) would see from there, cropped to its frame: a near view large, partly
   out of frame and strongly foreshortened, a far one small (dropped under 64 px). Rendered with
   OpenCV's `warpPerspective` (area-shrunk first when small), each joins KPM as another image of its
@@ -426,7 +427,7 @@ result.pose?.let { draw(it.cameraFromMap, it.projection) }
   frame time from half the camera's frame interval (none) to all of it (full); they come from
   `devicePressure` (`AndroidDevicePressure(context)`; none when unset, so only load throttles). The
   cuts multiply into a factor; every 2 s the session searches the largest subset of the maximum that
-  fits (`AnticipationDecimation`: every other meridian, circle or half-sphere, and so on, each step a
+  fits (`AnticipationDecimation`: every other meridian, circle, half-sphere or roll, and so on, each step a
   subset of the one before), lower at once, higher after it has fitted for 10 s. Throttling builds
   nothing and lifting it reuses what was built; a new maximum builds only its new views.
   `PhotosphereTrackingSession.anticipation` reports the effective resolution and the pressures. All
@@ -525,7 +526,7 @@ many of those KPM matched and how many gave a pose, and predictions too frontal 
 `previews{images features builtMs ready anticipation factor battery heat compute searchable tried
 guided solved}` (with previews): reference images the preview session holds (pages and previews),
 their features, the time spent building, whether it is searchable; the effective and maximum
-anticipation resolution (`3d×4lat×1lon/3d×8lat×3lon`), the throttle factor and the pressures behind
+anticipation resolution (`3d×4lat×1lon×1roll/3d×8lat×3lon×1roll`), the throttle factor and the pressures behind
 it; the previews it allows; and the lost-frame searches made (`guided` of them over only the previews
 nearest the predicted view) and solved in the window (`method=KPM_PREVIEW`).
 
