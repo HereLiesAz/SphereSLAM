@@ -748,6 +748,13 @@ SphereSLAM uses transform-direction names instead of ambiguous “pose matrix”
 Legacy `viewMatrix`, `viewFromContent`, and `pageToCamera3x4` accessors remain temporarily as
 deprecated aliases.
 
+## Test app
+
+`:testapp` is an on-device test bench: a live standalone tracker, a checklist that grades itself from
+telemetry (lock on wall, floor and ceiling, match speed, rectified matching, gyro bridge, off-wall
+hold, pole attitude, …) and reports every run to this repository's issues. See
+[docs/TESTAPP.md](docs/TESTAPP.md).
+
 ## Project status
 
 - Planar KPM tracking: built

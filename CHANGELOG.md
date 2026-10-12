@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Test app.** New `:testapp` module (not published): an on-device test bench that tracks a
+  captured target, draws its outline, grades most device checks itself from live telemetry and reports
+  each run to this repository's issues through the workflows Worker (`docs/TESTAPP.md`).
 - **Floors and ceilings track like walls.** Painting on a horizontal surface puts the camera at the
   photosphere's nadir or zenith, where the camera-axis heading is sensor noise. Several paths keyed or
   oriented on it:

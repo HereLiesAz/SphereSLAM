@@ -25,3 +25,5 @@ include(":core:common")
 include(":models")
 include(":reloc")
 include(":overlay")
+// On-device test bench (not published): docs/TESTAPP.md.
+include(":testapp")

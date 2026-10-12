@@ -7,6 +7,7 @@ import java.util.Properties
 // applied; per-module builds set the Kotlin JVM target via the KotlinCompile task.
 plugins {
     alias(libs.plugins.android.library) apply false
+    alias(libs.plugins.android.application) apply false
 }
 
 // Single source of the library version: version.properties (major.minor.patch; versionBuild is
