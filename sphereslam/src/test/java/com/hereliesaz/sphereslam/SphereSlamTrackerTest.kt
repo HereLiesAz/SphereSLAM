@@ -67,6 +67,29 @@ class SphereSlamTrackerTest {
         override fun destroy(session: Long) {
             calls += "destroy"
         }
+
+        val views: MutableList<PlanarPageView> = Collections.synchronizedList(mutableListOf())
+        var imagesAnswer = -1
+        val imageRequests: MutableList<List<Int>> = Collections.synchronizedList(mutableListOf())
+
+        override fun addPageView(session: Long, luma: ByteBuffer, width: Int, height: Int, view: PlanarPageView): Int {
+            check(luma.isDirect && luma.remaining() == width * height)
+            views += view
+            calls += "view:${view.imageNo}"
+            return 40
+        }
+
+        override fun reindex(session: Long): Int {
+            calls += "reindex"
+            return 0
+        }
+
+        override fun matchImages(session: Long, luma: ByteBuffer, pageNos: IntArray, imageNos: IntArray, out: FloatArray, correspondences: FloatArray?): Int {
+            imageRequests += imageNos.toList()
+            calls += "previews"
+            matchOut.copyInto(out, endIndex = minOf(out.size, matchOut.size))
+            return imagesAnswer
+        }
     }
 
     private fun tracker(api: KpmApi, worker: ExecutorService, available: Boolean = true) =
@@ -78,6 +101,51 @@ class SphereSlamTrackerTest {
     }
 
     private val camera = SphereSlamTracker.CameraModel(2, 2, 500f, 510f, 1f, 1.5f)
+
+    @Test
+    fun `the host's anticipated views are learned apart and searched every other frame once lost`() {
+        val api = RecordingApi(matchPage = -1)
+        val worker = Executors.newSingleThreadExecutor()
+        fun view(id: String) = AnticipatedView(id, byteArrayOf(9, 9, 9, 9), 2, 2, floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f), AnticipatedView.SQUARE_ON, 1f)
+        tracker(api, worker).use { t ->
+            t.configure(camera)
+            t.setReference(ByteBuffer.wrap(byteArrayOf(1, 2, 3, 4)), 2, 2, 2, dpi = 96f)
+            drain(worker)
+            // No views, no second engine.
+            assertEquals(1, api.creates)
+            t.addAnticipatedViews(List(5) { view("v$it") } + view("v1"))
+            drain(worker)
+            // A second engine holding the reference, then the views (a repeat skipped), indexed per batch of 4.
+            assertEquals(2, api.creates)
+            assertEquals(listOf("view:1", "view:2", "view:3", "view:4", "reindex", "view:5", "reindex"), api.calls.filter { it.startsWith("view") || it == "reindex" })
+            assertEquals(listOf(96f), api.views.map { it.referenceDpi }.distinct())
+            assertEquals(listOf(2), api.views.map { it.pageHeightPixels }.distinct())
+            assertTrue(api.views.none { it.reindex })
+            // Lost: two direct misses, then the views on every other frame.
+            fun frame(ts: Long) { t.submitFrame(ByteBuffer.wrap(byteArrayOf(4, 3, 2, 1)), 2, 2, 2, timestampNs = ts); drain(worker); drain(worker) }
+            frame(1); frame(2)
+            assertTrue(api.imageRequests.isEmpty())
+            frame(3)
+            assertEquals(listOf((1..5).toList()), api.imageRequests.map { it.sorted() })
+            frame(4)
+            assertEquals(1, api.imageRequests.size) // direct, in turn
+            // Only the views the host allows.
+            t.setSearchableAnticipatedViews(setOf("v2", "v4", "gone"))
+            frame(5)
+            assertEquals(listOf(3, 5), api.imageRequests.last().sorted())
+            assertNull(t.latestObservation())
+            // A hit is published, marked as anticipated.
+            api.imagesAnswer = 0
+            frame(6); frame(7)
+            assertTrue(t.latestObservation()!!.anticipated)
+            // A new reference drops the views and the engine holding them.
+            t.setReference(ByteBuffer.wrap(byteArrayOf(5, 6, 7, 8)), 2, 2, 2)
+            drain(worker)
+            val requests = api.imageRequests.size
+            repeat(4) { frame(10L + it) }
+            assertEquals(requests, api.imageRequests.size)
+        }
+    }
 
     @Test
     fun `packLuma removes row padding without moving source position`() {

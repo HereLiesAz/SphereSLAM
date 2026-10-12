@@ -68,6 +68,9 @@ internal class PhotosphereTileLocalizer(
      * @property minDepthSamples known depths needed to calibrate a tile's monocular depth.
      * @property standpointRadius centres within this (map units) count as the same standpoint: a
      *   rotation-only fix and depth sharing need it; triangulation needs more than it.
+     * @property turnLiveFrameDeg turn the live frame by the sensors' rotation into the nearest
+     *   candidate tile's view before extracting its features, when the two views differ by at least
+     *   this ([turnTowardTile]); 0 never turns.
      */
     data class Config(
         val tileSpacingDeg: Float = 12f,
@@ -85,6 +88,7 @@ internal class PhotosphereTileLocalizer(
         val minPlanePoints: Int = 8,
         val minDepthSamples: Int = 12,
         val standpointRadius: Double = 0.15,
+        val turnLiveFrameDeg: Float = 5f,
     )
 
     /** One standpoint. [centre] is world-frame, in the session's map units. */
@@ -481,8 +485,18 @@ internal class PhotosphereTileLocalizer(
         priorRotation: DoubleArray,
         priorCentre: DoubleArray,
     ): Fix? {
+        var best: Fix? = null
+        for (tile in candidates(priorRotation, priorCentre)) {
+            val fix = localizeAgainst(live, intrinsics, priorRotation, priorCentre, tile) ?: continue
+            if (best == null || better(fix, best)) best = fix
+        }
+        return best
+    }
+
+    /** The tiles a camera at the prior is tried against: axis within the cone, nearest first. */
+    private fun candidates(priorRotation: DoubleArray, priorCentre: DoubleArray): List<Tile> {
         val priorAxis = doubleArrayOf(priorRotation[6], priorRotation[7], priorRotation[8])
-        val candidates = stationList.asSequence()
+        return stationList.asSequence()
             .flatMap { it.tiles.asSequence() }
             .map { it to angleDeg(it.axis, priorAxis) }
             .filter { it.second <= config.candidateConeDeg }
@@ -492,12 +506,65 @@ internal class PhotosphereTileLocalizer(
             .take(config.maxCandidates)
             .map { it.first }
             .toList()
-        var best: Fix? = null
-        for (tile in candidates) {
-            val fix = localizeAgainst(live, intrinsics, priorRotation, priorCentre, tile) ?: continue
-            if (best == null || better(fix, best)) best = fix
+    }
+
+    /**
+     * The turn of a live frame toward the tile it will most likely match: the pure-rotation
+     * homography (row-major) from live pixels ([intrinsics]) to those of the same camera turned to the
+     * nearest candidate tile's orientation. A pure turn needs no position, and the sensors' rotation
+     * holds while lost, so the turned frame looks as the tile did (its perspective and roll undone),
+     * whatever the camera's distance. Null with no candidate, when the views already differ by less
+     * than [Config.turnLiveFrameDeg], or with turning off.
+     */
+    fun turnTowardTile(priorRotation: DoubleArray, priorCentre: DoubleArray, intrinsics: FloatArray): DoubleArray? {
+        if (config.turnLiveFrameDeg <= 0f) return null
+        val tile = candidates(priorRotation, priorCentre).firstOrNull() ?: return null
+        // live camera → world → tile orientation.
+        val turn = mul3(tile.rotation, transpose(priorRotation))
+        val trace = turn[0] + turn[4] + turn[8]
+        val angle = Math.toDegrees(acos(((trace - 1.0) / 2.0).coerceIn(-1.0, 1.0)))
+        if (angle < config.turnLiveFrameDeg) return null
+        val k = doubleArrayOf(intrinsics[0].toDouble(), 0.0, intrinsics[2].toDouble(), 0.0, intrinsics[1].toDouble(), intrinsics[3].toDouble(), 0.0, 0.0, 1.0)
+        val kInv = doubleArrayOf(1.0 / k[0], 0.0, -k[2] / k[0], 0.0, 1.0 / k[4], -k[5] / k[4], 0.0, 0.0, 1.0)
+        return mul3(mul3(k, turn), kInv)
+    }
+
+    /**
+     * Features of [luma] ([width] × [height]) extracted from it turned by [turnedFromLive]
+     * ([turnTowardTile]), their positions mapped back to the live frame's pixels, so everything
+     * downstream is unchanged. Turned pixels outside the frame are mid-grey (no edge to detect).
+     */
+    fun extractTurned(luma: ByteArray, width: Int, height: Int, turnedFromLive: DoubleArray): TileFeatures? {
+        val back = ObliqueRectifier.invert3(turnedFromLive) ?: return extract(luma, width, height)
+        val turned = ByteArray(width * height)
+        for (v in 0 until height) for (u in 0 until width) {
+            val w = back[6] * u + back[7] * v + back[8]
+            var value = 128
+            if (w > 1e-9) {
+                val x = (back[0] * u + back[1] * v + back[2]) / w
+                val y = (back[3] * u + back[4] * v + back[5]) / w
+                if (x >= 0 && y >= 0 && x <= width - 1.0 && y <= height - 1.0) {
+                    val x0 = minOf(x.toInt(), width - 2).coerceAtLeast(0); val y0 = minOf(y.toInt(), height - 2).coerceAtLeast(0)
+                    val fx = x - x0; val fy = y - y0
+                    val i = y0 * width + x0
+                    fun p(k: Int) = (luma[k].toInt() and 0xff).toDouble()
+                    val dx = if (width > 1) 1 else 0; val dy = if (height > 1) width else 0
+                    value = ((p(i) * (1 - fx) + p(i + dx) * fx) * (1 - fy) + (p(i + dy) * (1 - fx) + p(i + dy + dx) * fx) * fy + 0.5).toInt()
+                }
+            }
+            turned[v * width + u] = value.coerceIn(0, 255).toByte()
         }
-        return best
+        val features = backend.extract(turned, width, height) ?: return null
+        val points = features.points.copyOf()
+        var i = 0
+        while (i + 1 < points.size) {
+            val u = points[i].toDouble(); val v = points[i + 1].toDouble()
+            val w = back[6] * u + back[7] * v + back[8]
+            points[i] = ((back[0] * u + back[1] * v + back[2]) / w).toFloat()
+            points[i + 1] = ((back[3] * u + back[4] * v + back[5]) / w).toFloat()
+            i += 2
+        }
+        return TileFeatures(points, features.descriptors) { features.close() }
     }
 
     private fun better(a: Fix, b: Fix): Boolean = when {

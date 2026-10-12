@@ -1,5 +1,6 @@
 package com.hereliesaz.sphereslam.reloc
 
+import com.hereliesaz.sphereslam.AnticipatedView
 import com.hereliesaz.sphereslam.PlanarImage
 import com.hereliesaz.sphereslam.PlanarMatchRequest
 import com.hereliesaz.sphereslam.SphereSlamPoseMath
@@ -346,15 +347,18 @@ class KpmPlanarFrontEndTest {
     }
 
     @Test
-    fun `once lost every other full solve searches the previews and a hit relocks there`() {
+    fun `once lost every other full solve searches the host's views and a hit relocks there`() {
         val pb = FakeBackend(k).apply { answer = { null } }
         lateinit var matcher: PreviewMatcher
-        val fe = frontEnd(KpmMatchSpeedConfig(flowTracking = false, obliqueSearchAfterMisses = 0), previews = { mk -> previewsFor(pb, mk).also { matcher = it } })
+        val fe = frontEnd(KpmMatchSpeedConfig(flowTracking = false, obliqueSearchAfterMisses = 0), previews = { previewsFor(pb).also { matcher = it } })
+        // Views that arrive before their page wait for it.
+        fe.addAnticipatedViews(0, hostViews())
         fe.addPage(ByteBuffer.allocateDirect(400 * 300), 400, 300, 1f, false, 0, RigidMath.identity())
         assertTrue(matcher.isReady)
+        assertEquals(hostViews().size, matcher.views.size)
         val live = backend!!
         live.answer = { null }
-        // Two direct misses, then previews and direct take turns.
+        // Two direct misses, then views and direct take turns.
         assertNull(fe.match(input(0))); assertNull(fe.match(input(10)))
         assertEquals(0, pb.calls.size)
         assertNull(fe.match(input(20)))
@@ -373,24 +377,25 @@ class KpmPlanarFrontEndTest {
     }
 
     @Test
-    fun `a lost search starts with the previews nearest the predicted view and widens on each miss`() {
+    fun `a lost search starts with the views nearest the predicted view and widens on each miss`() {
         val pb = FakeBackend(k).apply { answer = { null } }
         lateinit var matcher: PreviewMatcher
-        // Searched as the frame is (not turned square-on first), so the previews' own tilts matter.
+        // Searched as the frame is (not turned square-on first), so the views' own turns matter.
         val fe = frontEnd(
-            KpmMatchSpeedConfig(flowTracking = false, obliqueSearchAfterMisses = 0, obliqueRectificationDeg = 0f, previewRectify = false),
-            previews = { mk -> previewsFor(pb, mk).also { matcher = it } },
+            KpmMatchSpeedConfig(flowTracking = false, obliqueSearchAfterMisses = 0, obliqueRectificationDeg = 0f, previewRectify = false, previewNearest = 2),
+            previews = { previewsFor(pb).also { matcher = it } },
         )
         val g = fe.addPage(ByteBuffer.allocateDirect(400 * 300), 400, 300, 1f, false, 0, RigidMath.identity().also { it[12] = 0.4f }).geometry
+        fe.addAnticipatedViews(0, hostViews())
         val centre = doubleArrayOf(g.centerXmm.toDouble(), g.centerYmm.toDouble(), 0.0)
         // Upright (the synthetic pose is rolled half a turn), 58° off the wall's normal from its right.
         val predicted = canonicalView(ObliqueGeometry.pose(58.0, centre, 1_500.0, rollDeg = 180.0), centre)
         backend!!.answer = { null }
-        val n = KpmMatchSpeedConfig().previewNearest
+        val n = 2
         val all = matcher.views.size
         var t = 0L
         repeat(2) { assertNull(fe.match(input(t, predicted))); t += 10 }
-        // Preview searches (every other full solve) take the nearest n, then 2n, 3n …, then all.
+        // View searches (every other full solve) take the nearest n, then 2n, 3n …, then all.
         var expected = n
         while (expected < all) {
             assertNull(fe.match(input(t, predicted))); t += 10
@@ -403,71 +408,68 @@ class KpmPlanarFrontEndTest {
         assertNull(fe.match(input(t, predicted))); t += 10
         assertEquals(guided, pb.imageCalls.size)
         assertEquals(1, pb.calls.size) // all of them
-        // The first set was the cuts on the camera's side (meridian 0), nearest first: 60° on the
-        // half-sphere nearest the predicted distance (1.5 widths: 1.41).
-        val labels = pb.imageCalls.first().map { im -> matcher.views.single { it.imageNo == im.imageNo }.label }
-        assertEquals("1.414w tilt 60° toward 0°", labels.first())
-        assertTrue(labels.toString(), labels.take(2).all { it.endsWith("toward 0°") })
+        // The first set was the views to the camera's side, nearest first.
+        val ids = pb.imageCalls.first().map { im -> matcher.views.single { it.imageNo == im.imageNo }.id }
+        assertEquals(listOf("right 60", "right 30"), ids)
         assertTrue(fe.diagnosticsAndReset()!!.contains("guided=$guided "))
         // A hit resets the search: the next one starts from the nearest n again.
         pb.answer = { solve(0) }
         assertNull(fe.match(input(t, predicted))); t += 10 // direct
         assertEquals(VisualMatchMethod.KPM_PREVIEW, fe.match(input(t, predicted))!!.method); t += 10
         pb.answer = { null }
-        repeat(3) { fe.match(input(t, predicted)); t += 10 } // two direct misses, then the previews
+        repeat(3) { fe.match(input(t, predicted)); t += 10 } // two direct misses, then the views
         assertEquals(n, pb.imageCalls.last().size)
-        // Without a prediction, every preview is searched.
+        // Without a prediction, every view is searched.
         val before = pb.calls.size
         repeat(2) { fe.match(input(t)); t += 10 }
         assertEquals(before + 1, pb.calls.size)
     }
 
     @Test
-    fun `the anticipation limits the previews a lost search uses, none when throttled out`() {
+    fun `the host's choice of searchable views limits a lost search, none when it allows none`() {
         val pb = FakeBackend(k).apply { answer = { null } }
         lateinit var matcher: PreviewMatcher
-        val fe = frontEnd(KpmMatchSpeedConfig(flowTracking = false, obliqueSearchAfterMisses = 0), previews = { mk -> previewsFor(pb, mk).also { matcher = it } })
+        val fe = frontEnd(KpmMatchSpeedConfig(flowTracking = false, obliqueSearchAfterMisses = 0), previews = { previewsFor(pb).also { matcher = it } })
         fe.addPage(ByteBuffer.allocateDirect(400 * 300), 400, 300, 1f, false, 0, RigidMath.identity())
+        fe.addAnticipatedViews(0, hostViews())
         backend!!.answer = { null }
-        val max = KpmMatchSpeedConfig().anticipationResolution
-        val throttled = AnticipationDecimation.chain(max)[3]
-        fe.setAnticipation(AnticipationStatus(max, throttled, 0.3f, 0f, 1f, 0f))
+        fe.setSearchableViews(setOf("square mid", "right 30", "up 60"))
         var t = 0L
-        repeat(3) { fe.match(input(t)); t += 10 } // two direct misses, then the previews
-        // No prediction: every searchable preview, named, since not all the held ones are.
+        repeat(3) { fe.match(input(t)); t += 10 } // two direct misses, then the views
+        // No prediction: every searchable view, named, since not all the held ones are.
         assertEquals(0, pb.calls.size)
-        assertEquals(matcher.searchable().map { PlanarImage(it.pageNo, it.imageNo) }, pb.imageCalls.single())
-        assertTrue(pb.imageCalls.single().size < matcher.views.size)
-        // Throttled to nothing: the previews are not searched, direct solves only.
-        fe.setAnticipation(AnticipationStatus(max, AnticipationDecimation.NONE, 0f, 0f, 1f, 0f))
+        assertEquals(setOf("square mid", "right 30", "up 60"), pb.imageCalls.single().map { im -> matcher.views.single { it.imageNo == im.imageNo }.id }.toSet())
+        // None allowed: views are not searched, direct solves only.
+        fe.setSearchableViews(emptySet())
         repeat(4) { fe.match(input(t)); t += 10 }
         assertEquals(1, pb.imageCalls.size)
         assertEquals(0, pb.calls.size)
-        assertTrue(fe.diagnosticsAndReset()!!.contains("anticipation=0d×0lat×0lon×1roll/3d×6lat×2lon×1roll factor=0.00 battery=0.00 heat=1.00 compute=0.00 searchable=0"))
+        assertTrue(fe.diagnosticsAndReset()!!.contains("searchable=0 "))
     }
 
     @Test
-    fun `with the sensors' rotation the frame is turned square-on and upright before the preview search`() {
+    fun `with the sensors' rotation the frame is turned square-on and upright before the view search`() {
         val pb = FakeBackend(k).apply { answer = { null } }
         lateinit var matcher: PreviewMatcher
         val fe = frontEnd(
             KpmMatchSpeedConfig(flowTracking = false, obliqueSearchAfterMisses = 0, obliqueRectificationDeg = 0f),
-            previews = { mk -> previewsFor(pb, mk).also { matcher = it } },
+            previews = { previewsFor(pb).also { matcher = it } },
         )
         val placement = RigidMath.identity().also { it[12] = 0.4f }
         val g = fe.addPage(ByteBuffer.allocateDirect(400 * 300), 400, 300, 1f, false, 0, placement).geometry
+        fe.addAnticipatedViews(0, hostViews())
         val centre = doubleArrayOf(g.centerXmm.toDouble(), g.centerYmm.toDouble(), 0.0)
         // Seen from 58° to the right, upright; predicted with the right rotation from a stale place.
         val truth = ObliqueGeometry.pose(58.0, centre, 1_500.0, rollDeg = 180.0)
-        val stale = ObliqueGeometry.pose(58.0, doubleArrayOf(centre[0] - 400.0, centre[1] + 150.0, 0.0), 2_200.0, rollDeg = 180.0)
+        val stale = ObliqueGeometry.pose(58.0, doubleArrayOf(centre[0] - 400.0, centre[1] + 150.0, 0.0), 1_500.0, rollDeg = 180.0)
         assertArrayEquals(truth.first, stale.first, 1e-9)
         val predicted = canonicalView(stale, centre)
         backend!!.answer = { null }
         var t = 0L
-        repeat(3) { fe.match(input(t, predicted)); t += 10 } // two direct misses, then the previews
-        // The square-on pole at the predicted distance comes first: the turned frame is square-on.
+        repeat(3) { fe.match(input(t, predicted)); t += 10 } // two direct misses, then the views
+        // The square-on view at the predicted distance comes first: the turned frame is square-on.
         val first = pb.imageCalls.single().first()
-        assertEquals("pole 1.414w", matcher.views.single { it.imageNo == first.imageNo }.label)
+        assertEquals("square mid", matcher.views.single { it.imageNo == first.imageNo }.id)
         // KPM saw the frame turned by the rotation alone.
         val mk = backend!!.intrinsics
         val km = floatArrayOf(mk.fx, mk.fy, mk.cx, mk.cy)
@@ -493,9 +495,34 @@ class KpmPlanarFrontEndTest {
         assertTrue(fe.diagnosticsAndReset()!!.contains("rectified=1 "))
     }
 
-    /** A previews matcher over [pb] for the front end's match intrinsics, built at once. */
-    private fun previewsFor(pb: FakeBackend, mk: CameraIntrinsics) =
-        PreviewMatcher(pb, KpmMatchSpeedConfig(), mk, java.util.concurrent.Executor { it.run() }, useOpenCv = false)
+    /** A previews matcher over [pb], built at once. */
+    private fun previewsFor(pb: FakeBackend) =
+        PreviewMatcher(pb, KpmMatchSpeedConfig(), java.util.concurrent.Executor { it.run() })
+
+    /** Rotation (page → camera) of an upright camera at [tiltDeg] off square-on toward [azimuthDeg], aimed at the page. */
+    private fun viewFrom(tiltDeg: Double, azimuthDeg: Double): FloatArray {
+        val t = Math.toRadians(tiltDeg); val az = Math.toRadians(azimuthDeg)
+        val f = doubleArrayOf(-kotlin.math.sin(t) * kotlin.math.cos(az), -kotlin.math.sin(t) * kotlin.math.sin(az), -kotlin.math.cos(t))
+        fun cross(a: DoubleArray, b: DoubleArray) = doubleArrayOf(a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+        val x = cross(f, doubleArrayOf(0.0, 1.0, 0.0)).let { v -> val l = kotlin.math.sqrt(v.sumOf { it * it }); DoubleArray(3) { v[it] / l } }
+        val y = cross(f, x)
+        return doubleArrayOf(x[0], x[1], x[2], y[0], y[1], y[2], f[0], f[1], f[2]).map { it.toFloat() }.toFloatArray()
+    }
+
+    /**
+     * A host's views of the 400-px-wide test page: square-on at three sizes (mid: the 1.5-width
+     * distance the tests predict, for the front end's 250 px match focal length), and 30° and 60°
+     * each way at the middle size.
+     */
+    private fun hostViews(): List<AnticipatedView> {
+        val mid = 250f / 600f
+        fun v(id: String, r: FloatArray, scale: Float) =
+            AnticipatedView(id, ByteArray(16 * 12), 16, 12, floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f), r, scale)
+        return listOf(v("square near", AnticipatedView.SQUARE_ON, 2f * mid), v("square mid", AnticipatedView.SQUARE_ON, mid), v("square far", AnticipatedView.SQUARE_ON, mid / 2f)) +
+            listOf("right" to 0.0, "up" to 90.0, "left" to 180.0, "down" to 270.0).flatMap { (side, az) ->
+                listOf(30.0, 60.0).map { tilt -> v("$side ${tilt.toInt()}", viewFrom(tilt, az), mid) }
+            }
+    }
 
     @Test
     fun `previews off builds none`() {

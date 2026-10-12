@@ -1,5 +1,6 @@
 package com.hereliesaz.sphereslam.reloc
 
+import com.hereliesaz.sphereslam.AnticipatedView
 import com.hereliesaz.sphereslam.PhotosphereKeyframe
 import com.hereliesaz.sphereslam.SphereSlamPoseMath
 import com.hereliesaz.sphereslam.attitude.AttitudeSample
@@ -80,10 +81,19 @@ class PhotosphereTrackingSessionTest {
             verdicts += accepted
         }
 
-        val anticipations = mutableListOf<AnticipationStatus>()
+        // Each fake stands for its own previews matcher.
+        private val key = Any()
+        val viewsAdded = mutableListOf<Pair<Int, List<String>>>()
+        var searchable: Set<String>? = setOf("unset")
 
-        override fun setAnticipation(status: AnticipationStatus) {
-            anticipations += status
+        override val anticipationKey: Any get() = key
+
+        override fun addAnticipatedViews(pageNo: Int, views: List<AnticipatedView>) {
+            viewsAdded += pageNo to views.map { it.id }
+        }
+
+        override fun setSearchableViews(ids: Set<String>?) {
+            searchable = ids
         }
 
         override fun fork(): PlanarFrontEnd? {
@@ -231,30 +241,34 @@ class PhotosphereTrackingSessionTest {
     }
 
     @Test
-    fun `the anticipation reaches the matcher every frame, throttled by device pressure`() {
-        val start = AnticipationResolution(2, 4, 1)
-        val s = session(PhotosphereTrackingSession.Config(matchSpeed = KpmMatchSpeedConfig(anticipationResolution = start)))
-        assertEquals(start, s.anticipationResolution)
+    fun `the host's anticipated views reach every matcher the session builds, and leave with their reference`() {
+        fun view(id: String) = AnticipatedView(id, ByteArray(4), 2, 2, FloatArray(9) { if (it % 4 == 0) 1f else 0f }, AnticipatedView.SQUARE_ON, 1f)
+        val s = session()
         s.onFrame(frame(yaw(0.0)))
         s.updatePrecisionLayer(reference)
+        // Added before any matcher: kept, and given to the first one.
+        s.addAnticipatedViews(0, listOf(view("a"), view("b")))
+        s.setSearchableAnticipatedViews(setOf("a"))
         s.onFrame(frame(yaw(0.0)))
-        assertEquals(start, fronts.single().anticipations.last().max)
-        assertEquals(AnticipationDecimation.FULL, fronts.single().anticipations.last().decimation)
-        // A new maximum applies on the next frame.
-        s.anticipationResolution = AnticipationResolution(1, 8, 2)
+        val first = fronts.single()
+        assertEquals(listOf(0 to listOf("a", "b")), first.viewsAdded)
+        assertEquals(setOf("a"), first.searchable)
+        // Added later: straight to the live matcher, once.
+        s.addAnticipatedViews(0, listOf(view("c")))
         s.onFrame(frame(yaw(0.0)))
-        assertEquals(AnticipationResolution(1, 8, 2), fronts.single().anticipations.last().max)
-        // A hot device throttles it to nothing at the next reading.
-        s.devicePressure = DevicePressureSource { DevicePressure(battery = 0f, heat = 1f) }
-        advance(2_500)
+        assertEquals(listOf(0 to listOf("a", "b"), 0 to listOf("c")), first.viewsAdded)
+        s.setSearchableAnticipatedViews(null)
+        assertNull(first.searchable)
+        // A rebuilt matcher gets every view again.
+        s.updatePrecisionLayer(reference, forceRebuild = true)
         s.onFrame(frame(yaw(0.0)))
-        assertEquals(AnticipationDecimation.NONE, fronts.single().anticipations.last().decimation)
-        assertEquals(1f, s.anticipation.heatPressure)
-        // Heat ignored: full again once relief has held.
-        s.anticipationThrottle = AnticipationThrottle(battery = 0f, heat = 0f, compute = 0f)
-        advance(2_500); s.onFrame(frame(yaw(0.0)))
-        advance(10_500); s.onFrame(frame(yaw(0.0)))
-        assertEquals(AnticipationDecimation.FULL, s.anticipation.decimation)
+        val second = fronts.last()
+        assertTrue(second !== first)
+        assertEquals(listOf(0 to listOf("a", "b", "c")), second.viewsAdded)
+        // A new reference drops them: they were rendered from the old one.
+        s.updatePrecisionLayer(PhotosphereTrackingSession.ReferenceImage(noise(400 * 300, 9), 400, 300))
+        s.onFrame(frame(yaw(0.0)))
+        assertTrue(fronts.last().viewsAdded.isEmpty())
     }
 
     @Test

@@ -1,5 +1,6 @@
 package com.hereliesaz.sphereslam.reloc
 
+import com.hereliesaz.sphereslam.AnticipatedView
 import com.hereliesaz.sphereslam.PlanarImage
 import com.hereliesaz.sphereslam.PlanarMatchRequest
 import com.hereliesaz.sphereslam.SphereSlamStandaloneSession
@@ -42,9 +43,11 @@ internal class KpmPlanarFrontEnd(
     /** Previews of every page in their own matcher, searched while the target is lost; null when off. */
     private val previews: PreviewMatcher? = sharedPreviews
         ?: if (config.previewSearchAfterMisses > 0) {
-            if (previewsFactory != null) previewsFactory.invoke(matchIntrinsics) else PreviewMatcher(backendFactory(matchIntrinsics), config, matchIntrinsics)
+            if (previewsFactory != null) previewsFactory.invoke(matchIntrinsics) else PreviewMatcher(backendFactory(matchIntrinsics), config)
         } else null
     private var previewTurn = 0
+    // The host's views of pages not registered yet, added when their page is.
+    private val pendingViews = HashMap<Int, MutableList<AnticipatedView>>()
     // Preview searches missed since the last lock: each widens the nearest-first set (previewImages).
     private var previewRing = 0
     private val small: ByteBuffer? =
@@ -100,10 +103,12 @@ internal class KpmPlanarFrontEnd(
             KpmMatchScale.resampleArea(bytes, width, height, rw, rh)
         }
         val r = backend.addReference(refLuma, rw, rh, referenceWidthUnits, physicallyMetric, pageNo, canonicalFromPage)
-        // Previews of the captured reference (page 0) and, when asked, of every page the atlas grows.
-        if (previews != null && (pageNo == 0 || config.previewAtlasPages)) {
+        // Every page joins the previews matcher too, so the host's views of it can be added
+        // (addAnticipatedViews); views that came first wait for their page.
+        if (previews != null) {
             val bytes = ByteArray(rw * rh).also { refLuma.duplicate().get(it) }
-            previews.addPage(bytes, rw, rh, referenceWidthUnits, physicallyMetric, pageNo, canonicalFromPage)
+            previews.addPage(bytes, rw, rh, referenceWidthUnits, physicallyMetric, pageNo, canonicalFromPage, rw.toDouble() / width)
+            pendingViews.remove(pageNo)?.let { previews.addViews(pageNo, it) }
         }
         pages[pageNo] = KpmPagePriority.PageWindow(
             pageNo, canonicalFromPage[12], canonicalFromPage[13], r.geometry.widthMeters, r.geometry.heightMeters,
@@ -335,8 +340,7 @@ internal class KpmPlanarFrontEnd(
     }
 
     /**
-     * The previews to search on this frame, out of [allowed] (those within the anticipation
-     * resolution): the [KpmMatchSpeedConfig.previewNearest] nearest the view the sensors predict, as
+     * The previews to search on this frame, out of [allowed] (those the host allows): the [KpmMatchSpeedConfig.previewNearest] nearest the view the sensors predict, as
      * many again for each preview search missed since the last lock; once that covers [allowed], with
      * no prediction, or with the lever off, all of [allowed] — null when that is every preview held
      * (the matcher over them all, pages included). A [rectified] frame is square-on and upright, so
@@ -348,7 +352,7 @@ internal class KpmPlanarFrontEnd(
         if (nearest > 0 && predicted != null && count < allowed.size) {
             rect.previewGuided++
             val ranked = PreviewMatcher.nearest(allowed, { page, referenceWidthPx ->
-                predictedView(predicted, page, referenceWidthPx)?.let { (r, scale) -> (if (rectified) ReferencePreviews.FRONTAL else r) to scale }
+                predictedView(predicted, page, referenceWidthPx)?.let { (r, scale) -> (if (rectified) PreviewMatcher.SQUARE_ON else r) to scale }
             }, lastLockedPage)
             return ranked.take(count.toInt()).map { PlanarImage(it.pageNo, it.imageNo) }
         }
@@ -356,8 +360,17 @@ internal class KpmPlanarFrontEnd(
         return allowed.map { PlanarImage(it.pageNo, it.imageNo) }
     }
 
-    override fun setAnticipation(status: AnticipationStatus) {
-        previews?.setAnticipation(status)
+    override val anticipationKey: Any? get() = previews
+
+    override val matchCamera: CameraIntrinsics get() = matchIntrinsics
+
+    override fun addAnticipatedViews(pageNo: Int, views: List<AnticipatedView>) {
+        val p = previews ?: return
+        if (pageNo in pages) p.addViews(pageNo, views) else pendingViews.getOrPut(pageNo) { ArrayList() } += views
+    }
+
+    override fun setSearchableViews(ids: Set<String>?) {
+        previews?.setSearchable(ids)
     }
 
     /**
@@ -519,21 +532,15 @@ internal class KpmPlanarFrontEnd(
         var previewSolved = 0
 
         /**
-         * `previews{images=I features=F builtMs=B ready=R anticipation=E/M factor=X battery=B heat=H
-         * compute=C searchable=N tried=T rectified=Q guided=G solved=S}`: the previews matcher's
-         * reference images and features, the time spent building them, whether it is ready; the
-         * effective and maximum anticipation resolution, the throttle factor and the pressures behind
-         * it; the previews the anticipation allows; the full solves that searched it (Q of them on the
-         * frame turned square-on by the sensors' rotation, G only the previews nearest the predicted
-         * view) and found a pose. Every window, so a report shows it was built.
+         * `previews{images=I features=F builtMs=B ready=R searchable=N tried=T rectified=Q guided=G
+         * solved=S}`: the previews matcher's reference images (pages and the host's views) and
+         * features, the time spent building them, whether it is ready; the views the host allows
+         * searched; the full solves that searched it (Q of them on the frame turned square-on by the
+         * sensors' rotation, G only the views nearest the predicted view) and found a pose. Every
+         * window, so a report shows it was built.
          */
         fun previewSummaryAndReset(p: PreviewMatcher): String {
             val out = "previews{images=${p.images} features=${p.features} builtMs=${p.buildMs} ready=${p.isReady} " +
-                p.anticipation.let { a ->
-                    fun f(v: Float) = String.format(java.util.Locale.ROOT, "%.2f", v)
-                    "anticipation=${a.effective}/${a.max} factor=${f(a.factor)} battery=${f(a.batteryPressure)} " +
-                        "heat=${f(a.heatPressure)} compute=${f(a.computePressure)} "
-                } +
                 "searchable=${p.searchable().size} " +
                 "tried=$previewTried rectified=$previewRectified guided=$previewGuided solved=$previewSolved}"
             previewTried = 0; previewRectified = 0; previewGuided = 0; previewSolved = 0

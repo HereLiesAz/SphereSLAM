@@ -153,7 +153,11 @@ internal class PhotosphereStationTracker(
         val gen = generation.get()
         localizeInFlight.set(true)
         submit(onDone = { localizeInFlight.set(false) }) {
-            val live = localizer.extract(copy, intrinsics.width, intrinsics.height) ?: return@submit
+            // Turned by the sensors' rotation into the nearest tile's view first (no position needed).
+            val live = (
+                localizer.turnTowardTile(prior, priorCentre, k)?.let { localizer.extractTurned(copy, intrinsics.width, intrinsics.height, it) }
+                    ?: localizer.extract(copy, intrinsics.width, intrinsics.height)
+                ) ?: return@submit
             live.use {
                 val fix = localizer.localize(it, k, prior, priorCentre)
                 if (fix != null) finished.set(Adopted(fix, baseCopy, nowMs, gen))

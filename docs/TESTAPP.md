@@ -129,7 +129,6 @@ own default:
 | Group | Knobs |
 |---|---|
 | Steep angles | rectify from (`obliqueRectificationDeg`), guess steep views after N misses (`obliqueSearchAfterMisses`) |
-| Anticipation | distance, latitude, longitude, roll (the maximum `AnticipationResolution`), nearest and farthest half-sphere (target widths), battery / heat / load throttles by (`AnticipationThrottle`); live tracking reads the phone's battery and heat (`AndroidDevicePressure`) |
 | Previews | search previews after N misses (`previewSearchAfterMisses`, 0 builds none), turn the frame by the sensors (`previewRectify`), search nearest first (`previewNearest`), features per preview, preview atlas pages |
 | Matching | match downscale, flow tracking, full solve every N frames / at least every N ms, flow alone for at most N ms, flow inliers at least, flow error at most |
 | Acceptance | pose error at most, pose inliers at least, frame age at most (`ObservationAgeConfig.maxRealtimeAgeMs`) |

@@ -40,22 +40,17 @@ import kotlin.math.sqrt
  *    oblique prediction, after [obliqueSearchAfterMisses] direct misses in a row every other full
  *    solve rectifies a guessed view instead ([obliqueSearchTiltsDeg] each way along the wall, then
  *    up and down it).
- * 5. **Previews** ([previewSearchAfterMisses]): each page's reference is rendered as this phone's
- *    camera would see it from the views of [anticipationResolution] (a half-sphere over the target:
- *    meridians cut by circles, nested half-spheres for distance, each view turned by roll), and KPM
- *    learns every preview as another image of the page with its
- *    features mapped back to the page, in a second matcher built in the background
- *    (`ReferencePreviews`, `PreviewMatcher`). After that many direct misses in a row, every other
- *    full solve matches the frame against the previews: a steep, near, far or turned view relocks
- *    with no position prediction. The phone's rotation is still known while lost, and with the target
- *    in view it fixes how the camera sees the page (tilt, side, turn); so the first search matches
- *    only the [previewNearest] previews nearest that view (sizes nearest the last lock's distance),
- *    each miss widens it by as many again, until all are searched. Nothing changes while the lock
- *    holds. With a prediction ([previewRectify]), the frame is first turned square-on and upright by
- *    the phone's rotation alone (`ObliqueRectifier.rotationPlan`: no position needed), so the
- *    previews nearest that view (by size, then the rest) are searched and the real pose solved
- *    through the turn. The session throttles the resolution below its maximum by battery, heat and its own load
- *    ([anticipationThrottle]; [PhotosphereTrackingSession.anticipation]).
+ * 5. **Previews** ([previewSearchAfterMisses]): the host's views of each page as the camera may see
+ *    it (`PhotosphereTrackingSession.addAnticipatedViews`; SphereSLAM neither chooses nor renders
+ *    them). KPM learns each view as another image of its page, features mapped back to the page, in
+ *    a second matcher built in the background (`PreviewMatcher`). After that many direct misses in a
+ *    row, every other full solve matches the frame against the views the host allows: a steep, near,
+ *    far or turned view relocks with no position prediction. The phone's rotation stays right while
+ *    lost, so with a prediction ([previewRectify]) the frame is first turned square-on and upright by
+ *    that rotation alone (no position needed) and the real pose solved through the turn; and the
+ *    first search matches only the [previewNearest] views nearest the predicted one (sizes nearest
+ *    the last lock's distance), each miss widening it by as many again. Nothing changes while the
+ *    lock holds.
  * 6. **Reference scale** ([maxReferenceScale]): a reference much larger than the matched frame (a
  *    full-resolution camera still against a 320 × 240 match) puts the wall outside KPM's scale range;
  *    pages are registered from a copy whose long side is at most this many matcher long sides.
@@ -83,21 +78,14 @@ import kotlin.math.sqrt
  *   join the search; 0 disables the search.
  * @property obliqueSearchTiltsDeg the guessed views' angles from the wall normal, degrees, tried in
  *   order about the wall's vertical axis and then its horizontal one.
- * @property previewSearchAfterMisses direct full-solve misses in a row before the previews are
- *   searched; 0 builds no previews.
- * @property anticipationResolution the most previews anticipated per page ([AnticipationResolution]);
- *   the session's starting maximum ([PhotosphereTrackingSession.anticipationResolution] changes it).
- * @property anticipationNearestWidths the nearest half-sphere's radius, in target widths.
- * @property anticipationFarthestWidths the farthest half-sphere's radius, in target widths.
- * @property anticipationThrottle how far battery, heat and compute pressure may throttle the
- *   resolution; the session's starting value ([PhotosphereTrackingSession.anticipationThrottle]).
- * @property previewNearest previews the first search matches, nearest the predicted view; each
+ * @property previewSearchAfterMisses direct full-solve misses in a row before the host's views are
+ *   searched; 0 keeps no previews matcher (views are ignored).
+ * @property previewNearest views the first search matches, nearest the predicted view; each
  *   missed search adds as many again. 0 searches them all every time.
  * @property previewRectify turn the frame square-on and upright by the predicted rotation before a
  *   preview search (the sensors' rotation stays right while lost); without a prediction the frame is
  *   searched as it is.
- * @property previewMaxFeatures most features KPM keeps per preview.
- * @property previewAtlasPages build previews for pages the atlas grows, not only captured references.
+ * @property previewMaxFeatures most features KPM keeps per view.
  * @property maxReferenceScale register a reference whose long side exceeds this many times the matched
  *   image's long side from an area-downscaled copy of that size (page geometry in millimetres is
  *   unchanged); 0 registers references as given.
@@ -120,14 +108,9 @@ data class KpmMatchSpeedConfig(
     val obliqueSearchAfterMisses: Int = 3,
     val obliqueSearchTiltsDeg: List<Float> = listOf(45f, -45f, 65f, -65f),
     val previewSearchAfterMisses: Int = 2,
-    val anticipationResolution: AnticipationResolution = AnticipationResolution(distance = 3, latitude = 6, longitude = 2),
-    val anticipationNearestWidths: Float = 0.5f,
-    val anticipationFarthestWidths: Float = 4f,
-    val anticipationThrottle: AnticipationThrottle = AnticipationThrottle(),
     val previewNearest: Int = 4,
     val previewRectify: Boolean = true,
     val previewMaxFeatures: Int = 600,
-    val previewAtlasPages: Boolean = true,
     val maxReferenceScale: Float = 3f,
 ) {
     init {
@@ -142,8 +125,6 @@ data class KpmMatchSpeedConfig(
         require(obliqueRectificationDeg.isFinite() && obliqueRectificationDeg >= 0f && obliqueRectificationDeg < 89f)
         require(obliqueSearchAfterMisses >= 0)
         require(previewSearchAfterMisses >= 0)
-        require(anticipationNearestWidths.isFinite() && anticipationNearestWidths > 0f)
-        require(anticipationFarthestWidths.isFinite() && anticipationFarthestWidths >= anticipationNearestWidths)
         require(previewNearest >= 0)
         require(previewMaxFeatures > 0)
         require(obliqueSearchTiltsDeg.all { it.isFinite() && kotlin.math.abs(it) < 89f })
