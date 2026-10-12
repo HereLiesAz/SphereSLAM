@@ -142,6 +142,27 @@ internal object ReferencePreviews {
     }
 
     /**
+     * [plans] reordered so every prefix covers the views evenly: starting from the reference itself
+     * (square-on, full size), each next plan is the one farthest from all chosen so far, by [cost]
+     * (`PreviewMatcher.priorityCost`). Ties keep [plans]' order.
+     */
+    fun prioritized(plans: List<Plan>, cost: (Plan, DoubleArray, Double) -> Double): List<Plan> {
+        val left = plans.toMutableList()
+        val chosen = ArrayList<Plan>(plans.size)
+        // Distance from each remaining plan to its nearest chosen view (the reference to start).
+        val nearest = left.map { cost(it, FRONTAL, 1.0) }.toMutableList()
+        while (left.isNotEmpty()) {
+            var best = 0
+            for (i in 1 until left.size) if (nearest[i] > nearest[best] + 1e-9) best = i
+            val pick = left.removeAt(best)
+            nearest.removeAt(best)
+            chosen += pick
+            for (i in left.indices) nearest[i] = minOf(nearest[i], cost(left[i], pick.cameraFromPage, pick.scale))
+        }
+        return chosen
+    }
+
+    /**
      * Angle in degrees between two views ([cameraFromPage] rotations): how far a camera at one must
      * turn to be at the other.
      */

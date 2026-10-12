@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Anticipation resolution.** `PhotosphereTrackingSession.anticipationResolution` (0–1, starting at
+  `KpmMatchSpeedConfig.anticipationResolution`, 1) throttles how many previews are calculated, at
+  runtime: the session builds and searches that share of each page's previews. They are ordered
+  farthest first (tilt and side first, turns weighted at a quarter, sizes by octave), so any share
+  covers the views evenly. They are built 4 at a time, each batch indexed once by the new
+  `KpmBridge.reindex` (`SphereSlamEngine.reindex`, `SphereSlamStandaloneSession.reindexReferences`),
+  and the resolution is read again between batches: raising it builds the rest, lowering it stops
+  building and searching above it. A batch whose last preview failed is now indexed too (before, a
+  failed last preview left its batch unindexed). `previews{}` gains `resolution` and `searchable`.
+  The test app gains an "Anticipation resolution" knob.
 - **Previews.** Each reference (and, with `previewAtlasPages`, each grown page) is rendered tilted in
   perspective, resized and turned, with OpenCV, and each preview joins KPM as another image of its
   page with its features' millimetres mapped back through the warp

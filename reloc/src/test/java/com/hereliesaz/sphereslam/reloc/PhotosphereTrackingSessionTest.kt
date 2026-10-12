@@ -80,6 +80,12 @@ class PhotosphereTrackingSessionTest {
             verdicts += accepted
         }
 
+        val resolutions = mutableListOf<Float>()
+
+        override fun setAnticipationResolution(resolution: Float) {
+            resolutions += resolution
+        }
+
         override fun fork(): PlanarFrontEnd? {
             val register = forkInto ?: return null
             check(!closed) { "forked a closed matcher" }
@@ -222,6 +228,21 @@ class PhotosphereTrackingSessionTest {
         assertNull(r.pose)
         assertTrue(fronts.isEmpty())
         assertFalse(s.hasReference)
+    }
+
+    @Test
+    fun `anticipation resolution starts from the config and a change reaches the matcher on the next frame`() {
+        val s = session(PhotosphereTrackingSession.Config(matchSpeed = KpmMatchSpeedConfig(anticipationResolution = 0.5f)))
+        assertEquals(0.5f, s.anticipationResolution)
+        s.onFrame(frame(yaw(0.0)))
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame(yaw(0.0)))
+        assertEquals(0.5f, fronts.single().resolutions.last())
+        s.anticipationResolution = 0.2f
+        s.onFrame(frame(yaw(0.0)))
+        assertEquals(0.2f, fronts.single().resolutions.last())
+        s.anticipationResolution = 7f
+        assertEquals(1f, s.anticipationResolution)
     }
 
     @Test

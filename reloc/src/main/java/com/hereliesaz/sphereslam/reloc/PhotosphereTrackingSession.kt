@@ -537,6 +537,22 @@ class PhotosphereTrackingSession internal constructor(
     var displayPosePredictor: DisplayPosePredictor? = null
 
     /**
+     * Anticipation resolution: the share (0–1) of each page's previews
+     * ([KpmMatchSpeedConfig.previewSearchAfterMisses]) the session calculates and searches. Starts at
+     * [KpmMatchSpeedConfig.anticipationResolution]; a change applies from the next frame without a
+     * restart. Raising it renders and indexes the missing previews in the background, a few at a
+     * time; lowering it stops at the next few and stops searching the previews above it (KPM keeps
+     * those it has). Previews are ordered so any share covers the views evenly: each next one is the
+     * view farthest from those before it. 0 calculates none. Safe to set from any thread.
+     */
+    @Volatile
+    var anticipationResolution: Float = config.matchSpeed.anticipationResolution
+        set(value) {
+            require(value.isFinite())
+            field = value.coerceIn(0f, 1f)
+        }
+
+    /**
      * Process one frame. After [close] or a terminal ([TrackingFailureSeverity.FATAL]) failure this
      * returns an empty result; during a recoverable failure it returns the base pose only.
      */
@@ -594,6 +610,7 @@ class PhotosphereTrackingSession internal constructor(
             if (event.severity != TrackingFailureSeverity.RECOVERABLE) throw t
             return suspendPrecisionLayer(t, event, cameraFromMap, projection)
         } ?: return FrameResult(null, stateMachine.state, cameraFromMap, false, null, null, null, projection)
+        active.setAnticipationResolution(anticipationResolution)
         val direct = directFrame(frame.luma)
         val matchStartNs = elapsedRealtimeNanos()
         timing.setup.add(matchStartNs - setupStartNs)
@@ -1303,6 +1320,9 @@ internal interface PlanarFrontEnd : AutoCloseable {
 
     /** A fragment for the session's periodic diagnostic line (counters since the last call), or null. */
     fun diagnosticsAndReset(): String? = null
+
+    /** [PhotosphereTrackingSession.anticipationResolution], applied every frame (unchanged is free). */
+    fun setAnticipationResolution(resolution: Float) {}
 }
 
 @ExperimentalSphereSlamRelocApi

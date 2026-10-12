@@ -201,6 +201,15 @@ class SphereSlamStandaloneSession internal constructor(
     }
 
     /**
+     * Re-indexes every reference and view added so far: ends a batch of [addReferenceView] calls made
+     * with `reindex = false`. Returns 0, or < 0 (unsupported or failed).
+     */
+    fun reindexReferences(): Int {
+        requireOpen()
+        return engine.reindex()
+    }
+
+    /**
      * Match one tightly packed direct luma frame.
      *
      * @return a canonical camera pose for this exact frame, or null when no registered page matched.

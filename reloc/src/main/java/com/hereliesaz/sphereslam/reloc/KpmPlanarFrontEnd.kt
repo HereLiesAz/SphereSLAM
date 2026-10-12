@@ -165,8 +165,11 @@ internal class KpmPlanarFrontEnd(
     ): PlanarMatchResult? {
         // Lost: every other full solve searches the previews, which need no prediction at all.
         val p = previews
-        if (p != null && p.isReady && missStreak >= config.previewSearchAfterMisses && previewTurn++ % 2 == 0) {
-            return previewSolve(p, luma, lumaBytes, timestampNs, nowMs, predicted)
+        if (p != null && p.isReady && missStreak >= config.previewSearchAfterMisses) {
+            val allowed = p.searchable()
+            if (allowed.isNotEmpty() && previewTurn++ % 2 == 0) {
+                return previewSolve(p, allowed, luma, lumaBytes, timestampNs, nowMs, predicted)
+            }
         }
         // Oblique: KPM matches a virtual frontal view rendered from the full frame (no downscale needed),
         // from the prediction, or from a guessed steep view once direct solves keep missing.
@@ -237,10 +240,17 @@ internal class KpmPlanarFrontEnd(
      * One full solve against the [previews] matcher (the frame downscaled as for a direct solve), with
      * a direct solve's bookkeeping: a hit seeds flow and ends the search, a miss extends it.
      */
-    private fun previewSolve(p: PreviewMatcher, luma: ByteBuffer, lumaBytes: ByteArray?, timestampNs: Long, nowMs: Long, predicted: FloatArray?): PlanarMatchResult? {
+    private fun previewSolve(
+        p: PreviewMatcher,
+        allowed: List<PreviewMatcher.View>,
+        luma: ByteBuffer,
+        lumaBytes: ByteArray?,
+        timestampNs: Long,
+        nowMs: Long,
+        predicted: FloatArray?,
+    ): PlanarMatchResult? {
         rect.previewTried++
-        val images = previewImages(p, predicted)
-        if (images != null) rect.previewGuided++
+        val images = previewImages(p, allowed, predicted)
         val matchLuma = if (small != null) {
             val bytes = lumaBytes ?: ByteArray(luma.remaining()).also { luma.duplicate().get(it) }
             KpmMatchScale.downsample(bytes, intrinsics.width, intrinsics.height, factor, small)
@@ -280,18 +290,26 @@ internal class KpmPlanarFrontEnd(
     }
 
     /**
-     * The previews to search on this frame: the [KpmMatchSpeedConfig.previewNearest] nearest the view
-     * the sensors predict, as many again for each preview search missed since the last lock; null
-     * (search them all) once that covers every preview, with no prediction, or with the lever off.
+     * The previews to search on this frame, out of [allowed] (those within the anticipation
+     * resolution): the [KpmMatchSpeedConfig.previewNearest] nearest the view the sensors predict, as
+     * many again for each preview search missed since the last lock; once that covers [allowed], with
+     * no prediction, or with the lever off, all of [allowed] — null when that is every preview held
+     * (the matcher over them all, pages included).
      */
-    private fun previewImages(p: PreviewMatcher, predicted: FloatArray?): List<PlanarImage>? {
+    private fun previewImages(p: PreviewMatcher, allowed: List<PreviewMatcher.View>, predicted: FloatArray?): List<PlanarImage>? {
         val nearest = config.previewNearest
-        if (nearest <= 0 || predicted == null) return null
-        val views = p.views
         val count = nearest.toLong() * (previewRing + 1L)
-        if (count >= views.size) return null
-        val ranked = PreviewMatcher.nearest(views, { page, referenceWidthPx -> predictedView(predicted, page, referenceWidthPx) }, lastLockedPage)
-        return ranked.take(count.toInt()).map { PlanarImage(it.pageNo, it.imageNo) }
+        if (nearest > 0 && predicted != null && count < allowed.size) {
+            rect.previewGuided++
+            val ranked = PreviewMatcher.nearest(allowed, { page, referenceWidthPx -> predictedView(predicted, page, referenceWidthPx) }, lastLockedPage)
+            return ranked.take(count.toInt()).map { PlanarImage(it.pageNo, it.imageNo) }
+        }
+        if (allowed.size == p.views.size) return null
+        return allowed.map { PlanarImage(it.pageNo, it.imageNo) }
+    }
+
+    override fun setAnticipationResolution(resolution: Float) {
+        previews?.setResolution(resolution)
     }
 
     /**
@@ -452,13 +470,15 @@ internal class KpmPlanarFrontEnd(
         var previewSolved = 0
 
         /**
-         * `previews{images=I features=F builtMs=B ready=R tried=T guided=G solved=S}`: the previews
-         * matcher's reference images and features, how long its last build took, whether it is ready,
-         * the full solves that searched it (G of them only the previews nearest the predicted view) and
-         * found a pose. Every window, so a report shows it was built.
+         * `previews{images=I features=F builtMs=B ready=R resolution=A searchable=N tried=T guided=G
+         * solved=S}`: the previews matcher's reference images and features, the time spent building
+         * them, whether it is ready, the anticipation resolution and the previews within it, the full
+         * solves that searched it (G of them only the previews nearest the predicted view) and found a
+         * pose. Every window, so a report shows it was built.
          */
         fun previewSummaryAndReset(p: PreviewMatcher): String {
             val out = "previews{images=${p.images} features=${p.features} builtMs=${p.buildMs} ready=${p.isReady} " +
+                "resolution=${String.format(java.util.Locale.ROOT, "%.2f", p.resolution)} searchable=${p.searchable().size} " +
                 "tried=$previewTried guided=$previewGuided solved=$previewSolved}"
             previewTried = 0; previewGuided = 0; previewSolved = 0
             return out
@@ -533,6 +553,9 @@ internal interface KpmMatcherBackend : AutoCloseable {
     /** Match [pageNo] only, or every page for [PlanarMatchRequest.ALL_PAGES]. */
     fun match(luma: ByteBuffer, timestampNs: Long, pageNo: Int, maxCorrespondences: Int): Solve?
 
+    /** Re-indexes after views added with `reindex = false`; 0, or < 0 (unsupported or failed). */
+    fun reindex(): Int = -1
+
     /** Match only [images] (pages and their views); null when nothing matched or unsupported. */
     fun matchImages(luma: ByteBuffer, timestampNs: Long, images: List<PlanarImage>, maxCorrespondences: Int): Solve? = null
 
@@ -575,6 +598,8 @@ internal interface KpmMatcherBackend : AutoCloseable {
             val p = session.match(luma, timestampNs, PlanarMatchRequest(pageNo, maxCorrespondences)) ?: return null
             return Solve(p.pageNo, p.cameraFromCanonical, p.reprojectionError, p.inlierCount, p.cameraFromPage3x4, p.correspondences)
         }
+
+        override fun reindex(): Int = runCatching { session.reindexReferences() }.getOrDefault(-1)
 
         override fun matchImages(luma: ByteBuffer, timestampNs: Long, images: List<PlanarImage>, maxCorrespondences: Int): Solve? {
             val p = session.match(luma, timestampNs, PlanarMatchRequest(maxCorrespondences = maxCorrespondences, images = images)) ?: return null

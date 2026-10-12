@@ -118,8 +118,10 @@ class KpmBridgeInstrumentedTest {
             for (v in 0 until w) for (u in 0 until h) turned[v * h + u] = bytes[(h - 1 - u) * w + v]
             val view = ByteBuffer.allocateDirect(turned.size).apply { put(turned); flip() }
             val pageFromView = floatArrayOf(0f, 1f, 0f, -1f, 0f, (h - 1).toFloat(), 0f, 0f, 1f)
-            val added = KpmBridge.addPlanarPageView(s, view, h, w, 0, 1, 300, pageFromView, h, 72f)
+            // Added unindexed, then indexed by an explicit reindex.
+            val added = KpmBridge.addPlanarPageView(s, view, h, w, 0, 1, 300, pageFromView, h, 72f, reindex = false)
             assertTrue("added=$added", added > 0)
+            assertEquals(0, KpmBridge.reindex(s))
             // The page itself still matches as page 0, and so does a frame showing the preview's view.
             val out = FloatArray(KpmBridge.MATCH_OUTPUT_FLOATS)
             assertEquals(0, KpmBridge.matchPlanar(s, page.duplicate(), out))

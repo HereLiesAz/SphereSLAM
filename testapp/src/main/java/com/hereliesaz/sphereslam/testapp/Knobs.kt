@@ -36,6 +36,7 @@ class Knob(
     fun format(value: Float): String = when {
         isSwitch -> if (value >= 0.5f) "on" else "off"
         step >= 1f -> String.format(Locale.ROOT, "%.0f", value) + unit
+        step < 0.1f -> String.format(Locale.ROOT, "%.2f", value) + unit
         else -> String.format(Locale.ROOT, "%.1f", value) + unit
     }
 }
@@ -63,6 +64,9 @@ object Knobs {
         Knob("previews.searchAfter", "Previews", "Search previews after", " misses", 0f, 10f, 1f, speed.previewSearchAfterMisses.toFloat(),
             "Direct misses in a row before every other full solve matches the reference's tilted, resized and turned previews. 0 builds none.",
         ) { c, v -> c.speed { it.copy(previewSearchAfterMisses = v.toInt()) } },
+        Knob("previews.resolution", "Previews", "Anticipation resolution", "", 0f, 1f, 0.05f, speed.anticipationResolution,
+            "Share of each page's previews calculated and searched, spread evenly over the views at any share. 0 none, 1 all.",
+        ) { c, v -> c.speed { it.copy(anticipationResolution = v) } },
         Knob("previews.nearest", "Previews", "Search nearest first", " previews", 0f, 26f, 1f, speed.previewNearest.toFloat(),
             "Previews the first lost search matches: those nearest the view the phone's rotation predicts. Each miss adds as many again. 0 searches them all every time.",
         ) { c, v -> c.speed { it.copy(previewNearest = v.toInt()) } },

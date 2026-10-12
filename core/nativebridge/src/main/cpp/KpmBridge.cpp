@@ -464,6 +464,8 @@ int matchWithHandle(
 }
 
 
+int indexAtlas(KpmSession *session, const char *who);
+
 // Merges `page` into the atlas (consuming it) and, with `reindex`, re-indexes the matcher on the whole
 // atlas. Without it the matcher keeps its old index until the next re-indexing merge: a batch of
 // previews merges unindexed and indexes once, with its last image; nothing matches in between.
@@ -477,6 +479,13 @@ int mergeAndIndex(KpmSession *session, KpmRefDataSet **page, const char *who, bo
         return -4;
     }
     if (!reindex) return 0;
+    return indexAtlas(session, who);
+}
+
+// Re-indexes the matcher on the whole atlas (after merges made without reindexing). Returns 0, or -6
+// (matcher rebuild failed).
+int indexAtlas(KpmSession *session, const char *who) {
+    deleteImageHandles(session);
     if (session->indexed) {
         // kpmSetRefDataSet appends every atlas page to the handle's FREAK database under ids
         // 0..n-1; on a handle that already holds pages that re-adds id 0 and the database throws
@@ -912,6 +921,27 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeMatchPlanarEx(
     (void) pageNo;
     (void) outArray;
     (void) corrArray;
+    return -1;
+#endif
+}
+
+// Re-indexes the matcher on every image merged so far (nativeAddPlanarPageView with reindex false).
+// Returns 0, -1 (unknown session or nothing to index) or -6 (matcher rebuild failed).
+JNIEXPORT jint JNICALL
+Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeReindex(JNIEnv *, jobject, jlong sessionValue) {
+#ifdef HAVE_ARX_KPM
+    try {
+        std::shared_ptr<KpmSession> session = findSession(sessionValue);
+        if (!session) return -1;
+        std::lock_guard<std::mutex> workLock(session->work);
+        if (!session->handle || !session->atlas || !session->cameraParams) return -1;
+        return indexAtlas(session.get(), "nativeReindex");
+    } catch (...) {
+        LOGE("nativeReindex: native exception");
+        return -6;
+    }
+#else
+    (void) sessionValue;
     return -1;
 #endif
 }

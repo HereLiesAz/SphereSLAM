@@ -129,7 +129,7 @@ own default:
 | Group | Knobs |
 |---|---|
 | Steep angles | rectify from (`obliqueRectificationDeg`), guess steep views after N misses (`obliqueSearchAfterMisses`) |
-| Previews | search previews after N misses (`previewSearchAfterMisses`, 0 builds none), search nearest first (`previewNearest`), tilt previews, size previews, turn previews every N° (`previewRotationStepDeg`), features per preview, preview atlas pages |
+| Previews | search previews after N misses (`previewSearchAfterMisses`, 0 builds none), anticipation resolution (`anticipationResolution`), search nearest first (`previewNearest`), tilt previews, size previews, turn previews every N° (`previewRotationStepDeg`), features per preview, preview atlas pages |
 | Matching | match downscale, flow tracking, full solve every N frames / at least every N ms, flow alone for at most N ms, flow inliers at least, flow error at most |
 | Acceptance | pose error at most, pose inliers at least, frame age at most (`ObservationAgeConfig.maxRealtimeAgeMs`) |
 | Lock | confirm a lock over N frames, searching becomes lost after N ms, gyro bridge up to N ms |

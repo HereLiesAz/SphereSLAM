@@ -407,6 +407,16 @@ result.pose?.let { draw(it.cameraFromMap, it.projection) }
   distance predicts). Each missed search adds as many again until every preview is searched; a lock
   starts over. The native side matches a chosen image set with a matcher built from those images'
   features (`KpmBridge.matchPlanarImages`), keeping the 8 most recently used.
+  **Anticipation resolution** (`PhotosphereTrackingSession.anticipationResolution`, 0–1, starting at
+  `anticipationResolution`, 1) throttles how many previews are calculated, at runtime: the session
+  builds and searches that share of each page's previews. They are ordered so any share covers the
+  views evenly: each next preview is the one farthest from those before it, by the angle between
+  optical axes (tilt and side), a quarter of the full rotation angle (the turn, which KPM's features
+  largely survive), and 30° per doubling of size. So the four 70° tilts come first. Previews are
+  built 4 at a time, each batch indexed once (`KpmBridge.reindex`). The resolution is read again
+  between batches: raising it builds the rest in the background; lowering it stops at the next batch
+  and stops searching the previews above it at once (KPM keeps the ones it has). 0 calculates none.
+  A host can lower it when the phone is hot or the battery is low, instead of switching previews off.
 - **Reference scale** — a reference far larger than the matched frame (a full-resolution camera
   still against a 320 × 240 match) leaves the wall outside KPM's scale range. A page is registered
   from an area-downscaled copy whose long side is at most `maxReferenceScale` (3) × the matched
@@ -498,9 +508,10 @@ monocular-depth points, and rotation / 6-DoF tile fixes adopted in the window.
 frames rectified from the prediction (`maxObliq` its steepest, degrees) and from a guessed view, how
 many of those KPM matched and how many gave a pose, and predictions too frontal to rectify.
 
-`previews{images features builtMs ready tried guided solved}` (with previews): reference images the
-preview session holds (pages and previews), their features, the last build's time, whether it is
-searchable, and the lost-frame searches made (`guided` of them over only the previews nearest the
+`previews{images features builtMs ready resolution searchable tried guided solved}` (with previews):
+reference images the preview session holds (pages and previews), their features, the time spent
+building, whether it is searchable, the anticipation resolution and the previews within it, and the
+lost-frame searches made (`guided` of them over only the previews nearest the
 predicted view) and solved in the window (`method=KPM_PREVIEW`).
 
 `attempts` frames ran the matcher and `matched` of them got a pose back (before gating). `error` is

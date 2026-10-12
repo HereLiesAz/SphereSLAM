@@ -101,7 +101,8 @@ object KpmBridge {
      * each mapped back through [pageFromView] (row-major 3×3, preview pixel → page reference pixel) to
      * the page's own millimetres ([pageDpi], [pageHeight] px), so a match on the preview solves the
      * page's pose. [reindex] false defers rebuilding the matcher's index to the next call that asks
-     * for it, so a batch of previews indexes once; nothing may match the session in between. Returns
+     * for it (or [reindex]), so a batch of previews indexes once; nothing may match the session in
+     * between. Returns
      * the features added, or < 0 (−8: the session is at KPM's limit of 1024 reference images).
      */
     fun addPlanarPageView(
@@ -157,6 +158,16 @@ object KpmBridge {
         require(luma.isDirect)
         require(out.size >= MATCH_EX_OUTPUT_FLOATS)
         return nativeMatchPlanarEx(session, luma, pageNo, out, correspondences)
+    }
+
+    /**
+     * Rebuilds the matcher's index on every image added so far: ends a batch of [addPlanarPageView]
+     * calls made with `reindex = false`, whichever of them succeeded. Returns 0, or < 0 (unknown
+     * session, nothing added, or the rebuild failed).
+     */
+    fun reindex(session: Long): Int {
+        require(session != 0L)
+        return nativeReindex(session)
     }
 
     /**
@@ -243,6 +254,7 @@ object KpmBridge {
         out: FloatArray,
         correspondences: FloatArray?,
     ): Int
+    private external fun nativeReindex(session: Long): Int
     private external fun nativeMatchPlanarImages(
         session: Long,
         luma: ByteBuffer,

@@ -86,6 +86,9 @@ import kotlin.math.sqrt
  * @property previewRotationStepDeg in-plane turn previews every this many degrees; 0 none.
  * @property previewNearest previews the first search matches, nearest the predicted view; each
  *   missed search adds as many again. 0 searches them all every time.
+ * @property anticipationResolution the share (0–1) of each page's previews calculated and searched,
+ *   in an order that covers the views evenly at any share; the session's starting value for
+ *   [PhotosphereTrackingSession.anticipationResolution], which changes it at runtime. 0 none.
  * @property previewMaxFeatures most features KPM keeps per preview.
  * @property previewAtlasPages build previews for pages the atlas grows, not only captured references.
  * @property maxReferenceScale register a reference whose long side exceeds this many times the matched
@@ -114,6 +117,7 @@ data class KpmMatchSpeedConfig(
     val previewScales: List<Float> = listOf(0.5f, 0.25f, 2f),
     val previewRotationStepDeg: Float = 45f,
     val previewNearest: Int = 4,
+    val anticipationResolution: Float = 1f,
     val previewMaxFeatures: Int = 600,
     val previewAtlasPages: Boolean = true,
     val maxReferenceScale: Float = 3f,
@@ -134,6 +138,7 @@ data class KpmMatchSpeedConfig(
         require(previewScales.all { it.isFinite() && it > 0f && it <= 4f })
         require(previewRotationStepDeg.isFinite() && previewRotationStepDeg >= 0f && previewRotationStepDeg < 360f)
         require(previewNearest >= 0)
+        require(anticipationResolution in 0f..1f)
         require(previewMaxFeatures > 0)
         require(obliqueSearchTiltsDeg.all { it.isFinite() && kotlin.math.abs(it) < 89f })
         require(maxReferenceScale == 0f || (maxReferenceScale.isFinite() && maxReferenceScale >= 1f))

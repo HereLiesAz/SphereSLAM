@@ -142,6 +142,89 @@ class ReferencePreviewsTest {
         assertEquals(90.0, ReferencePreviews.viewAngleDeg(turned.cameraFromPage, ReferencePreviews.FRONTAL), 1e-9)
     }
 
+    @Test
+    fun `previews are built farthest first, so any share spreads over the views`() {
+        val plans = ReferencePreviews.plans(w, h, KpmMatchSpeedConfig())
+        val ordered = ReferencePreviews.prioritized(plans) { p, r, s -> PreviewMatcher.priorityCost(p.cameraFromPage, p.scale, r, s) }
+        assertEquals(plans.toSet(), ordered.toSet())
+        // The four steepest tilts first, one each way about both axes …
+        val first = ordered.take(4)
+        assertTrue(first.map { it.label }.toString(), first.all { it.kind == ReferencePreviews.Kind.TILT && it.label.endsWith("70°") })
+        assertEquals(4, first.map { it.label }.distinct().size)
+        // … and half of them already hold every family.
+        val half = ordered.take(PreviewMatcher.share(0.5f, ordered.size)).map { it.kind }.toSet()
+        assertEquals(ReferencePreviews.Kind.values().toSet(), half)
+        // Each pick is at least as far from those before it as every later one is (farthest first).
+        fun gap(i: Int) = (listOf(ReferencePreviews.FRONTAL to 1.0) + ordered.take(i).map { it.cameraFromPage to it.scale })
+            .minOf { (r, s) -> PreviewMatcher.priorityCost(ordered[i].cameraFromPage, ordered[i].scale, r, s) }
+        for (i in 1 until ordered.size) {
+            val later = (i until ordered.size).maxOf { j ->
+                (listOf(ReferencePreviews.FRONTAL to 1.0) + ordered.take(i).map { it.cameraFromPage to it.scale })
+                    .minOf { (r, s) -> PreviewMatcher.priorityCost(ordered[j].cameraFromPage, ordered[j].scale, r, s) }
+            }
+            assertEquals("pick $i", later, gap(i), 1e-9)
+        }
+    }
+
+    @Test
+    fun `anticipation resolution sets how many previews are built and searched`() {
+        val b = Backend()
+        val queued = ArrayList<Runnable>()
+        fun drain() { while (queued.isNotEmpty()) queued.removeAt(0).run() }
+        val m = PreviewMatcher(b, KpmMatchSpeedConfig(anticipationResolution = 0.25f), Executor { queued += it }, useOpenCv = false)
+        m.addPage(reference(), w, h, 1f, false, 0, FloatArray(16) { if (it % 5 == 0) 1f else 0f })
+        drain()
+        assertEquals(7, b.views.size) // ⌈0.25 × 26⌉
+        assertEquals(2, b.reindexes)
+        assertEquals((0 until 7).toList(), m.views.map { it.rank })
+        assertEquals(7, m.searchable().size)
+        // Raised: the rest of the share is built, continuing the numbering.
+        m.setResolution(0.5f)
+        assertTrue(!m.isReady)
+        drain()
+        assertEquals(13, b.views.size)
+        assertEquals((1..13).toList(), b.views.map { it.imageNo })
+        assertEquals(13, m.searchable().size)
+        // Lowered: nothing is built and fewer are searched, the first in priority order.
+        val reindexes = b.reindexes
+        m.setResolution(0.1f)
+        assertTrue(queued.isEmpty())
+        assertEquals(listOf(0, 1, 2), m.searchable().map { it.rank })
+        assertEquals(reindexes, b.reindexes)
+        // Raised again within what is built: nothing new to build.
+        m.setResolution(0.5f)
+        drain()
+        assertEquals(13, b.views.size)
+        assertEquals(reindexes, b.reindexes)
+        // 0: none searched.
+        m.setResolution(0f)
+        assertTrue(m.searchable().isEmpty())
+        assertTrue(m.isReady)
+    }
+
+    @Test
+    fun `a lowered resolution stops a build between batches`() {
+        val b = Backend()
+        val queued = ArrayList<Runnable>()
+        lateinit var m: PreviewMatcher
+        var batches = 0
+        // The host throttles while the first batch is being indexed.
+        val throttling = object : KpmMatcherBackend by b {
+            override fun reindex(): Int {
+                if (++batches == 1) m.setResolution(0.2f)
+                return b.reindex()
+            }
+        }
+        m = PreviewMatcher(throttling, KpmMatchSpeedConfig(), Executor { queued += it }, useOpenCv = false)
+        m.addPage(reference(), w, h, 1f, false, 0, FloatArray(16))
+        queued.removeAt(0).run()
+        // A batch of 4, then up to ⌈0.2 × 26⌉ = 6: a batch of 2, and no more.
+        assertEquals(6, b.views.size)
+        assertEquals(2, b.reindexes)
+        assertEquals(6, m.searchable().size)
+        assertTrue(queued.isEmpty())
+    }
+
     private class Backend : KpmMatcherBackend {
         val references = mutableListOf<Int>()
         val views = mutableListOf<Added>()
@@ -158,6 +241,8 @@ class ReferencePreviewsTest {
             return 100
         }
         override fun match(luma: ByteBuffer, timestampNs: Long, pageNo: Int, maxCorrespondences: Int): KpmMatcherBackend.Solve? { matches++; return answer }
+        var reindexes = 0
+        override fun reindex(): Int { reindexes++; return 0 }
         val imageSets = mutableListOf<List<PlanarImage>>()
         override fun matchImages(luma: ByteBuffer, timestampNs: Long, images: List<PlanarImage>, maxCorrespondences: Int): KpmMatcherBackend.Solve? { imageSets += images; return answer }
         override fun cameraFromCanonical(pageNo: Int, cameraFromPage3x4: FloatArray): FloatArray = FloatArray(16)
@@ -179,8 +264,9 @@ class ReferencePreviewsTest {
         assertEquals(listOf(0), b.references)
         assertEquals(26, b.views.size)
         assertEquals((1..26).toList(), b.views.map { it.imageNo })
-        assertEquals(listOf(false), b.views.dropLast(1).map { it.reindex }.distinct())
-        assertTrue(b.views.last().reindex)
+        // Added unindexed, then indexed once per batch.
+        assertEquals(listOf(false), b.views.map { it.reindex }.distinct())
+        assertEquals(7, b.reindexes) // 26 in batches of 4
         assertTrue(m.isReady)
         assertEquals(27, m.images)
         assertEquals(300 + 26 * 100, m.features)

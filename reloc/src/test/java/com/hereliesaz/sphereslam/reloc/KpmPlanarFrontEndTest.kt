@@ -418,6 +418,28 @@ class KpmPlanarFrontEndTest {
     }
 
     @Test
+    fun `the anticipation resolution limits the previews a lost search uses, 0 none`() {
+        val pb = FakeBackend(k).apply { answer = { null } }
+        val matcher = PreviewMatcher(pb, KpmMatchSpeedConfig(), java.util.concurrent.Executor { it.run() }, useOpenCv = false)
+        val fe = frontEnd(KpmMatchSpeedConfig(flowTracking = false, obliqueSearchAfterMisses = 0), previews = { matcher })
+        fe.addPage(ByteBuffer.allocateDirect(400 * 300), 400, 300, 1f, false, 0, RigidMath.identity())
+        backend!!.answer = { null }
+        fe.setAnticipationResolution(0.25f)
+        var t = 0L
+        repeat(3) { fe.match(input(t)); t += 10 } // two direct misses, then the previews
+        // No prediction: every searchable preview, named, since not all the held ones are.
+        assertEquals(0, pb.calls.size)
+        assertEquals(matcher.searchable().map { PlanarImage(it.pageNo, it.imageNo) }, pb.imageCalls.single())
+        assertEquals(7, pb.imageCalls.single().size)
+        // At 0 the previews are not searched: direct solves only.
+        fe.setAnticipationResolution(0f)
+        repeat(4) { fe.match(input(t)); t += 10 }
+        assertEquals(1, pb.imageCalls.size)
+        assertEquals(0, pb.calls.size)
+        assertTrue(fe.diagnosticsAndReset()!!.contains("resolution=0.00 searchable=0"))
+    }
+
+    @Test
     fun `previews off builds none`() {
         var asked = false
         val fe = frontEnd(KpmMatchSpeedConfig(previewSearchAfterMisses = 0), previews = { asked = true; null })
