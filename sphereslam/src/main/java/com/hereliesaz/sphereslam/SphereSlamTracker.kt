@@ -84,6 +84,8 @@ class SphereSlamTracker internal constructor(
         val error: Float,
         val inliers: Int,
         cameraFromPage3x4: FloatArray,
+        /** Matched against one of the host's [AnticipatedView]s, not the reference itself. */
+        val anticipated: Boolean = false,
     ) {
         private val cameraFromPage3x4Value = cameraFromPage3x4.copyOf()
 
@@ -99,7 +101,7 @@ class SphereSlamTracker internal constructor(
             get() = cameraFromPage3x4
 
         override fun toString(): String =
-            "Observation(timestampNs=$timestampNs, pageNo=$pageNo, error=$error, inliers=$inliers)"
+            "Observation(timestampNs=$timestampNs, pageNo=$pageNo, error=$error, inliers=$inliers, anticipated=$anticipated)"
 
         companion object {
             /**
@@ -136,6 +138,36 @@ class SphereSlamTracker internal constructor(
 
     // Worker-thread only: the direct buffer KPM reads frames and references from, grown when needed.
     private var direct: ByteBuffer? = null
+
+    // Worker-thread only: a second engine holding the reference and the host's anticipated views,
+    // searched only after direct misses (KPM checks every image on each query, so views in the live
+    // engine would slow every match). Rebuilt with each reference; the views are the host's.
+    private var previewEngine: SphereSlamEngine? = null
+    private var previewReference: PreviewReference? = null
+    // The accepted reference, kept to start the previews engine when the first views arrive.
+    private var previewSource: PreviewSource? = null
+
+    private class PreviewSource(val camera: CameraModel, val luma: ByteArray, val width: Int, val height: Int, val page: PlanarPage)
+    private var misses = 0
+    private var previewTurn = 0
+
+    private class PreviewReference(val pageNo: Int, val heightPx: Int, val dpi: Float, val maxFeatures: Int) {
+        val imageOf = HashMap<String, Int>()
+        var nextImage = 1
+        var full = false
+    }
+
+    @Volatile private var searchableIds: Set<String>? = null
+
+    /**
+     * Direct misses in a row before every other frame is matched against the host's anticipated
+     * views ([addAnticipatedViews]) instead; 0 never searches them.
+     */
+    @Volatile var previewSearchAfterMisses: Int = 2
+        set(value) {
+            require(value >= 0)
+            field = value
+        }
     @Volatile private var referenceReady: Boolean = false
     @Volatile private var referenceGeometry: SphereSlamPoseMath.PageGeometry? = null
 
@@ -202,7 +234,100 @@ class SphereSlamTracker internal constructor(
                 null
             }
             latest.set(null)
+            // Views belong to the reference they were rendered from: a new reference drops them.
+            closePreviews()
+            previewSource = if (accepted) PreviewSource(model, packed, width, height, PlanarPage(pageNo, imageNo, dpi, maxFeatures)) else null
         }
+    }
+
+    /**
+     * Adds views of the reference that the host anticipates the camera may see ([AnticipatedView]:
+     * the reference rendered from an angle, nearer, turned). They are learned off the matching path,
+     * in a second engine, and searched only after [previewSearchAfterMisses] direct misses in a row;
+     * a hit is published with [Observation.anticipated]. Which views, how many and when are the
+     * host's; views whose id is already held are skipped, and a new [setReference] drops them all
+     * (add the new reference's after it). Runs on the tracker worker.
+     */
+    fun addAnticipatedViews(views: List<AnticipatedView>) {
+        if (closed.get() || views.isEmpty()) return
+        val copy = views.toList()
+        submit {
+            if (closed.get()) return@submit
+            buildPreviews(copy)
+        }
+    }
+
+    /**
+     * Which anticipated views may be searched: their ids, or null for every view. Applies from the
+     * next search; views outside it stay learned, so widening it again costs nothing.
+     */
+    fun setSearchableAnticipatedViews(ids: Set<String>?) {
+        searchableIds = ids?.toSet()
+    }
+
+    /** Worker thread: the previews engine, holding the reference, started on first use. */
+    private fun startPreviews(): SphereSlamEngine? {
+        previewEngine?.let { return it }
+        val src = previewSource ?: return null
+        val pe = engines.create(src.camera) ?: return null
+        val page = src.page
+        val ok = runCatching { pe.addPage(directCopy(src.luma), src.width, src.height, page) > 0 }.getOrDefault(false)
+        if (!ok) {
+            pe.close()
+            return null
+        }
+        previewEngine = pe
+        previewReference = PreviewReference(page.pageNo, src.height, page.referenceDpi, page.maxFeatures)
+        return pe
+    }
+
+    /** Worker thread: learns [views] in the previews engine, [PREVIEW_BATCH] at a time, each batch indexed once. */
+    private fun buildPreviews(views: List<AnticipatedView>) {
+        val pe = startPreviews() ?: return
+        val ref = previewReference ?: return
+        val seen = HashSet(ref.imageOf.keys)
+        for (batch in views.filter { seen.add(it.id) }.chunked(PREVIEW_BATCH)) {
+            if (ref.full || closed.get()) return
+            var added = 0
+            for (v in batch) {
+                val imageNo = ref.nextImage++
+                val n = runCatching {
+                    pe.addPageView(
+                        directCopy(v.luma), v.width, v.height,
+                        PlanarPageView(ref.pageNo, imageNo, ref.maxFeatures, v.pageFromView, ref.heightPx, ref.dpi, reindex = false),
+                    )
+                }.getOrDefault(-1)
+                if (n == KPM_IMAGES_FULL) {
+                    ref.full = true
+                    break
+                }
+                if (n > 0) {
+                    ref.imageOf[v.id] = imageNo
+                    added++
+                }
+            }
+            if (added > 0) pe.reindex()
+        }
+    }
+
+    /** Worker thread: the host's searchable views' best match for [luma], or null. */
+    private fun matchPreviews(luma: ByteArray): PlanarMatch? {
+        val pe = previewEngine ?: return null
+        val ref = previewReference ?: return null
+        if (ref.imageOf.isEmpty()) return null
+        val ids = searchableIds
+        val images = (if (ids == null) ref.imageOf.values else ids.mapNotNull { ref.imageOf[it] })
+            .map { PlanarImage(ref.pageNo, it) }
+        if (images.isEmpty()) return null
+        return runCatching { pe.match(directCopy(luma), PlanarMatchRequest(images = images)) }.getOrNull()
+    }
+
+    private fun closePreviews() {
+        previewEngine?.close()
+        previewEngine = null
+        previewReference = null
+        misses = 0
+        previewTurn = 0
     }
 
     /**
@@ -221,6 +346,8 @@ class SphereSlamTracker internal constructor(
             referenceReady = false
             referenceGeometry = null
             latest.set(null)
+            closePreviews()
+            previewSource = null
         }
     }
 
@@ -254,10 +381,17 @@ class SphereSlamTracker internal constructor(
                     val frame = pendingFrame.getAndSet(null) ?: break
                     val active = engine
                     if (active != null && referenceReady) {
-                        active.match(directCopy(frame.luma))?.let { m ->
-                            latest.set(
-                                Observation(frame.timestampNs, m.pageNo, m.reprojectionError, m.inlierCount, m.cameraFromPage3x4),
-                            )
+                        // Lost (that many direct misses in a row): every other frame searches the host's
+                        // anticipated views instead of the reference.
+                        val after = previewSearchAfterMisses
+                        val viaViews = after > 0 && misses >= after && previewEngine != null && previewTurn++ % 2 == 0
+                        val m = if (viaViews) matchPreviews(frame.luma) else active.match(directCopy(frame.luma))
+                        if (m != null) {
+                            misses = 0
+                            previewTurn = 0
+                            latest.set(Observation(frame.timestampNs, m.pageNo, m.reprojectionError, m.inlierCount, m.cameraFromPage3x4, anticipated = viaViews))
+                        } else {
+                            misses++
                         }
                     }
                     spareLuma.set(frame.luma)
@@ -302,6 +436,7 @@ class SphereSlamTracker internal constructor(
     }
 
     private fun destroyHandle() {
+        closePreviews()
         val active = engine
         engine = null
         referenceReady = false
@@ -320,6 +455,12 @@ class SphereSlamTracker internal constructor(
     }
 
     companion object {
+        /** Views learned and indexed together. */
+        private const val PREVIEW_BATCH = 4
+
+        /** KPM refused a view: the engine holds its limit of reference images. */
+        private const val KPM_IMAGES_FULL = -8
+
         private fun newWorker(): ExecutorService =
             Executors.newSingleThreadExecutor { runnable ->
                 Thread(runnable, "sphereslam-kpm").apply { isDaemon = true }

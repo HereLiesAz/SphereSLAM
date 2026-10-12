@@ -1,6 +1,7 @@
 package com.hereliesaz.sphereslam.reloc
 
 import android.os.SystemClock
+import com.hereliesaz.sphereslam.AnticipatedView
 import com.hereliesaz.sphereslam.AttitudeBasis
 import com.hereliesaz.sphereslam.PhotosphereFingerprintFrame
 import com.hereliesaz.sphereslam.PhotosphereKeyframe
@@ -507,6 +508,8 @@ class PhotosphereTrackingSession internal constructor(
             runtimeAtlasPages.clear()
             sortedPages.forEach { runtimeAtlasPages[it.pageNo] = it }
         }
+        // Views belong to the reference and pages they were rendered from.
+        if (referenceChanged) anticipated.clear() else anticipated.keys.retainAll(setOf(0) + runtimeAtlasPages.keys)
         reference?.let { stations?.setSpawnDistance(spawnUnits(it)) }
         publishWall()
 
@@ -536,49 +539,43 @@ class PhotosphereTrackingSession internal constructor(
     @Volatile
     var displayPosePredictor: DisplayPosePredictor? = null
 
-    private val governor = AnticipationGovernor(
-        config.matchSpeed.anticipationResolution,
-        config.matchSpeed.anticipationThrottle,
-        null,
-    )
+    // The host's anticipated views by page, and which may be searched; re-applied to each new
+    // previews matcher (anticipationAppliedTo is the one they were last applied to).
+    private val anticipated = linkedMapOf<Int, MutableList<AnticipatedView>>()
+    private var searchableViewIds: Set<String>? = null
+    private var anticipationAppliedTo: Any? = null
 
     /**
-     * The most the session anticipates the target's appearance ([AnticipationResolution]: half-spheres
-     * of previews). Starts at [KpmMatchSpeedConfig.anticipationResolution]; a change applies from the
-     * next frame, without a restart: missing previews are rendered and indexed in the background, a
-     * few at a time. Safe to set from any thread.
+     * Adds views of registered page [pageNo] that the host anticipates the camera may see
+     * ([AnticipatedView]: its reference rendered from an angle, nearer, turned). SphereSLAM learns them
+     * in a second matcher off the camera thread and searches them while the target is lost
+     * ([KpmMatchSpeedConfig.previewSearchAfterMisses]); which views, how many and when are the host's.
+     * Views whose id the page already holds are skipped. Pages the atlas grows arrive through
+     * [Callbacks.onAtlasPageAdded]; render views of them for [matchCamera]. A new reference
+     * ([updatePrecisionLayer]) drops every view; a page dropped from the atlas drops its views.
      */
-    var anticipationResolution: AnticipationResolution
-        get() = governor.max
-        set(value) {
-            governor.max = value
-        }
+    @Synchronized
+    fun addAnticipatedViews(pageNo: Int, views: List<AnticipatedView>) {
+        if (closed || views.isEmpty()) return
+        anticipated.getOrPut(pageNo) { ArrayList() } += views
+        frontEnd?.takeIf { it.anticipationKey != null && it.anticipationKey === anticipationAppliedTo }?.addAnticipatedViews(pageNo, views)
+    }
 
     /**
-     * How far battery, heat and the session's own load throttle [anticipationResolution]. The session
-     * re-reads the pressures every 2 s and searches the subset of the maximum's views that fits
-     * ([AnticipationDecimation]: every other meridian, circle or half-sphere, and so on): lower at
-     * once, higher after it has fitted for 10 s. Starts at [KpmMatchSpeedConfig.anticipationThrottle].
-     * Safe to set from any thread.
+     * Which anticipated views may be searched: their ids (across pages), or null for every view.
+     * Applies at once; views outside it stay learned, so widening it again costs nothing.
      */
-    var anticipationThrottle: AnticipationThrottle
-        get() = governor.throttle
-        set(value) {
-            governor.throttle = value
-        }
+    @Synchronized
+    fun setSearchableAnticipatedViews(ids: Set<String>?) {
+        searchableViewIds = ids?.toSet()
+        frontEnd?.setSearchableViews(searchableViewIds)
+    }
 
     /**
-     * Where battery and heat pressure come from: [AndroidDevicePressure] for the device's own; null
-     * (the default) for none, so only the session's load throttles. Safe to set from any thread.
+     * The camera of the image KPM matches (the frame, downscaled per [KpmMatchSpeedConfig]), once a
+     * matcher is built: render anticipated views for it, so their sizes are what this camera sees.
      */
-    var devicePressure: DevicePressureSource?
-        get() = governor.source
-        set(value) {
-            governor.source = value
-        }
-
-    /** The resolution the session currently anticipates at, and the pressures that set it. */
-    val anticipation: AnticipationStatus get() = governor.status
+    val matchCamera: CameraIntrinsics? @Synchronized get() = frontEnd?.matchCamera
 
     /**
      * Process one frame. After [close] or a terminal ([TrackingFailureSeverity.FATAL]) failure this
@@ -587,13 +584,10 @@ class PhotosphereTrackingSession internal constructor(
     @Synchronized
     fun onFrame(frame: Frame): FrameResult {
         if (closed || fatal) return FrameResult(null, stateMachine.state, null, false, null, null, null, null)
-        val startNs = elapsedRealtimeNanos()
         return try {
             process(frame).also { result ->
                 publishToPredictor(frame, result.pose)
                 emitMetricsIfDue()
-                // The session's own load, for the anticipation throttle.
-                governor.onFrame((elapsedRealtimeNanos() - startNs) / 1e6f, frame.timestampNs)
             }
         } catch (t: Throwable) {
             if (t is VirtualMachineError) throw t
@@ -641,7 +635,13 @@ class PhotosphereTrackingSession internal constructor(
             if (event.severity != TrackingFailureSeverity.RECOVERABLE) throw t
             return suspendPrecisionLayer(t, event, cameraFromMap, projection)
         } ?: return FrameResult(null, stateMachine.state, cameraFromMap, false, null, null, null, projection)
-        active.setAnticipation(governor.update(elapsedRealtimeNanos() / 1_000_000L))
+        val key = active.anticipationKey
+        if (key != null && key !== anticipationAppliedTo) {
+            // A new previews matcher (a rebuilt matcher; a fork shares its parent's): give it every view.
+            anticipated.forEach { (page, views) -> active.addAnticipatedViews(page, views) }
+            active.setSearchableViews(searchableViewIds)
+            anticipationAppliedTo = key
+        }
         val direct = directFrame(frame.luma)
         val matchStartNs = elapsedRealtimeNanos()
         timing.setup.add(matchStartNs - setupStartNs)
@@ -1352,8 +1352,17 @@ internal interface PlanarFrontEnd : AutoCloseable {
     /** A fragment for the session's periodic diagnostic line (counters since the last call), or null. */
     fun diagnosticsAndReset(): String? = null
 
-    /** The anticipation the session currently allows, applied every frame (unchanged is free). */
-    fun setAnticipation(status: AnticipationStatus) {}
+    /** The host's previews matcher, if any: the session re-adds its views when this changes. */
+    val anticipationKey: Any? get() = null
+
+    /** The camera of the image this front end matches (views are best rendered for it). */
+    val matchCamera: CameraIntrinsics? get() = null
+
+    /** Adds the host's views of page [pageNo] ([PhotosphereTrackingSession.addAnticipatedViews]). */
+    fun addAnticipatedViews(pageNo: Int, views: List<AnticipatedView>) {}
+
+    /** Which views may be searched: ids, or null for all. */
+    fun setSearchableViews(ids: Set<String>?) {}
 }
 
 @ExperimentalSphereSlamRelocApi

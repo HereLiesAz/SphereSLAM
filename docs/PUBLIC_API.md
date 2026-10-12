@@ -24,6 +24,7 @@ Recommended entry points:
 - `PlanarMatchRequest`
 - `PlanarPageView`
 - `PlanarImage`
+- `AnticipatedView`
 - `SphereSlamStandaloneSession`
 - `AnchoredStandaloneSession`
 - `SphereSlamTracker`
@@ -189,11 +190,11 @@ frame yields no pose, on a fatal or recoverable failure and on `close()`;
 the GL thread then calls `predictInto(extrapolator, now, out)` per draw. Use the same attitude sensor
 for `Frame.attitude` and the extrapolator.
 
-`anticipationResolution` (an `AnticipationResolution`: half-spheres of previews by distance,
-latitude and longitude) is the most the session anticipates; `anticipationThrottle` how far battery,
-heat and its own load cut it; `devicePressure` where battery and heat come from
-(`AndroidDevicePressure`); `anticipation` what it currently uses and why. Changes apply from the next
-frame without a restart (README: Previews).
+`addAnticipatedViews(pageNo, views)` gives the session the host's `AnticipatedView`s of a page,
+searched while the target is lost; `setSearchableAnticipatedViews(ids)` chooses which (null: all);
+`matchCamera` is the camera to render them for. `SphereSlamTracker` takes the same views
+(`addAnticipatedViews`, `setSearchableAnticipatedViews`, `previewSearchAfterMisses`), and marks a hit
+`Observation.anticipated` (README: Previews).
 
 Every `Config.metricsIntervalMs` (5 s) `Callbacks.onDiagnostic` receives the last accepted KPM match
 (`page inliers error ageMs matchMs method=`) or `KPM no-lock`, followed by
@@ -201,7 +202,7 @@ Every `Config.metricsIntervalMs` (5 s) `Callbacks.onDiagnostic` receives the las
 ran the matcher, `matched` got a pose back; `mean/max` ms over the
 window; `convertMs` comes from `Frame.convertDurationNs`, `growthMs` is only the analyzer-side cost of
 starting a growth attempt), then `tiles{…}`, `rect{planned swept kpm solved frontal maxObliq}` and
-`previews{images features builtMs ready anticipation factor battery heat compute searchable tried guided solved}` when they apply (README: Diagnostics). The line is a diagnostic, not a stable format.
+`previews{images features builtMs ready searchable tried rectified guided solved}` when they apply (README: Diagnostics). The line is a diagnostic, not a stable format.
 
 #### `:models`
 
@@ -465,8 +466,7 @@ nor load OpenCV.
 - `PhotosphereKeyframeStore`, `HybridPoseHistory` and `HybridAnchorFusion` are not thread-safe.
 - `PlanarTracker` is not thread-safe; drive it from one camera worker.
 - `PhotosphereTrackingSession` synchronizes its methods; drive `onFrame` from one camera worker.
-  `displayPosePredictor`, `anticipationResolution`, `anticipationThrottle` and `devicePressure` may be
-  set from any thread; the predictor it feeds is read on the GL thread.
+  `displayPosePredictor` may be set from any thread; the predictor it feeds is read on the GL thread.
   Callbacks run synchronously on the `onFrame` thread, including outcomes of its background matcher
   builds and atlas growth.
 - `SphereSlamStandaloneSession.fork()` may run on another thread while the session matches, but not

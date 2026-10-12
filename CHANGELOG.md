@@ -2,27 +2,25 @@
 
 ## Unreleased
 
-- **Anticipation resolution.** Previews are now placed on half-spheres over the target:
-  `AnticipationResolution(distance, latitude, longitude)` (`KpmMatchSpeedConfig.anticipationResolution`,
-  default 3 × 8 × 3). `latitude` meridians from the pole (square-on) to the equator, cut by
-  `longitude` circles; a preview at the pole and at every cut, aimed at the core, none on the equator;
-  `distance` nested half-spheres from `anticipationNearestWidths` (0.5) to
-  `anticipationFarthestWidths` (4) target widths. Each preview is what the phone's camera would see
-  from there, cropped to its frame, so near views are large and strongly foreshortened and far ones
-  small. Replaces `previewTiltsDeg` and `previewScales`; turned square-on views
-  (`previewRotationStepDeg`) remain as an extra.
-- **The library throttles anticipation itself.** The resolution is a maximum
-  (`PhotosphereTrackingSession.anticipationResolution`); the session cuts it by battery, heat and its
-  own frame load, weighted by `AnticipationThrottle(battery, heat, compute)`
-  (`anticipationThrottle`), with battery and heat from `devicePressure`
-  (`AndroidDevicePressure(context)`: thermal headroom, discharge). It searches the largest nested
-  subset of the maximum that fits (`AnticipationDecimation`), lower at once and higher after 10 s, so
-  throttling builds nothing and lifting it reuses what was built. `anticipation` reports the
-  effective resolution and the pressures; all apply from the next frame. Previews are built 4 at a
-  time, farthest first, each batch indexed once by the new `KpmBridge.reindex`
-  (`SphereSlamEngine.reindex`, `SphereSlamStandaloneSession.reindexReferences`); a batch whose last
-  preview failed is now indexed too. `previews{}` gains the anticipation, factor and pressures. The
-  test app gains Anticipation knobs and reads the phone's battery and heat.
+- **Previews are the host's.** SphereSLAM no longer chooses or renders previews; it provides the
+  tools. Hosts add `AnticipatedView`s (a rendered view of a page, `pageFromView` back to the host's
+  reference pixels, and the camera rotation and zoom it stands for):
+  `PhotosphereTrackingSession.addAnticipatedViews` / `setSearchableAnticipatedViews` / `matchCamera`,
+  and on the ARCore side `SphereSlamTracker.addAnticipatedViews` / `setSearchableAnticipatedViews` /
+  `previewSearchAfterMisses` (a hit is `Observation.anticipated`). Which views, how many and when
+  (the throttle) are the host's. Views are learned in a second matcher, 4 at a time, each batch
+  indexed once by the new `KpmBridge.reindex` (`SphereSlamEngine.reindex`,
+  `SphereSlamStandaloneSession.reindexReferences`); a batch whose last view failed is now indexed too.
+  Removed: `previewTiltsDeg`, `previewScales`, `previewRotationStepDeg`, `previewAtlasPages` (0.26.5's
+  library-made previews).
+- **The sensors turn the frame before a preview search.** With a prediction, the frame is turned
+  square-on and upright by the phone's rotation alone (`KpmMatchSpeedConfig.previewRectify`),
+  which needs no position and so holds while the target is lost; the real pose is solved through the
+  turn, and the search starts from the square-on views at the predicted distance. `previews{}`
+  becomes `images features builtMs ready searchable tried rectified guided solved`.
+- **Tiles: the sensors turn the live frame.** Before a tile search the live frame is turned by the
+  sensors' rotation into the nearest candidate tile's view (no position needed) and its features
+  mapped back (`PhotosphereTileLocalizer.Config.turnLiveFrameDeg`, 5°; 0 never turns).
 - **Previews.** Each reference (and, with `previewAtlasPages`, each grown page) is rendered tilted in
   perspective, resized and turned, with OpenCV, and each preview joins KPM as another image of its
   page with its features' millimetres mapped back through the warp

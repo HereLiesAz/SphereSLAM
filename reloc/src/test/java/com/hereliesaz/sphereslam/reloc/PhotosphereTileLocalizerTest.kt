@@ -112,6 +112,57 @@ class PhotosphereTileLocalizerTest {
     }
 
     @Test
+    fun `the live frame is turned by the sensors into the nearest tile's view`() {
+        val loc = PhotosphereTileLocalizer(backend)
+        val s0 = loc.addStation(DoubleArray(3))
+        val origin = DoubleArray(3)
+        loc.addTile(s0, lumaFor(Pose(rot(0.0), origin)), w, h, k, rot(0.0))!!
+        // 20° off the tile: the turn maps every live pixel onto where the tile saw the same point.
+        val prior = rot(20.0, 6.0)
+        val turn = loc.turnTowardTile(prior, origin, k)!!
+        for (p in wall.take(80)) {
+            val live = PhotosphereGeometry.project(prior, origin, p, k[0], k[1], k[2], k[3]) ?: continue
+            val tile = PhotosphereGeometry.project(rot(0.0), origin, p, k[0], k[1], k[2], k[3]) ?: continue
+            val wgt = turn[6] * live[0] + turn[7] * live[1] + turn[8]
+            assertEquals(tile[0].toDouble(), (turn[0] * live[0] + turn[1] * live[1] + turn[2]) / wgt, 1e-2)
+            assertEquals(tile[1].toDouble(), (turn[3] * live[0] + turn[4] * live[1] + turn[5]) / wgt, 1e-2)
+        }
+        // Nearly the tile's view already, or turning off: no turn.
+        assertNull(loc.turnTowardTile(rot(3.0), origin, k))
+        assertNull(PhotosphereTileLocalizer(backend, PhotosphereTileLocalizer.Config(turnLiveFrameDeg = 0f)).also { l ->
+            l.addTile(l.addStation(DoubleArray(3)), lumaFor(Pose(rot(0.0), origin)), w, h, k, rot(0.0))
+        }.turnTowardTile(prior, origin, k))
+    }
+
+    @Test
+    fun `features of the turned frame come back in the live frame's pixels`() {
+        // A backend that finds the bright pixels of what it is given.
+        var seen: ByteArray? = null
+        val dots = object : TileFeatureBackend {
+            override fun extract(luma: ByteArray, width: Int, height: Int): TileFeatures? {
+                seen = luma
+                val pts = ArrayList<Float>()
+                for (i in luma.indices) if ((luma[i].toInt() and 0xff) > 200) { pts += (i % width).toFloat(); pts += (i / width).toFloat() }
+                return TileFeatures(pts.toFloatArray(), null)
+            }
+            override fun match(query: TileFeatures, train: TileFeatures) = IntArray(0)
+        }
+        val loc = PhotosphereTileLocalizer(dots)
+        val ww = 64; val hh = 48
+        val luma = ByteArray(ww * hh) { 20 }
+        // Turned frame = live shifted by (+5, −3): pixel (u, v) of the turned image is live (u − 5, v + 3).
+        val shift = doubleArrayOf(1.0, 0.0, 5.0, 0.0, 1.0, -3.0, 0.0, 0.0, 1.0)
+        luma[20 * ww + 30] = 250.toByte()
+        val f = loc.extractTurned(luma, ww, hh, shift)!!
+        // The detector saw the dot moved by the turn …
+        assertEquals(250, seen!![17 * ww + 35].toInt() and 0xff)
+        // … and reports it where the live frame has it.
+        assertEquals(listOf(30f, 20f), f.points.toList())
+        // Turned pixels from outside the live frame are mid-grey.
+        assertEquals(128, seen!![0].toInt() and 0xff)
+    }
+
+    @Test
     fun `the tiles around the lock direction outlive the tile cap`() {
         val loc = PhotosphereTileLocalizer(backend, PhotosphereTileLocalizer.Config(maxTilesPerStation = 4))
         val s0 = loc.addStation(DoubleArray(3))
