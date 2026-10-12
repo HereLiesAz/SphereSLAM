@@ -44,6 +44,10 @@ object Palette {
     val MUTED = Color.rgb(0x9A, 0x9C, 0xA6)
     val FAIL = Color.rgb(0xE5, 0x73, 0x73)
     val ON_GOLD = Color.rgb(0x1A, 0x16, 0x0C)
+    /** An unfinished progress segment: 3.4:1 against SURFACE (non-text contrast minimum is 3:1). */
+    val SEGMENT_TODO = Color.rgb(0x70, 0x73, 0x80)
+
+    fun segment(status: Status): Int = if (status == Status.UNTESTED) SEGMENT_TODO else of(status)
 
     fun of(status: Status): Int = when (status) {
         Status.PASS -> GOLD
@@ -133,7 +137,7 @@ class StepProgressView(context: Context) : View(context) {
         statuses.forEachIndexed { i, s ->
             val x = i * (w + gap)
             r.set(x, 0f, x + w, h)
-            fill.color = Palette.of(s)
+            fill.color = Palette.segment(s)
             canvas.drawRoundRect(r, radius, radius, fill)
             if (i == current) {
                 r.inset(ring.strokeWidth / 2, ring.strokeWidth / 2)
@@ -148,8 +152,8 @@ class Action(val label: String, val enabled: Boolean = true, val onClick: () -> 
 
 /**
  * The whole screen, top to bottom with nothing layered except the target outline on the camera image
- * it marks: app bar, step progress, camera, telemetry, the current step's card, and its actions. The
- * overview (every step and verdict) replaces the camera and card while it is open.
+ * it marks: app bar, step progress, camera, status line, the current step's card, and its actions.
+ * The overview (every step and verdict) takes the card's place while it is open; the camera stays.
  */
 @SuppressLint("SetTextI18n")
 class TestScreen(
@@ -188,6 +192,8 @@ class TestScreen(
     private val cardBody = text(15f, Palette.TEXT).apply { setLineSpacing(0f, 1.15f) }
     private val cardCoach = text(14f, Palette.TEXT).apply {
         setLineSpacing(0f, 1.1f)
+        // Read out when it appears or changes: it is the "what's wrong, what to do" line.
+        accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         val p = context.dp(12)
         setPadding(p, context.dp(10), p, context.dp(10))
     }
@@ -317,14 +323,19 @@ class TestScreen(
     fun showOverview(open: Boolean) {
         overview.visibility = if (open) View.VISIBLE else View.GONE
         cardScroll.visibility = if (open) View.GONE else View.VISIBLE
+        // While open, the action bar's "Back to step" is the way out; one button for it, not two.
+        overviewButton.visibility = if (open) View.GONE else View.VISIBLE
         overviewButton.text = if (open) "Back to step" else "All steps"
     }
 
     // --- rendering ------------------------------------------------------------------------------
 
     fun header(stepLabel: String, statuses: List<Status>, current: Int, report: String) {
-        stepCounter.text = stepLabel
+        setIfChanged(stepCounter, stepLabel)
         progress.set(statuses, current)
+        progress.contentDescription = "Progress: ${statuses.count { it == Status.PASS }} passed, " +
+            "${statuses.count { it == Status.FAIL }} failed, ${statuses.count { it == Status.SKIPPED }} skipped, " +
+            "${statuses.count { it == Status.UNTESTED }} to do"
         reportLine.text = report
     }
 
@@ -428,13 +439,40 @@ class TestScreen(
     }
 
     /**
-     * Whether every control clears the system bars, cutout and keyboard bands, with the measurements.
-     * Null until the window has reported its insets.
+     * The system-bar, cutout and keyboard bands as the platform reports them (left, top, right,
+     * bottom px), read straight from the window rather than through [SystemBarPadding], so the layout
+     * check is an independent measurement of what the padding was computed from. Null before attach.
      */
-    fun layoutCheck(): Pair<Boolean, String>? {
+    fun platformBands(): Rect? {
+        val wi = root.rootWindowInsets ?: return null
+        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            val t = android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout()
+            val bars = wi.getInsets(t)
+            val ime = wi.getInsets(android.view.WindowInsets.Type.ime())
+            Rect(bars.left, bars.top, bars.right, max(bars.bottom, ime.bottom))
+        } else {
+            // API 28-29 reports the cutout separately; 26-27 has none to report.
+            val cut = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                wi.displayCutout?.let { Rect(it.safeInsetLeft, it.safeInsetTop, it.safeInsetRight, it.safeInsetBottom) }
+            } else null
+            @Suppress("DEPRECATION")
+            Rect(
+                max(wi.systemWindowInsetLeft, cut?.left ?: 0),
+                max(wi.systemWindowInsetTop, cut?.top ?: 0),
+                max(wi.systemWindowInsetRight, cut?.right ?: 0),
+                max(wi.systemWindowInsetBottom, cut?.bottom ?: 0),
+            )
+        }
+    }
+
+    /**
+     * Whether every control clears [bands] (left, top, right, bottom px: the system bars, cutout and
+     * keyboard), with the measurements. Null until laid out or when no bands are known yet.
+     */
+    fun layoutCheck(bands: Rect?): Pair<Boolean, String>? {
         if (root.width == 0) return null
         // Undecided until the window has reported its insets, so the first frame can't fail it.
-        val b = padding.bands() ?: return null
+        val b = bands ?: return null
         val window = root.rootView
         val w = window.width; val h = window.height
         val density = context.resources.displayMetrics.density
@@ -442,13 +480,14 @@ class TestScreen(
         val bands = listOf(Rect(0, 0, w, b.top), Rect(0, h - b.bottom, w, h), Rect(0, 0, b.left, h), Rect(w - b.right, 0, w, h))
             .filter { !it.isEmpty }
         // The part of each control actually on screen: clipped by its scrolling parents.
-        val offenders = controls().filter { v ->
+        val controls = controls()
+        val offenders = controls.filter { v ->
             val r = Rect()
             v.getGlobalVisibleRect(r) && bands.any { Rect.intersects(it, r) }
         }
         val measured = "window ${dp(w)}×${dp(h)}, status/top ${dp(b.top)}, navigation/bottom ${dp(b.bottom)}, " +
             "sides ${dp(b.left)}/${dp(b.right)}; padding ${dp(root.paddingTop)} top, ${dp(root.paddingBottom)} bottom; " +
-            "${controls().size} controls checked"
+            "${controls.size} controls checked"
         return if (offenders.isEmpty()) true to measured
         else false to "$measured; ${offenders.size} overlap: " + offenders.joinToString { it.javaClass.simpleName }
     }

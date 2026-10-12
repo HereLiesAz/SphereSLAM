@@ -1,12 +1,14 @@
 package com.hereliesaz.sphereslam.testapp
 
+import java.util.Locale
 import kotlin.math.abs
 
 /*
  * The device checklist. Most checks grade themselves from live telemetry ([Sample]s and session
  * events); the visual ones ([Check.manual]) take the tester's verdict. [Checklist.progress] says how
- * far an undecided check has got, for the guided run ([Guide]). Pure Kotlin, no Android, so every
- * grading rule is unit-tested on the JVM.
+ * far an undecided check has got, for the guided run ([Guide]). A check the telemetry can only ever
+ * pass is failed by the guide when its step runs out of time ([Checklist.timeOut]). Pure Kotlin, no
+ * Android, so every grading rule is unit-tested on the JVM.
  */
 
 enum class Status { UNTESTED, PASS, FAIL, SKIPPED }
@@ -42,6 +44,8 @@ data class Sample(
     val rebuildErrorDeg: Float?,
     /** How far the camera axis turned since the previous sample, degrees. */
     val axisStepDeg: Float?,
+    /** Whole-frame analysis time (pack, attitude, session), ms; null when unmeasured. */
+    val frameMs: Float? = null,
 )
 
 /**
@@ -51,13 +55,14 @@ data class Sample(
 class Checklist {
     val checks: List<Check> = listOf(
         Check("layout_clear", "Every control clears the system bars and display cutout", "Automatic at start."),
-        Check("native_engine", "The native tracking engine loads (libsphereslam, KPM)", "Automatic at start."),
-        Check("attitude_sensor", "Rotation-vector sensor delivers reliable samples", "Open the app; wave the phone in a figure-8 if it says unreliable."),
+        Check("native_packaged", "The APK ships libsphereslam for this device's ABI", "Automatic at start."),
+        Check("attitude_sensor", "Rotation-vector sensor reports medium or high accuracy", "Open the app; wave the phone in a figure-8 if it stays low."),
         Check("lens_correction", "Camera delivers a distortion-corrected stream", "Automatic at camera start."),
         Check("lock_wall", "Locks a wall target within 30 s", "Point at a textured wall, tap Capture, keep it in view."),
+        Check("native_session", "The first capture starts a native KPM session", "Automatic on the first capture."),
         Check("lock_floor", "Locks a floor target within 30 s", "Look straight down at a textured floor, tap Capture."),
         Check("lock_ceiling", "Locks a ceiling target within 30 s", "Optional: look straight up at a textured ceiling, tap Capture."),
-        Check("match_speed", "KPM/flow median match time fits a 30 fps frame", "Stay locked on a target for ~10 s."),
+        Check("match_speed", "Median match time and whole-frame time fit a 30 fps frame", "Stay locked on a target for ~10 s."),
         Check("flow_used", "Flow tracking runs between full solves", "Stay locked and move slowly."),
         Check("rectified", "Relocks at a grazing angle (KPM_RECTIFIED)", "While locked, walk around until you view the target 45°+ from the side."),
         Check("bridge", "Gyro bridge holds a brief miss and relocks", "While locked, cover the lens for half a second."),
@@ -81,6 +86,7 @@ class Checklist {
 
     operator fun get(id: String): Check = byId.getValue(id)
 
+    /** Sets [id]'s verdict outright (the tester's answers, skips, timeouts, the layout check). */
     fun set(id: String, status: Status, evidence: String) {
         val c = byId.getValue(id)
         if (c.status == status && c.evidence == evidence) return
@@ -89,7 +95,7 @@ class Checklist {
         changes++
     }
 
-    /** A decided check keeps its first verdict, except that a PASS can still be overturned by the tester. */
+    /** A verdict from telemetry: only an undecided check takes it, so the first one stands. */
     private fun decide(id: String, status: Status, evidence: String) {
         if (byId.getValue(id).status != Status.UNTESTED) return
         set(id, status, evidence)
@@ -105,30 +111,45 @@ class Checklist {
                 changes++
             }
             when (id) {
-                "match_speed" -> matchTimes.clear()
+                "match_speed" -> { matchTimes.clear(); frameTimes.clear() }
                 "rectified" -> rectifiedCount = 0
                 "pole_attitude" -> { poleSamples = 0; maxPoleError = 0f }
-                "pole_facing" -> { stillStartMs = Long.MIN_VALUE; stillFacing.clear(); stillHeading.clear() }
+                "pole_facing" -> clearStill()
                 "bridge" -> bridgeStartMs = Long.MIN_VALUE
+                "native_session" -> sessionCheckAtMs = Long.MIN_VALUE
                 "lock_wall", "lock_floor", "lock_ceiling" -> if (captureCheck == id) captureCheck = null
             }
         }
     }
 
+    /** Fails [id] if it is still undecided: its step ran out of time without the telemetry it waits for. */
+    fun timeOut(id: String, evidence: String) = decide(id, Status.FAIL, evidence)
+
     // --- events ---------------------------------------------------------------------------------
 
-    /** [ok] when `SphereSlam.isOperational()` holds; [evidence] says what failed otherwise. */
-    fun onNativeEngine(ok: Boolean, evidence: String) =
-        decide("native_engine", if (ok) Status.PASS else Status.FAIL, evidence)
+    /**
+     * Whether the APK carries libsphereslam for the device's ABI. Deliberately not a load: loading it
+     * here would hide a session path that forgets to (`native_session` catches that).
+     */
+    fun onNativePackaged(present: Boolean, evidence: String) =
+        decide("native_packaged", if (present) Status.PASS else Status.FAIL, evidence)
 
     /** [clear] when no control overlaps a system bar or the display cutout; [evidence] gives the measurements. */
     fun onLayout(clear: Boolean, evidence: String) =
         set("layout_clear", if (clear) Status.PASS else Status.FAIL, evidence)
 
-    fun onAttitude(available: Boolean, reliable: Boolean) {
-        when {
-            !available -> decide("attitude_sensor", Status.FAIL, "no TYPE_ROTATION_VECTOR sensor")
-            reliable -> decide("attitude_sensor", Status.PASS, "reliable samples")
+    /**
+     * [accuracy] is the sensor's last reported `SENSOR_STATUS_*` value, or null before it has reported
+     * one: a sensor that has said nothing yet has not shown it is reliable.
+     */
+    fun onAttitude(available: Boolean, accuracy: Int?) {
+        if (!available) {
+            decide("attitude_sensor", Status.FAIL, "no TYPE_ROTATION_VECTOR sensor")
+            return
+        }
+        attitudeAccuracy = accuracy
+        if (accuracy != null && accuracy >= ACCURACY_MEDIUM) {
+            decide("attitude_sensor", Status.PASS, "accuracy ${accuracyName(accuracy)}")
         }
     }
 
@@ -141,13 +162,28 @@ class Checklist {
     private var captureMs = Long.MIN_VALUE
     private var captureCheck: String? = null
     private var captureElevation = 0f
+    private var sessionCheckAtMs = Long.MIN_VALUE
 
-    /** A target was captured at [elevationDeg] for [checkId] (`lock_wall`, `lock_floor` or `lock_ceiling`). */
+    /**
+     * A target was captured at [elevationDeg] for [checkId] (`lock_wall`, `lock_floor` or
+     * `lock_ceiling`). The lock history starts over: a new target is not a relock of the old one.
+     */
     fun onCapture(timeMs: Long, elevationDeg: Float?, checkId: String) {
         require(checkId in LOCK_CHECKS) { checkId }
         captureMs = timeMs
         captureElevation = elevationDeg ?: 0f
         captureCheck = checkId
+        everLocked = false
+        lastKpmMs = Long.MIN_VALUE
+        bridgeStartMs = Long.MIN_VALUE
+        if (sessionCheckAtMs == Long.MIN_VALUE) sessionCheckAtMs = timeMs + NATIVE_SESSION_GRACE_MS
+    }
+
+    /** A failure the session reported, by reason name (`NATIVE_LIBRARY_UNAVAILABLE` …). */
+    fun onFailure(reason: String, diagnostic: String) {
+        if (reason == "NATIVE_LIBRARY_UNAVAILABLE") {
+            decide("native_session", Status.FAIL, "UnsatisfiedLinkError on the session path: ${diagnostic.take(160)}")
+        }
     }
 
     // --- progress -------------------------------------------------------------------------------
@@ -169,26 +205,30 @@ class Checklist {
                 if (captureCheck == id) "Locking… ${(nowMs - captureMs) / 1000} s of ${LOCK_TIMEOUT_MS / 1000} s (${lastState ?: "starting"})"
                 else "Waiting for Capture"
             "match_speed" -> "${matchTimes.size} of $MATCH_SAMPLES tracked frames" +
-                (if (matchTimes.isNotEmpty()) ", median ${"%.1f".format(matchTimes.sorted()[matchTimes.size / 2])} ms" else "")
+                (if (matchTimes.isNotEmpty()) ", median ${fmt1(median(matchTimes))} ms" else "")
             "flow_used" -> if (lastState == "LOCKED") "Locked; waiting for a flow-tracked frame" else "Waiting for a lock"
-            "rectified" -> "$rectifiedCount of 3 steep-angle matches"
+            "rectified" -> "$rectifiedCount of $RECTIFIED_POSES steep-angle matches"
             "bridge" -> when (lastState) {
                 "LOCKED" -> "Locked. Cover the lens now"
                 "IMU_BRIDGE" -> "Bridging on the gyro. Uncover the lens"
                 else -> "Waiting for a lock (${lastState ?: "starting"})"
             }
-            "off_wall" -> if (everLocked) "Waiting for a pose without the target" else "Lock a target first"
+            "off_wall" -> if (everLocked) "Waiting for a pose with the target out of view" else "Lock a target first"
             "relock_after_away" -> msSinceTargetSeen(nowMs)?.let { away ->
                 if (away < AWAY_MS) "Away ${away / 1000} s of ${AWAY_MS / 1000} s" else "Away long enough. Point back at the target"
             } ?: "Lock a target first"
             "map_solved" -> "Waiting for the first lock"
+            "native_session" -> "Waiting for the first capture"
             "atlas_growth" -> "Waiting for a new atlas page"
             "tile_fixes" -> "Waiting for a tile fix"
             "pole_attitude" -> "$poleSamples of $POLE_SAMPLES samples at the pole"
             "pole_facing" -> if (stillStartMs == Long.MIN_VALUE) "Hold still, pointing straight down"
-                else "Still for ${"%.1f".format((nowMs - stillStartMs) / 1000f)} s of ${STILL_WINDOW_MS / 1000} s"
-            "attitude_sensor" -> "Waiting for reliable rotation samples"
-            "native_engine" -> "Loading the native engine"
+                else "Still for ${fmt1((nowMs - stillStartMs) / 1000f)} s of ${STILL_WINDOW_MS / 1000} s"
+            "attitude_sensor" -> when (val a = attitudeAccuracy) {
+                null -> "Waiting for the sensor to report its accuracy"
+                else -> "Accuracy ${accuracyName(a)}: move the phone in a slow figure-8"
+            }
+            "native_packaged" -> "Checking the APK"
             else -> null
         }
     }
@@ -199,41 +239,53 @@ class Checklist {
 
     /** A periodic session diagnostic line; picks the tile fix counters out of `tiles{…}`. */
     fun onDiagnostic(line: String) {
-        val rot = TILE_FIX_RE.find(line)?.groupValues
-        if (rot != null) {
-            val rotFixes = rot[1].toInt(); val poseFixes = rot[2].toInt()
-            if (rotFixes + poseFixes > 0) decide("tile_fixes", Status.PASS, "rotFixes=$rotFixes poseFixes=$poseFixes")
+        val tiles = TILES_RE.find(line) ?: return
+        if (tiles.groupValues[3].isNotEmpty()) {
+            decide("tile_fixes", Status.FAIL, "tile localization is disabled (OpenCV not loaded, or its build failed)")
+            return
         }
+        val rotFixes = tiles.groupValues[1].toInt(); val poseFixes = tiles.groupValues[2].toInt()
+        if (rotFixes + poseFixes > 0) decide("tile_fixes", Status.PASS, "rotFixes=$rotFixes poseFixes=$poseFixes")
     }
 
     // --- per frame ------------------------------------------------------------------------------
 
     private var lastState: String? = null
+    private var lastSampleMs = Long.MIN_VALUE
     private var bridgeStartMs = Long.MIN_VALUE
     private var lastKpmMs = Long.MIN_VALUE
     private var everLocked = false
     private val matchTimes = ArrayList<Float>()
+    private val frameTimes = ArrayList<Float>()
     private var rectifiedCount = 0
     private var maxPoleError = 0f
     private var poleSamples = 0
     private val stillFacing = ArrayList<Float>()
     private val stillHeading = ArrayList<Float>()
     private var stillStartMs = Long.MIN_VALUE
+    private var attitudeAccuracy: Int? = null
 
     fun observe(s: Sample) {
         gradeLock(s)
+        if (sessionCheckAtMs != Long.MIN_VALUE && s.timeMs >= sessionCheckAtMs) {
+            decide("native_session", Status.PASS, "no native-library failure after the first capture (state ${s.state})")
+        }
         val kpm = s.source == "KPM"
         if (kpm) {
             if (lastKpmMs != Long.MIN_VALUE && everLocked && s.timeMs - lastKpmMs >= AWAY_MS && s.state == "LOCKED") {
                 decide("relock_after_away", Status.PASS, "relocked after ${(s.timeMs - lastKpmMs) / 1000} s away")
             }
             lastKpmMs = s.timeMs
-            s.matchMs?.let { matchTimes.add(it) }
-            if (matchTimes.size >= MATCH_SAMPLES) gradeMatchSpeed()
+            // Only collected until graded: a run can stay locked for minutes.
+            if (this["match_speed"].status == Status.UNTESTED && s.state == "LOCKED") {
+                s.matchMs?.let { matchTimes.add(it) }
+                s.frameMs?.let { frameTimes.add(it) }
+                if (matchTimes.size >= MATCH_SAMPLES) gradeMatchSpeed()
+            }
             if (s.method == "FLOW" && s.state == "LOCKED") decide("flow_used", Status.PASS, "FLOW poses while locked")
             if (s.method == "KPM_RECTIFIED") {
                 rectifiedCount++
-                if (rectifiedCount >= 3) decide("rectified", Status.PASS, "$rectifiedCount KPM_RECTIFIED poses")
+                if (rectifiedCount >= RECTIFIED_POSES) decide("rectified", Status.PASS, "$rectifiedCount KPM_RECTIFIED poses")
             }
         }
         if (s.state == "LOCKED") everLocked = true
@@ -242,11 +294,16 @@ class Checklist {
         if (s.state == "LOCKED" && lastState == "IMU_BRIDGE" && bridgeStartMs != Long.MIN_VALUE) {
             decide("bridge", Status.PASS, "bridged ${s.timeMs - bridgeStartMs} ms and relocked")
         }
-        if (everLocked && (s.source == "PHOTOSPHERE" || s.source == "HELD")) {
-            decide("off_wall", Status.PASS, "pose held from ${s.source} with the target out of view")
+        // Off the wall: a pose from elsewhere while the session is no longer seeing the target (not
+        // the PHOTOSPHERE/HELD poses that also fill in while a relock is still confirming).
+        val lookingAway = s.state == "REACQUIRING" || s.state == "LOST"
+        val outOfView = lastKpmMs != Long.MIN_VALUE && s.timeMs - lastKpmMs >= OFF_WALL_MS
+        if (everLocked && lookingAway && outOfView && (s.source == "PHOTOSPHERE" || s.source == "HELD")) {
+            decide("off_wall", Status.PASS, "pose held from ${s.source} ${(s.timeMs - lastKpmMs) / 1000.0} s after the target left view")
         }
         gradePoles(s)
         lastState = s.state
+        lastSampleMs = s.timeMs
     }
 
     private fun gradeLock(s: Sample) {
@@ -254,10 +311,10 @@ class Checklist {
         if (captureMs == Long.MIN_VALUE) return
         val elapsed = s.timeMs - captureMs
         if (s.state == "LOCKED" && s.source == "KPM") {
-            decide(id, Status.PASS, "locked ${elapsed} ms after capture at elevation ${"%.0f".format(captureElevation)}°, ${s.inliers ?: "?"} inliers")
+            decide(id, Status.PASS, "locked $elapsed ms after capture at elevation ${fmt0(captureElevation)}°, ${s.inliers ?: "?"} inliers")
             captureCheck = null
         } else if (elapsed > LOCK_TIMEOUT_MS) {
-            decide(id, Status.FAIL, "no lock within ${LOCK_TIMEOUT_MS / 1000} s of capture at elevation ${"%.0f".format(captureElevation)}° (state ${s.state})")
+            decide(id, Status.FAIL, "no lock within ${LOCK_TIMEOUT_MS / 1000} s of capture at elevation ${fmt0(captureElevation)}° (state ${s.state})")
             captureCheck = null
         }
     }
@@ -266,10 +323,13 @@ class Checklist {
         val sorted = matchTimes.sorted()
         val p50 = sorted[sorted.size / 2]
         val p95 = sorted[(sorted.size * 95) / 100]
+        val frame50 = if (frameTimes.isEmpty()) null else median(frameTimes)
+        val fits = p50 <= FRAME_BUDGET_MS && (frame50 == null || frame50 <= FRAME_BUDGET_MS)
         decide(
             "match_speed",
-            if (p50 <= FRAME_BUDGET_MS) Status.PASS else Status.FAIL,
-            "p50 ${"%.1f".format(p50)} ms, p95 ${"%.1f".format(p95)} ms over ${sorted.size} poses",
+            if (fits) Status.PASS else Status.FAIL,
+            "match p50 ${fmt1(p50)} ms, p95 ${fmt1(p95)} ms" +
+                (frame50?.let { ", whole frame p50 ${fmt1(it)} ms" } ?: "") + " over ${sorted.size} poses",
         )
     }
 
@@ -279,13 +339,15 @@ class Checklist {
             poleSamples++
             maxPoleError = maxOf(maxPoleError, s.rebuildErrorDeg)
             if (maxPoleError > POLE_ERROR_FAIL_DEG) {
-                decide("pole_attitude", Status.FAIL, "rebuild error ${"%.2f".format(maxPoleError)}° at elevation ${"%.1f".format(el)}°")
+                decide("pole_attitude", Status.FAIL, "rebuild error ${fmt2(maxPoleError)}° at elevation ${fmt1(el)}°")
             } else if (poleSamples >= POLE_SAMPLES) {
-                decide("pole_attitude", Status.PASS, "max rebuild error ${"%.3f".format(maxPoleError)}° over $poleSamples samples at |elevation| ≥ ${POLE_ATTITUDE_DEG.toInt()}°")
+                decide("pole_attitude", Status.PASS, "max rebuild error ${String.format(Locale.ROOT, "%.3f", maxPoleError)}° over $poleSamples samples at |elevation| ≥ ${POLE_ATTITUDE_DEG.toInt()}°")
             }
         }
-        // Facing steadiness: only while the phone is still and pointing at the floor.
-        val still = s.axisStepDeg != null && s.axisStepDeg < STILL_STEP_DEG
+        // Facing steadiness: only while the phone is still (an angular rate, so it doesn't depend on
+        // the frame rate) and pointing at the floor.
+        val dtS = if (lastSampleMs == Long.MIN_VALUE) 0f else (s.timeMs - lastSampleMs) / 1000f
+        val still = s.axisStepDeg != null && dtS > 0f && s.axisStepDeg / dtS < STILL_RATE_DEG_S
         if (el <= -POLE_FACING_DEG && still && s.facingDeg != null && s.headingDeg != null) {
             if (stillStartMs == Long.MIN_VALUE) stillStartMs = s.timeMs
             stillFacing.add(s.facingDeg); stillHeading.add(s.headingDeg)
@@ -295,31 +357,68 @@ class Checklist {
                 decide(
                     "pole_facing",
                     if (facingSpread <= FACING_SPREAD_DEG) Status.PASS else Status.FAIL,
-                    "facing spread ${"%.1f".format(facingSpread)}° (axis heading spread ${"%.1f".format(headingSpread)}°) over ${stillFacing.size} still samples",
+                    "facing spread ${fmt1(facingSpread)}° (axis heading spread ${fmt1(headingSpread)}°) over ${stillFacing.size} still samples",
                 )
             }
         } else {
-            stillStartMs = Long.MIN_VALUE
-            stillFacing.clear(); stillHeading.clear()
+            clearStill()
         }
     }
 
+    private fun clearStill() {
+        stillStartMs = Long.MIN_VALUE
+        stillFacing.clear(); stillHeading.clear()
+    }
+
+    /**
+     * Thresholds. Where one comes from the library or a device budget it says so; the rest are this
+     * bench's choices, tuned to what a person can do comfortably, and are listed in docs/TESTAPP.md.
+     */
     companion object {
         val LOCK_CHECKS = setOf("lock_wall", "lock_floor", "lock_ceiling")
+        /** Bench choice: a textured target locks in a few seconds; 30 s means it isn't going to. */
         const val LOCK_TIMEOUT_MS = 30_000L
+        /** Bench choice: long enough that the session has dropped the lock, not just blinked. */
         const val AWAY_MS = 10_000L
+        /** Out of view for this long before an off-target pose counts (the relock confirm window is shorter). */
+        const val OFF_WALL_MS = 1_500L
         const val MATCH_SAMPLES = 100
+        /** One frame at 30 fps, the camera's standard rate. */
         const val FRAME_BUDGET_MS = 33.3f
+        const val RECTIFIED_POSES = 3
+        /** The capture steps' gates (Surface.aimHint): a wall within 30° of level, floor/ceiling past 60°. */
         const val WALL_TARGET_DEG = 30f
         const val POLE_TARGET_DEG = 60f
+        /** Inside the band where the camera-axis heading is noise, which is what the pole fixes are for. */
         const val POLE_ATTITUDE_DEG = 85f
         const val POLE_SAMPLES = 30
+        /** Well above sensor noise (~0.1°) and well below a misread roll (≥ 90°). */
         const val POLE_ERROR_FAIL_DEG = 2f
         const val POLE_FACING_DEG = 80f
-        const val STILL_STEP_DEG = 0.5f
+        /** A hand-held phone "held still" turns well under this; walking or panning is far above. */
+        const val STILL_RATE_DEG_S = 5f
         const val STILL_WINDOW_MS = 2_000L
         const val FACING_SPREAD_DEG = 5f
-        private val TILE_FIX_RE = Regex("""rotFixes=(\d+) poseFixes=(\d+)""")
+        /** How long after the first capture a missing native library would have shown up. */
+        const val NATIVE_SESSION_GRACE_MS = 2_000L
+        /** `SensorManager.SENSOR_STATUS_ACCURACY_MEDIUM`. */
+        const val ACCURACY_MEDIUM = 2
+        private val TILES_RE = Regex("""rotFixes=(\d+) poseFixes=(\d+)( disabled)?\}""")
+
+        fun accuracyName(a: Int): String = when (a) {
+            3 -> "high"
+            2 -> "medium"
+            1 -> "low"
+            0 -> "unreliable"
+            else -> "unknown ($a)"
+        }
+
+        // Locale.ROOT: evidence is read by people and parsed by tests, never localized.
+        fun fmt0(v: Float) = String.format(Locale.ROOT, "%.0f", v)
+        fun fmt1(v: Float) = String.format(Locale.ROOT, "%.1f", v)
+        fun fmt2(v: Float) = String.format(Locale.ROOT, "%.2f", v)
+
+        private fun median(values: List<Float>): Float = values.sorted()[values.size / 2]
 
         /** Largest angular distance of any value from the circular mean, degrees. */
         fun circularSpread(values: List<Float>): Float {
