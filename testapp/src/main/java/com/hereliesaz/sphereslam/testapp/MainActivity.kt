@@ -25,6 +25,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.Camera2Interop
@@ -35,6 +36,8 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.hereliesaz.sphereslam.CameraAttitudeProvider
 import com.hereliesaz.sphereslam.camera.CameraIntrinsicsEstimator
 import com.hereliesaz.sphereslam.camera.LensDistortion
@@ -94,6 +97,7 @@ class MainActivity : ComponentActivity() {
         reporter = Reporter(BuildConfig.REPORT_URL, BuildConfig.REPORT_KEY, ::reportBody) { ok, detail ->
             runOnUiThread { reportStatus.text = if (ok) "Reported ${Instant.now()}" else "Report failed: $detail" }
         }
+        enableEdgeToEdge()
         setContentView(buildLayout())
         renderChecklist()
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
@@ -204,15 +208,22 @@ class MainActivity : ComponentActivity() {
 
     // --- UI -------------------------------------------------------------------------------------
 
+    /**
+     * One vertical stack, nothing layered except the outline on the camera it annotates: HUD, camera,
+     * checklist (when open, it splits the space with the camera), buttons. The root is padded by the
+     * status bar, navigation bar, display cutout and keyboard, so no control sits under any of them.
+     */
     @SuppressLint("SetTextI18n")
     private fun buildLayout(): View {
-        val root = FrameLayout(this)
         preview = PreviewView(this).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
         overlay = OverlayView(this)
+        // Not inside apply{}: there `overlay` would resolve to View.getOverlay().
+        val camera = FrameLayout(this)
+        camera.addView(preview, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        camera.addView(overlay, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         hud = TextView(this).apply {
             setTextColor(Color.WHITE)
-            setBackgroundColor(Color.argb(150, 0, 0, 0))
-            setPadding(24, 48, 24, 16)
+            setPadding(24, 16, 24, 16)
             typeface = android.graphics.Typeface.MONOSPACE
             textSize = 12f
         }
@@ -225,8 +236,7 @@ class MainActivity : ComponentActivity() {
         val toggle = button("Checklist") { panel.visibility = if (panel.visibility == View.VISIBLE) View.GONE else View.VISIBLE }
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.argb(170, 0, 0, 0))
-            setPadding(24, 16, 24, 32)
+            setPadding(24, 16, 24, 16)
             addView(LinearLayout(context).apply {
                 addView(capture, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
                 addView(toggle, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
@@ -248,7 +258,7 @@ class MainActivity : ComponentActivity() {
             })
         }
         panel = ScrollView(this).apply {
-            setBackgroundColor(Color.argb(225, 10, 10, 10))
+            setBackgroundColor(Color.rgb(10, 10, 10))
             visibility = View.GONE
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
@@ -256,11 +266,20 @@ class MainActivity : ComponentActivity() {
                 addView(notes)
             })
         }
-        root.addView(preview, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-        root.addView(overlay, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-        root.addView(hud, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.TOP))
-        root.addView(panel, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT).apply { topMargin = 260; bottomMargin = 260 })
-        root.addView(bar, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.BOTTOM))
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.BLACK)
+            addView(hud, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+            addView(camera, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+            addView(panel, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+            addView(bar, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        }
+        ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            v.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
+            WindowInsetsCompat.CONSUMED
+        }
         return root
     }
 

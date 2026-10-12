@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The logo's background (docs/branding/sphereslam-logo.jpg). -->
+    <color name="ic_launcher_background">#1F2025</color>
+</resources>
