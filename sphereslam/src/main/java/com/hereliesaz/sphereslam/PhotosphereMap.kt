@@ -606,7 +606,10 @@ class PhotosphereMap(
     /**
      * The tiles whose centers currently fall within the camera's view cone — the candidate set a tile
      * matcher should try to recognize this frame, so matching stays cheap no matter how large the map
-     * grows. Pure angular test against the live attitude; needs the map anchored.
+     * grows. A tile is a candidate when its center is within half the field of view of the camera
+     * axis in both heading and elevation, or lies inside the camera's frustum (pinhole, no roll) —
+     * the second catches tiles near the zenith/nadir, far apart in heading but close on screen.
+     * Needs the map anchored.
      *
      * @param headingDeg camera-axis compass bearing now, degrees (0 = north, clockwise).
      * @param elevationDeg camera-axis angle above (+) / below (−) the horizon now, degrees.
@@ -619,15 +622,41 @@ class PhotosphereMap(
         if (!headingDeg.isFinite() || !elevationDeg.isFinite() || hFovDeg <= 0f || vFovDeg <= 0f) {
             return emptyList()
         }
+        val tanH = kotlin.math.tan(Math.toRadians(hFovDeg / 2.0).coerceAtMost(Math.PI / 2 - 1e-6))
+        val tanV = kotlin.math.tan(Math.toRadians(vFovDeg / 2.0).coerceAtMost(Math.PI / 2 - 1e-6))
+        // Camera basis in world (x east, y north, z up): forward, right (horizontal), up.
+        val h = Math.toRadians(headingDeg.toDouble())
+        val e = Math.toRadians(elevationDeg.toDouble())
+        val fx = kotlin.math.cos(e) * kotlin.math.sin(h)
+        val fy = kotlin.math.cos(e) * kotlin.math.cos(h)
+        val fz = kotlin.math.sin(e)
+        val rx = kotlin.math.cos(h)
+        val ry = -kotlin.math.sin(h)
+        val ux = ry * fz
+        val uy = -rx * fz
+        val uz = rx * fy - ry * fx
         val halfH = hFovDeg / 2f
         val halfV = vFovDeg / 2f
         val camHeading = SphereGrid.norm360(headingDeg)
         val out = ArrayList<TileId>()
         for (s in 0 until grid.sectorCount) {
-            val az = SphereGrid.norm360(anchor + grid.sectorCenterDelta(s))
-            if (abs(SphereGrid.signedDelta(az, camHeading)) > halfH) continue
+            val azDeg = SphereGrid.norm360(anchor + grid.sectorCenterDelta(s))
+            val headingNear = abs(SphereGrid.signedDelta(azDeg, camHeading)) <= halfH
+            val az = Math.toRadians(azDeg.toDouble())
             for (b in 0 until grid.elevationBandCount) {
-                if (abs(grid.bandCenterElevation(b) - elevationDeg) <= halfV) out.add(TileId(s, b))
+                if (headingNear && abs(grid.bandCenterElevation(b) - elevationDeg) <= halfV) {
+                    out.add(TileId(s, b))
+                    continue
+                }
+                val el = Math.toRadians(grid.bandCenterElevation(b).toDouble())
+                val dx = kotlin.math.cos(el) * kotlin.math.sin(az)
+                val dy = kotlin.math.cos(el) * kotlin.math.cos(az)
+                val dz = kotlin.math.sin(el)
+                val z = dx * fx + dy * fy + dz * fz
+                if (z <= 0.0) continue
+                val x = dx * rx + dy * ry
+                val y = dx * ux + dy * uy + dz * uz
+                if (abs(x) <= z * tanH + 1e-9 && abs(y) <= z * tanV + 1e-9) out.add(TileId(s, b))
             }
         }
         return out
@@ -749,7 +778,10 @@ class PhotosphereMap(
         return out
     }
 
-    /** A snapshot of one tile, or null for an out-of-range id. Center is null-direction until anchored. */
+    /**
+     * A snapshot of one tile, or null for an out-of-range id. Until the map is anchored the center is
+     * relative to heading 0 (a placeholder, not the tile's real direction).
+     */
     fun tile(id: TileId): PanoramaTile? {
         if (!inRange(id)) return null
         val i = grid.index(id.sector, id.band)

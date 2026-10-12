@@ -106,6 +106,20 @@ class PhotosphereMapTest {
     }
 
     @Test
+    fun `tilesInView includes tiles near the pole that are on screen`() {
+        // Full sphere: 24 × 6 tiles of 15° × 30°; looking 80° up, the top band's tiles all lie close
+        // to the view axis whatever their heading.
+        val m = PhotosphereMap()
+        m.setWallHeading(0f)
+        val inView = m.tilesInView(headingDeg = 0f, elevationDeg = 80f, hFovDeg = 60f, vFovDeg = 45f)
+        // Tile (17, 5), centred at (82.5° off, 75° up), projects on screen; the old per-axis test
+        // dropped it for its heading.
+        assertTrue(inView.toString(), inView.contains(TileId(17, 5)))
+        // Behind the camera: nothing from the bottom band.
+        assertTrue(inView.none { it.band == 0 })
+    }
+
+    @Test
     fun `tilesInView rejects a non-positive field of view`() {
         val m = fullRing()
         m.setWallHeading(0f)

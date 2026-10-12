@@ -236,7 +236,8 @@ glow.setRegionProgress(map.regionsInProgress()) // tiles being scanned, filling 
   actually on screen if it visibly leads the camera image during fast pans; the extrapolator
   interpolates inside its history and extrapolates at most 50 ms past the newest sample.
 - `setRegions` pre-samples the tiles once (tile edges cut into ≤ 5° segments, seam-exact across
-  0/360°); each draw is then a few hundred 3×3 multiplies with no allocation. When no
+  0/360°); each draw is then one 3×3 multiply per sample (about 70 per 15° × 30° tile at the default 5°
+  segments, ~10 000 with the whole sphere hazed), with no allocation. When no
   `rotationSource` is set, push a rotation with `setWorldFromCamera(worldFromCamera)`.
 - Use the **same sensor** (`TYPE_ROTATION_VECTOR`, East-North-Up) that stamps keyframe headings, so
   tiles and glow share one world frame. `CameraAttitudeProvider` deliberately stays on the

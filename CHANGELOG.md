@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Fixes from an audit of the full-sphere / scan-progress release.**
+  - `CoverageGlowRenderer`: in `OUTLINE`, scan progress now draws before any tile is current (it
+    returned early with no boundary to glow along — exactly the first sweep).
+  - `PhotosphereMap.tilesInView` also takes tiles whose centre lies in the camera's frustum, so tiles
+    near the zenith/nadir — far apart in heading, close on screen — are matcher candidates.
+  - `PhotosphereKeyframeStore.record` returns null before touching an anchored map when the axis is
+    outside the lattice (it had already recorded the view).
+  - `CoverageGlowView.updateRegions` / `update` feed scan progress; `setFillMode` swaps the regions
+    before the mode.
+  - Tests now pin `recordView`'s roll and `cos(elevation)` area weighting (both survived removal).
 - **Anchor tiles.** A station's tile cap (64) dropped the oldest tile first, and the oldest are the
   ones around the wall, captured at the first lock, so a long session forgot exactly the tiles that
   re-find the wall. A station's first lock now anchors its view direction: tiles within

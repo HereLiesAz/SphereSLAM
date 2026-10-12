@@ -40,8 +40,9 @@ import javax.microedition.khronos.opengles.GL10
  * **Display-rate tracking.** Instead of pushing pre-projected triangles ([setTriangles]) at the rate
  * your attitude arrives, hand the renderer the tiles once per change ([setRegions]), the drawn
  * surface's [CoverageGlowProjection.Lens] ([setLens]) and a [RotationSource]. Every draw then reads the
- * newest camera rotation on the GL thread and re-projects the pre-sampled tiles (a few hundred 3×3
- * multiplies, no allocation), so the glow follows the device at display rate, independent of any
+ * newest camera rotation on the GL thread and re-projects the pre-sampled tiles (one 3×3 multiply
+ * per sample: about 70 per 15° × 30° tile at the default 5° segments, so ~10 000 with the whole
+ * sphere hazed; no allocation), so the glow follows the device at display rate, independent of any
  * analyzer. Pair the source with `AttitudeExtrapolator.worldFromCameraAt` to time it to the frame on
  * screen. [setWorldFromCamera] is the push alternative when no source is set.
  *
@@ -520,9 +521,16 @@ class CoverageGlowRenderer(
             }
             FillMode.OUTLINE, FillMode.COMPLEMENT_OUTLINED -> {
                 if (maskProgram == 0 || edgeProgram == 0) return false
-                if (mode == FillMode.OUTLINE && count == 0) return false // no boundary to glow along
                 val saved = capture()
                 try {
+                    if (mode == FillMode.OUTLINE && count == 0) {
+                        // No current tile, so no boundary to glow along — but tiles being scanned
+                        // still show their progress (the first sweep is when it matters most).
+                        if (liveProgress.get().isEmpty()) return false
+                        prepareBlend()
+                        drawProgress(frameTimeNanos, mode, rgb)
+                        return true
+                    }
                     val w = saved.viewport[2]
                     val h = saved.viewport[3]
                     if (!renderMask(data, count, w, h, saved.framebuffer)) return false

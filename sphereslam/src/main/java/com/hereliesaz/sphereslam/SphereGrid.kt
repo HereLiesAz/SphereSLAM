@@ -41,7 +41,7 @@ internal class SphereGrid(
 
     /**
      * Whether the azimuth arc spans a full ring, making sector 0 and sector `sectorCount - 1`
-     * adjacent. A narrower viewable arc (the default) has hard edges that do not wrap.
+     * adjacent (the default, a 180° half-arc). A narrower viewable arc has hard edges that do not wrap.
      */
     val azimuthWraps: Boolean get() = viewableHalfAngleDeg >= 180f
 
