@@ -1,16 +1,84 @@
 package com.hereliesaz.sphereslam
 
 import java.nio.ByteBuffer
-import java.util.concurrent.CountDownLatch
+import java.util.Collections
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+/**
+ * [SphereSlamTracker] over a recording [KpmApi]: the tracker's own logic and the real
+ * [KpmSphereSlamEngine] it now drives, down to the arguments each native call receives.
+ */
 class SphereSlamTrackerTest {
+
+    /** Records native calls in order; answers matches with [matchPage] / [matchOut]. */
+    private class RecordingApi(
+        private val matchPage: Int = -1,
+        private val matchOut: FloatArray = FloatArray(14),
+        private val createHandle: Long = 11L,
+        private val addResult: Int = 1,
+    ) : KpmApi {
+        val calls: MutableList<String> = Collections.synchronizedList(mutableListOf())
+        val matchedFrames: MutableList<ByteArray> = Collections.synchronizedList(mutableListOf())
+        val added: MutableList<List<Any>> = Collections.synchronizedList(mutableListOf())
+        var created: Triple<Int, Int, SphereSlamCalibration>? = null
+        var creates = 0
+
+        override fun create(width: Int, height: Int, calibration: SphereSlamCalibration): Long {
+            creates++
+            created = Triple(width, height, calibration)
+            calls += "create"
+            return createHandle
+        }
+
+        override fun addPage(
+            session: Long, luma: ByteBuffer, width: Int, height: Int, referenceDpi: Float,
+            pageNo: Int, imageNo: Int, maxFeatures: Int,
+        ): Int {
+            check(luma.isDirect)
+            val bytes = ByteArray(luma.remaining()).also { luma.duplicate().get(it) }
+            added += listOf(bytes.toList(), width, height, referenceDpi, pageNo, imageNo, maxFeatures)
+            calls += "add:$pageNo"
+            return addResult
+        }
+
+        override fun match(session: Long, luma: ByteBuffer, out: FloatArray): Int {
+            check(luma.isDirect)
+            val bytes = ByteArray(luma.remaining()).also { luma.duplicate().get(it) }
+            matchedFrames += bytes
+            calls += "match:${bytes[0]}"
+            matchOut.copyInto(out)
+            return matchPage
+        }
+
+        override fun clear(session: Long): Boolean {
+            calls += "clear"
+            return true
+        }
+
+        override fun destroy(session: Long) {
+            calls += "destroy"
+        }
+    }
+
+    private fun tracker(api: KpmApi, worker: ExecutorService, available: Boolean = true) =
+        SphereSlamTracker(SphereSlamTracker.Engines.kpm(api) { available }, worker)
+
+    /** Runs a no-op through the single worker and waits, so every earlier task has finished. */
+    private fun drain(worker: ExecutorService) {
+        worker.submit(Runnable {}).get(2, TimeUnit.SECONDS)
+    }
+
+    private val camera = SphereSlamTracker.CameraModel(2, 2, 500f, 510f, 1f, 1.5f)
+
     @Test
     fun `packLuma removes row padding without moving source position`() {
         val source = ByteBuffer.wrap(byteArrayOf(1, 2, 3, 99, 99, 4, 5, 6, 99, 99))
@@ -20,208 +88,200 @@ class SphereSlamTrackerTest {
     }
 
     @Test
-    fun `matching is asynchronous and publishes sidecar observation`() {
-        val matched = CountDownLatch(1)
-        val fake = object : SphereSlamTracker.Native {
-            override val available = true
-            override fun create(camera: SphereSlamTracker.CameraModel) = 7L
-            override fun destroy(handle: Long) = Unit
-            override fun setReference(
-                handle: Long, luma: ByteArray, width: Int, height: Int, dpi: Float,
-                pageNo: Int, imageNo: Int, maxFeatures: Int,
-            ) = true
-            override fun match(
-                handle: Long, luma: ByteArray, timestampNs: Long,
-            ): SphereSlamTracker.Observation {
-                matched.countDown()
-                return SphereSlamTracker.Observation(
-                    timestampNs, 4, 0.25f, 31, FloatArray(12) { it.toFloat() }
-                )
-            }
-            override fun clear(handle: Long) = true
-        }
-
-        SphereSlamTracker(fake).use { tracker ->
-            tracker.configure(SphereSlamTracker.CameraModel(2, 2, 500f, 500f, 1f, 1f))
-
-            val readyDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
-            while (!tracker.isReferenceReady && System.nanoTime() < readyDeadline) {
-                tracker.setReference(ByteBuffer.wrap(byteArrayOf(1, 2, 3, 4)), 2, 2, 2)
-                Thread.sleep(5)
-            }
-            assertTrue(tracker.isReferenceReady)
-
-            tracker.submitFrame(
-                ByteBuffer.wrap(byteArrayOf(4, 3, 2, 1)), 2, 2, 2, timestampNs = 123L
-            )
-            assertTrue(matched.await(2, TimeUnit.SECONDS))
-
-            val observationDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
-            var observation = tracker.latestObservation()
-            while (observation == null && System.nanoTime() < observationDeadline) {
-                Thread.sleep(5)
-                observation = tracker.latestObservation()
-            }
-
-            assertNotNull(observation)
-            assertEquals(123L, observation!!.timestampNs)
-            assertEquals(4, observation.pageNo)
-            assertEquals(31, observation.inliers)
+    fun `the engine is created with the camera's calibration`() {
+        val api = RecordingApi()
+        val worker = Executors.newSingleThreadExecutor()
+        tracker(api, worker).use { t ->
+            t.configure(camera)
+            drain(worker)
+            assertEquals(Triple(2, 2, SphereSlamCalibration(500f, 510f, 1f, 1.5f)), api.created)
         }
     }
+
     @Test
-    fun `rectified reference dimensions are independent from live camera dimensions`() {
-        val referenceAdded = CountDownLatch(1)
-        val fake = object : SphereSlamTracker.Native {
-            override val available = true
-            override fun create(camera: SphereSlamTracker.CameraModel) = 9L
-            override fun destroy(handle: Long) = Unit
-            override fun setReference(
-                handle: Long, luma: ByteArray, width: Int, height: Int, dpi: Float,
-                pageNo: Int, imageNo: Int, maxFeatures: Int,
-            ): Boolean {
-                assertEquals(640, width)
-                assertEquals(320, height)
-                referenceAdded.countDown()
-                return true
-            }
-            override fun match(
-                handle: Long, luma: ByteArray, timestampNs: Long,
-            ): SphereSlamTracker.Observation? = null
-            override fun clear(handle: Long) = true
+    fun `a match is published with the frame's timestamp and KPM's output mapped as before`() {
+        val out = FloatArray(14) { it + 0.5f }.also { it[12] = 0.25f; it[13] = 31f }
+        val api = RecordingApi(matchPage = 4, matchOut = out)
+        val worker = Executors.newSingleThreadExecutor()
+        tracker(api, worker).use { t ->
+            t.configure(camera)
+            t.setReference(ByteBuffer.wrap(byteArrayOf(1, 2, 3, 4)), 2, 2, 2)
+            drain(worker)
+            assertTrue(t.isReferenceReady)
+            t.submitFrame(ByteBuffer.wrap(byteArrayOf(4, 3, 2, 1)), 2, 2, 2, timestampNs = 123L)
+            drain(worker)
+            drain(worker)
+            val o = t.latestObservation()
+            assertNotNull(o)
+            assertEquals(123L, o!!.timestampNs)
+            assertEquals(4, o.pageNo)
+            assertEquals(0.25f, o.error, 0f)
+            assertEquals(31, o.inliers)
+            assertArrayEquals(out.copyOfRange(0, 12), o.cameraFromPage3x4, 0f)
+            assertEquals(listOf<Byte>(4, 3, 2, 1), api.matchedFrames.single().toList())
         }
+    }
 
-        SphereSlamTracker(fake).use { tracker ->
-            tracker.configure(SphereSlamTracker.CameraModel(1280, 720, 900f, 900f, 640f, 360f))
-            val configureDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
-            while (!tracker.isNativeAvailable && System.nanoTime() < configureDeadline) {
-                Thread.sleep(1)
-            }
-            assertTrue(tracker.isNativeAvailable)
-            tracker.setReference(
-                ByteBuffer.wrap(ByteArray(640 * 320)),
-                width = 640,
-                height = 320,
-                rowStride = 640,
-                dpi = 80f,
+    @Test
+    fun `a miss publishes nothing`() {
+        val api = RecordingApi(matchPage = -1)
+        val worker = Executors.newSingleThreadExecutor()
+        tracker(api, worker).use { t ->
+            t.configure(camera)
+            t.setReference(ByteBuffer.wrap(ByteArray(4)), 2, 2, 2)
+            drain(worker)
+            t.submitFrame(ByteBuffer.wrap(ByteArray(4)), 2, 2, 2, timestampNs = 1L)
+            drain(worker)
+            drain(worker)
+            assertNull(t.latestObservation())
+        }
+    }
+
+    @Test
+    fun `rectified reference dimensions and page settings reach KPM unchanged`() {
+        val api = RecordingApi()
+        val worker = Executors.newSingleThreadExecutor()
+        tracker(api, worker).use { t ->
+            t.configure(SphereSlamTracker.CameraModel(1280, 720, 900f, 900f, 640f, 360f))
+            drain(worker)
+            assertTrue(t.isNativeAvailable)
+            t.setReference(
+                ByteBuffer.wrap(ByteArray(640 * 320) { (it % 7).toByte() }),
+                width = 640, height = 320, rowStride = 640, dpi = 80f, pageNo = 3, imageNo = 2, maxFeatures = 400,
             )
-            assertTrue(referenceAdded.await(2, TimeUnit.SECONDS))
-            val readyDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
-            while (!tracker.isReferenceReady && System.nanoTime() < readyDeadline) Thread.sleep(5)
-            assertTrue(tracker.isReferenceReady)
-            assertEquals(0.2032f, tracker.currentReferenceGeometry()!!.widthMeters, 0.0001f)
+            drain(worker)
+            assertTrue(t.isReferenceReady)
+            val a = api.added.single()
+            assertEquals(List(640 * 320) { (it % 7).toByte() }, a[0])
+            assertEquals(listOf<Any>(640, 320, 80f, 3, 2, 400), a.drop(1))
+            assertEquals(0.2032f, t.currentReferenceGeometry()!!.widthMeters, 0.0001f)
         }
     }
 
-    /** Records native calls in order so atlas replacement can be asserted. */
-    private class RecordingNative(override val available: Boolean = true) : SphereSlamTracker.Native {
-        val calls = java.util.Collections.synchronizedList(mutableListOf<String>())
-        var creates = 0
-        override fun create(camera: SphereSlamTracker.CameraModel): Long {
-            creates++
-            calls += "create"
-            return 11L
-        }
-        override fun destroy(handle: Long) { calls += "destroy" }
-        override fun setReference(
-            handle: Long, luma: ByteArray, width: Int, height: Int, dpi: Float,
-            pageNo: Int, imageNo: Int, maxFeatures: Int,
-        ): Boolean {
-            calls += "add:$pageNo"
-            return true
-        }
-        val matchedArrays = java.util.Collections.synchronizedList(mutableListOf<ByteArray>())
-        override fun match(
-            handle: Long, luma: ByteArray, timestampNs: Long,
-        ): SphereSlamTracker.Observation? {
-            matchedArrays += luma
-            calls += "match:${luma[0]}"
-            return null
-        }
-        override fun clear(handle: Long): Boolean {
-            calls += "clear"
-            return true
+    @Test
+    fun `a page KPM finds no features in is not ready`() {
+        val api = RecordingApi(addResult = 0)
+        val worker = Executors.newSingleThreadExecutor()
+        tracker(api, worker).use { t ->
+            t.configure(camera)
+            t.setReference(ByteBuffer.wrap(ByteArray(4)), 2, 2, 2)
+            drain(worker)
+            assertFalse(t.isReferenceReady)
+            assertNull(t.currentReferenceGeometry())
         }
     }
 
-    /** Runs a no-op through the single worker and waits, so every earlier task has finished. */
-    private fun drain(worker: java.util.concurrent.ExecutorService) {
-        worker.submit(Runnable {}).get(2, TimeUnit.SECONDS)
+    @Test
+    fun `a native add failure is not ready instead of throwing on the worker`() {
+        val api = RecordingApi(addResult = -3)
+        val worker = Executors.newSingleThreadExecutor()
+        tracker(api, worker).use { t ->
+            t.configure(camera)
+            t.setReference(ByteBuffer.wrap(ByteArray(4)), 2, 2, 2)
+            drain(worker)
+            assertFalse(t.isReferenceReady)
+        }
     }
 
     @Test
     fun `clearReference then setReference replaces the native atlas instead of appending`() {
-        val native = RecordingNative()
-        val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
-        SphereSlamTracker(native, worker).use { tracker ->
-            tracker.configure(SphereSlamTracker.CameraModel(2, 2, 500f, 500f, 1f, 1f))
-            tracker.setReference(ByteBuffer.wrap(ByteArray(4)), 2, 2, 2, pageNo = 1)
+        val api = RecordingApi()
+        val worker = Executors.newSingleThreadExecutor()
+        tracker(api, worker).use { t ->
+            t.configure(camera)
+            t.setReference(ByteBuffer.wrap(ByteArray(4)), 2, 2, 2, pageNo = 1)
             drain(worker)
-            assertTrue(tracker.isReferenceReady)
+            assertTrue(t.isReferenceReady)
 
-            tracker.clearReference()
-            assertFalse(tracker.isReferenceReady)
+            t.clearReference()
+            assertFalse(t.isReferenceReady)
             drain(worker)
-            assertFalse(tracker.isReferenceReady)
+            assertFalse(t.isReferenceReady)
 
-            tracker.setReference(ByteBuffer.wrap(ByteArray(4)), 2, 2, 2, pageNo = 2)
+            t.setReference(ByteBuffer.wrap(ByteArray(4)), 2, 2, 2, pageNo = 2)
             drain(worker)
-            assertTrue(tracker.isReferenceReady)
-            assertEquals(
-                listOf("create", "clear", "add:1", "clear", "clear", "add:2"),
-                native.calls.toList(),
-            )
+            assertTrue(t.isReferenceReady)
+            assertEquals(listOf("create", "clear", "add:1", "clear", "clear", "add:2"), api.calls.toList())
         }
     }
 
     @Test
-    fun `submitted frames reuse their packed arrays instead of allocating one per frame`() {
-        val native = RecordingNative()
-        val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
-        SphereSlamTracker(native, worker).use { tracker ->
-            tracker.configure(SphereSlamTracker.CameraModel(2, 2, 500f, 500f, 1f, 1f))
-            tracker.setReference(ByteBuffer.wrap(ByteArray(4)), 2, 2, 2)
+    fun `reset destroys the old native session and creates a new one`() {
+        val api = RecordingApi()
+        val worker = Executors.newSingleThreadExecutor()
+        tracker(api, worker).use { t ->
+            t.configure(camera)
+            t.setReference(ByteBuffer.wrap(ByteArray(4)), 2, 2, 2)
+            drain(worker)
+            t.reset(camera)
+            drain(worker)
+            assertFalse(t.isReferenceReady)
+            assertEquals(listOf("create", "clear", "add:0", "destroy", "create"), api.calls.toList())
+        }
+        // close() destroys the session on the worker, then shuts it down.
+        assertTrue(worker.awaitTermination(2, TimeUnit.SECONDS))
+        assertEquals("destroy", api.calls.last())
+    }
+
+    @Test
+    fun `submitted frames are packed and matched in order`() {
+        val api = RecordingApi()
+        val worker = Executors.newSingleThreadExecutor()
+        tracker(api, worker).use { t ->
+            t.configure(camera)
+            t.setReference(ByteBuffer.wrap(ByteArray(4)), 2, 2, 2)
             drain(worker)
             for (i in 1..6) {
                 // Row stride 3: the pack must still produce the tight 2x2 frame.
-                tracker.submitFrame(ByteBuffer.wrap(byteArrayOf(i.toByte(), 0, 9, 0, 0, 9)), 2, 2, 3, timestampNs = i.toLong())
+                t.submitFrame(ByteBuffer.wrap(byteArrayOf(i.toByte(), 0, 9, 0, 0, 9)), 2, 2, 3, timestampNs = i.toLong())
                 drain(worker)
             }
-            assertEquals((1..6).map { "match:$it" }, native.calls.filter { it.startsWith("match") })
-            assertEquals(1, native.matchedArrays.map { System.identityHashCode(it) }.distinct().size)
-            assertEquals(listOf<Byte>(6, 0, 0, 0), native.matchedArrays.last().toList())
+            assertEquals((1..6).map { "match:$it" }, api.calls.filter { it.startsWith("match") })
+            assertEquals(listOf<Byte>(6, 0, 0, 0), api.matchedFrames.last().toList())
         }
     }
 
     @Test
     fun `unavailable native degrades configure and setReference to no-ops`() {
-        val native = RecordingNative(available = false)
-        val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
-        SphereSlamTracker(native, worker).use { tracker ->
-            tracker.configure(SphereSlamTracker.CameraModel(2, 2, 500f, 500f, 1f, 1f))
-            tracker.setReference(ByteBuffer.wrap(ByteArray(4)), 2, 2, 2)
+        val api = RecordingApi()
+        val worker = Executors.newSingleThreadExecutor()
+        tracker(api, worker, available = false).use { t ->
+            t.configure(camera)
+            t.setReference(ByteBuffer.wrap(ByteArray(4)), 2, 2, 2)
             drain(worker)
-            assertFalse(tracker.isNativeAvailable)
-            assertFalse(tracker.isReferenceReady)
-            assertEquals(0, native.creates)
+            assertFalse(t.isNativeAvailable)
+            assertFalse(t.isReferenceReady)
+            assertEquals(0, api.creates)
+        }
+    }
+
+    @Test
+    fun `a session the native layer cannot create leaves the tracker unready`() {
+        val api = RecordingApi(createHandle = 0L)
+        val worker = Executors.newSingleThreadExecutor()
+        tracker(api, worker).use { t ->
+            t.configure(camera)
+            t.setReference(ByteBuffer.wrap(ByteArray(4)), 2, 2, 2)
+            drain(worker)
+            assertFalse(t.isReferenceReady)
+            assertEquals(listOf("create"), api.calls.toList())
         }
     }
 
     @Test
     fun `calls racing a shut-down worker are ignored instead of throwing`() {
-        val native = RecordingNative()
-        val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
-        val tracker = SphereSlamTracker(native, worker)
+        val api = RecordingApi()
+        val worker = Executors.newSingleThreadExecutor()
+        val t = tracker(api, worker)
         // Simulate close() winning the race after the caller's closed-check: the executor rejects.
         worker.shutdownNow()
-        val camera = SphereSlamTracker.CameraModel(2, 2, 500f, 500f, 1f, 1f)
-        tracker.configure(camera)
-        tracker.reset(camera)
-        tracker.setReference(ByteBuffer.wrap(ByteArray(4)), 2, 2, 2)
-        tracker.clearReference()
-        tracker.submitFrame(ByteBuffer.wrap(ByteArray(4)), 2, 2, 2, timestampNs = 1L)
-        tracker.close()
-        assertEquals(0, native.creates)
-        assertFalse(tracker.isReferenceReady)
+        t.configure(camera)
+        t.reset(camera)
+        t.setReference(ByteBuffer.wrap(ByteArray(4)), 2, 2, 2)
+        t.clearReference()
+        t.submitFrame(ByteBuffer.wrap(ByteArray(4)), 2, 2, 2, timestampNs = 1L)
+        t.close()
+        assertEquals(0, api.creates)
+        assertFalse(t.isReferenceReady)
     }
 }

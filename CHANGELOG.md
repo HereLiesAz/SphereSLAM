@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **`SphereSlamTracker` goes through `SphereSlamEngine`.** The ARCore-side tracker had its own private
+  JNI path to `KpmBridge` (session create/destroy, page add/clear, match, direct-buffer handling),
+  duplicating the engine's. It now drives a `KpmSphereSlamEngine` on its worker thread, so native KPM
+  sessions are owned in one place. New `SphereSlamEngine.clearPages()` (empty the atlas, keep the
+  calibrated session); `KpmApi.clear`. No behaviour change: the tracker tests now run against the real
+  engine and pin every native call's arguments and the output mapping.
+- **Build: Maven Central mirror.** JitPack's 0.26.1/0.26.2 builds failed before compiling: Central
+  answered JitPack's shared builders with HTTP 429 and Gradle disabled the repository. Plugin and
+  dependency resolution now try Google's mirror of Central first, Central second.
+- **Lens distortion.** New `camera.LensDistortion`: reads `LENS_DISTORTION` and
+  `DISTORTION_CORRECTION_AVAILABLE_MODES` (API 28+), picks the correction mode a tracking stream should
+  request (FAST, else HIGH_QUALITY), and measures how far the zero-distortion pinhole model is off on a
+  camera that cannot correct (`maxResidualPx`, Camera2's κ1–κ5 model). `describe` gives a diagnostic
+  line.
 - **Oblique rectification reads the full frame.** The virtual frontal view was rendered from the
   half-resolution matcher image, so the foreshortened side of the wall — the side short of pixels —
   lost half of what the camera had. It is now rendered from the full-resolution frame, 2 × 2

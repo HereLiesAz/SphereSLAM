@@ -29,6 +29,9 @@ internal interface KpmApi {
 
     fun destroy(session: Long)
 
+    /** Remove every page from [session]'s atlas, keeping its calibration; false = unsupported/failed. */
+    fun clear(session: Long): Boolean = false
+
     /** A copy of [session] (calibration + atlas) that is indexed on its first [addPage]; 0 = unsupported/failed. */
     fun clone(session: Long): Long = 0L
 }
@@ -76,6 +79,8 @@ internal object NativeKpmApi : KpmApi {
     ): Int = KpmBridge.matchPlanarEx(session, luma, pageNo, out, correspondences)
 
     override fun destroy(session: Long) = KpmBridge.destroySession(session)
+
+    override fun clear(session: Long): Boolean = KpmBridge.clearPages(session)
 
     override fun clone(session: Long): Long = KpmBridge.cloneSession(session)
 }

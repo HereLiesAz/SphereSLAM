@@ -42,7 +42,7 @@ Supporting packages (all pure / Android-light, no ARCore types):
   flips). `:reloc`'s `RotationDeltaMath` / `PoseMath` delegate to these.
 - `com.hereliesaz.sphereslam.attitude` — `GameRotationAttitudeSource`, `AttitudeSample`,
   `DeviceCameraRotation`, `AttitudeRotationBridge`, `AttitudeExtrapolator`, `DisplayPosePredictor`.
-- `com.hereliesaz.sphereslam.camera` — `CameraIntrinsics`, `CameraIntrinsicsEstimator`,
+- `com.hereliesaz.sphereslam.camera` — `CameraIntrinsics`, `CameraIntrinsicsEstimator`, `LensDistortion`,
   `CameraIntrinsicsTransforms`, `CaptureRotation`, `LumaFrameTransform` (plus
   `LumaFrameBufferPool` / `packCropAndRotateInto` for allocation-free camera loops), `ProjectionMatrix`,
   `ScreenIntrinsics` (`FIT_CENTER`), `CameraFillCenter` (`FILL_CENTER`: track the full frame, apply

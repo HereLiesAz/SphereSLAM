@@ -101,9 +101,10 @@ data class DepthEstimatorOptions(
  * compiled-program cache; see [DepthEstimatorOptions]), falling back loudly to LiteRT's XNNPACK CPU
  * path only if the GPU cannot be initialised. Ships wired to **MiDaS v2.1 Small (256×256, fp16
  * weights)**, the default asset [MODEL_ASSET] (from the official isl-org/MiDaS `v2_1` release; see
- * `docs/MODELS.md`). Its inverse-depth output is a **building block** for placing off-wall map
- * points radially (calibrated by `:reloc`'s `DepthScaleFit`); that depth-backed placement is not
- * yet wired into the relocalizer or session.
+ * `docs/MODELS.md`). Its inverse-depth output gives photosphere tiles depth: passed to
+ * `PhotosphereTrackingSession` as a `TileDepthSource`, it is calibrated per tile by `:reloc`'s
+ * `DepthScaleFit` against known (wall-plane / triangulated) depths. `RadialDepthPlacement` — placing
+ * off-wall points of a `WallFeatureMap` radially — is a building block not yet on the session path.
  *
  * ## Threading
  * The GPU delegate must be created, run and closed on one thread. The estimator owns that thread

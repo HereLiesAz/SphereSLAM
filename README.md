@@ -150,7 +150,8 @@ thread.
 
 ## ARCore sidecar tracking
 
-`SphereSlamTracker` runs KPM asynchronously beside ARCore. It does **not** replace ARCore's primary
+`SphereSlamTracker` runs KPM asynchronously beside ARCore, through the same `SphereSlamEngine` as the
+standalone session (one native owner, one worker thread per session). It does **not** replace ARCore's primary
 view matrix.
 
 ~~~kotlin
@@ -492,8 +493,10 @@ allocation-free camera loop use either:
 `midas_v21_small_256_fp16.tflite`) on **LiteRT 1.4.2 with the GPU delegate**. If the GPU delegate
 cannot be initialised (block-listed device, driver failure, failed warm-up inference) it falls back to
 LiteRT's XNNPACK CPU path and logs an error; `activeBackend` says which backend is in use. Output is
-MiDaS **relative inverse depth** (larger = nearer), a building block for `:reloc`'s
-`RadialDepthPlacement` / `DepthScaleFit` (not yet wired into the session).
+MiDaS **relative inverse depth** (larger = nearer). Passed to `PhotosphereTrackingSession` as its
+`TileDepthSource`, it gives each new photosphere tile 3D points, calibrated per tile by `:reloc`'s
+`DepthScaleFit` against known depths. `RadialDepthPlacement` (off-wall points of a `WallFeatureMap`)
+is a building block not yet on the session path.
 
 ~~~kotlin
 @OptIn(ExperimentalSphereSlamModelsApi::class)
@@ -579,6 +582,21 @@ projection = CameraFillCenter.projection(frameIntrinsics, viewWidth, viewHeight)
 `frameIntrinsics` are those of the tracked (display-upright) frame, e.g.
 `CameraIntrinsicsEstimator.estimate(context, cameraId, w, h)` rotated with `CaptureRotation`.
 
+**Lens distortion.** Every SphereSLAM stage assumes an undistorted pinhole image. Request the
+camera's correction on the analysis stream while tracking (API 28+; it applies to every processed
+stream, YUV included):
+
+~~~kotlin
+val lens = LensDistortion.read(characteristics)
+lens.trackingCorrectionMode?.let { mode ->
+    camera2Options.setCaptureRequestOption(CaptureRequest.DISTORTION_CORRECTION_MODE, mode)
+}
+log(LensDistortion.describe(lens, lens.trackingCorrectionMode, frameIntrinsics))
+~~~
+
+A camera that cannot correct reports `uncorrected residual≤Npx`: the largest gap, in frame pixels,
+between the pinhole model and its lens (`LENS_DISTORTION`, `maxResidualPx`).
+
 **5. Camera analyzer (one worker thread).**
 
 ~~~kotlin
@@ -649,7 +667,7 @@ on the GL thread, `attitude.stop()`, `depth.close()`.
 | --- | --- |
 | `math` | `RotationMath`, `RigidMath` (quaternions, rigid/similarity 4×4, GL ↔ CV flips) |
 | `attitude` | `GameRotationAttitudeSource`, `DeviceCameraRotation`, `AttitudeRotationBridge`, `AttitudeExtrapolator`, `DisplayPosePredictor` |
-| `camera` | `CameraIntrinsicsEstimator`, `CaptureRotation`, `LumaFrameTransform`, `LumaFrameBufferPool`, `ProjectionMatrix`, `ScreenIntrinsics` (`FIT_CENTER`), `CameraFillCenter` (`FILL_CENTER` projection, tap mapping, FOV) |
+| `camera` | `CameraIntrinsicsEstimator`, `LensDistortion` (correction mode, pinhole residual), `CaptureRotation`, `LumaFrameTransform`, `LumaFrameBufferPool`, `ProjectionMatrix`, `ScreenIntrinsics` (`FIT_CENTER`), `CameraFillCenter` (`FILL_CENTER` projection, tap mapping, FOV) |
 | `sidecar` | ARCore + KPM sidecar fusion: `HybridPoseHistory`, `HybridKpmCorrection`, `HybridAnchorFusion`, `MetricPageRectification` |
 | `gyro` | `GyroCompensationMath` (gyro-stabilised screen overlays) |
 
@@ -736,7 +754,8 @@ deprecated aliases.
 - Standalone photosphere tracking (downscaled KPM, flow tracking, background atlas growth): built,
   experimental API
 - Photosphere freshness/relock loop: built, experimental API
-- Depth-backed tile triangulation/corroboration: building blocks (not yet wired), experimental API
+- Depth-backed tiles (MiDaS `TileDepthSource`, cross-station triangulation): wired, experimental API;
+  corroboration is a host-side seam
 - Full omnidirectional production map-growth pipeline: still evolving
 
 ## License

@@ -92,6 +92,11 @@ internal class KpmSphereSlamEngine private constructor(
         )
     }
 
+    override fun clearPages(): Boolean {
+        val active = session
+        return active != 0L && api.clear(active)
+    }
+
     override fun close() {
         val active = session
         if (active == 0L) return
