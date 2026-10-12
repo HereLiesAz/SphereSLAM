@@ -19,6 +19,9 @@ class TestApp : Application() {
     var openCvError: String? = null
         private set
 
+    /** Live knob values, recordings and sweeps ([Tuning]). */
+    val tuning: Tuning by lazy { Tuning(this) }
+
     /** Whether the first activity has handled what the previous process left (crash, unsent report). */
     var launchHandled = false
 

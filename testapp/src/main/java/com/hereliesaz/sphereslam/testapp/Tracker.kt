@@ -7,13 +7,14 @@ import androidx.camera.core.ImageProxy
 import com.hereliesaz.sphereslam.CameraAttitudeProvider
 import com.hereliesaz.sphereslam.CoverageGlowProjection
 import com.hereliesaz.sphereslam.attitude.DeviceCameraRotation
-import com.hereliesaz.sphereslam.camera.CameraIntrinsics
 import com.hereliesaz.sphereslam.camera.CameraIntrinsicsEstimator
 import com.hereliesaz.sphereslam.camera.CaptureRotation
 import com.hereliesaz.sphereslam.camera.LumaFrameBufferPool
-import com.hereliesaz.sphereslam.math.RigidMath
 import com.hereliesaz.sphereslam.reloc.CameraTimestampSource
 import com.hereliesaz.sphereslam.reloc.PhotosphereTrackingSession
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.acos
 
 /** What the overlay draws and the telemetry line prints for the latest frame. */
@@ -39,11 +40,19 @@ class TrackedView(
 )
 
 /**
- * The SphereSLAM pipeline on the CameraX analysis thread: pack the Y plane display-upright, read one
- * attitude snapshot (angles and matrix together) plus the latest raw sample for the pose predictor,
- * run [PhotosphereTrackingSession.onFrame], and hand the result to the checklist ([Sample]) and the
- * UI ([TrackedView]). The display-upright frame follows [displayRotationDeg] (CameraX rotates the
- * analysis image to the analysis use case's target rotation, which the activity keeps current).
+ * The SphereSLAM pipeline on the camera, in two stages:
+ *
+ * 1. On the CameraX analysis thread, every frame: pack the Y plane display-upright, read one attitude
+ *    snapshot, make a [FrameRecord] of everything the session will be given, and hand it to the
+ *    [recorder] (when recording) and to stage 2. This is quick, so the camera never waits on tracking
+ *    and a recording holds every frame the camera delivered.
+ * 2. On the tracking thread, the latest frame only (older ones not yet started are dropped, as CameraX
+ *    would): [SessionDriver.step], then the checklist ([Sample]) and the UI ([TrackedView]).
+ *
+ * The session is built from [knobs] ([Knobs.config]); [reference], when given, is the target to hold
+ * from the first frame (a session restarted for new knob values keeps its target). The display-upright
+ * frame follows [displayRotationDeg] (CameraX rotates the analysis image to the use case's target
+ * rotation, which the activity keeps current).
  */
 class Tracker(
     private val context: Context,
@@ -54,27 +63,35 @@ class Tracker(
     private val log: (String) -> Unit,
     private val onView: (TrackedView) -> Unit,
     private val onChecklistChanged: () -> Unit,
+    knobs: Map<String, Float> = Knobs.DEFAULTS,
+    reference: CaptureRecord? = null,
+    private val recorder: () -> RecordingWriter? = { null },
 ) : ImageAnalysis.Analyzer, AutoCloseable {
 
     private val pool = LumaFrameBufferPool(slots = 2)
 
     /** The display's rotation, degrees (0, 90, 180, 270); set by the activity when it changes. */
     @Volatile var displayRotationDeg: Int = 0
-    private var cameraFromDisplayDeg = -1
+    private var cameraFromDisplayDeg = 0
     private var cameraFromDisplay = DeviceCameraRotation.cameraFromDeviceForDisplayFrame(0)
+
     /** The lock check the next frame's capture is for (`lock_wall` …), or null. */
     @Volatile private var captureFor: String? = null
-    private var pageAspect = 1f
+    /** A target to give the session before the next frame (set at construction for a restart). */
+    @Volatile private var pendingReference: CaptureRecord? = reference
+
+    /** The target the session holds now, for a restart to carry over. */
+    @Volatile var reference: CaptureRecord? = null
+        private set
 
     /** Stopped, rejected-capture and held-target state from the session's failure callbacks. */
     val failures = FailureLatch()
     private val diagnostics = DiagnosticFilter()
     private var lastAxis: FloatArray? = null
 
-    private val session = PhotosphereTrackingSession(
-        PhotosphereTrackingSession.Config(
-            timestampSource = if (realtimeTimestamps) CameraTimestampSource.REALTIME else CameraTimestampSource.UNKNOWN,
-        ),
+    private val driver = SessionDriver(
+        Knobs.config(knobs, if (realtimeTimestamps) CameraTimestampSource.REALTIME else CameraTimestampSource.UNKNOWN),
+        { SystemClock.elapsedRealtimeNanos() },
         PhotosphereTrackingSession.Callbacks(
             onMapFromFingerprintSolved = { mutate { checklist.onMapSolved() } },
             onAtlasPageAdded = { page, _ -> mutate { checklist.onAtlasPage(page.pageNo) } },
@@ -90,13 +107,28 @@ class Tracker(
             },
         ),
     )
+    private val session get() = driver.session
+
+    /** Live measures of this session since its first target ([RunMetrics]); read under its own lock. */
+    fun metricsSummary(): RunMetrics.Summary = synchronized(driver.metrics) { driver.metrics.summary() }
+
+    // Stage 2: one tracking thread, fed the latest frame.
+    private val trackingExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "sphereslam-test-tracking") }
+    private class LiveFrame(val record: FrameRecord, val snapshot: CameraAttitudeProvider.Attitude?)
+    private val latest = AtomicReference<LiveFrame?>(null)
+    private val draining = AtomicBoolean(false)
+    @Volatile private var closed = false
 
     /** Capture the centre of the next frame as the target for [checkId] (`lock_wall`, `lock_floor`, `lock_ceiling`). */
     fun requestCapture(checkId: String) {
         captureFor = checkId
     }
 
-    // The callbacks run inside the session, on the analysis thread; `session` is assigned by then.
+    /** The newest frame's timestamp, for events recorded outside the pipeline (a restart, new knobs). */
+    @Volatile var lastFrameNs: Long = 0L
+        private set
+
+    // The callbacks run inside the session, on the tracking thread; `session` is assigned by then.
     private fun sessionStopped(): Boolean = session.isFatal && !session.isRecoverable
 
     /** Checklist writes hold its monitor: the UI and the reporter read it from other threads. */
@@ -109,16 +141,20 @@ class Tracker(
         if (changed) onChecklistChanged()
     }
 
+    // --- stage 1: the analysis thread -----------------------------------------------------------
+
     override fun analyze(image: ImageProxy) {
         try {
+            if (closed) return
             val t0 = SystemClock.elapsedRealtimeNanos()
             val y = image.planes[0]
             val rotation = image.imageInfo.rotationDegrees
-            val luma = pool.packAndRotate(y.buffer, image.width, image.height, y.rowStride, y.pixelStride, rotation)
+            val packed = pool.packAndRotate(y.buffer, image.width, image.height, y.rowStride, y.pixelStride, rotation)
+            // A copy of its own: the pool's buffer is reused by the next frame, this one may be queued.
+            val luma = packed.bytes.copyOf(packed.width * packed.height)
             val convertNs = SystemClock.elapsedRealtimeNanos() - t0
             val raw = CameraIntrinsicsEstimator.estimate(context, cameraId, image.width, image.height) ?: return
             val r = CaptureRotation.rotateIntrinsics(raw.fx, raw.fy, raw.cx, raw.cy, image.width.toFloat(), image.height.toFloat(), rotation)
-            val intrinsics = CameraIntrinsics(r[0], r[1], r[2], r[3], luma.width, luma.height)
             val snapshot = attitude.latestAttitude()
             val displayDeg = displayRotationDeg
             if (displayDeg != cameraFromDisplayDeg) {
@@ -126,67 +162,25 @@ class Tracker(
                 cameraFromDisplayDeg = displayDeg
             }
             val roll = snapshot?.let { CameraAttitudeProvider.cameraRollDegrees(it.deviceToWorld, cameraFromDisplay) }
-
-            captureFor?.let { checkId ->
-                captureFor = null
-                failures.onCapture(checkId)
-                mutate { checklist.onCapture(SystemClock.elapsedRealtime(), snapshot?.elevationDeg, checkId) }
-                capture(luma.bytes, luma.width, luma.height)
-            }
-
-            val result = session.onFrame(
-                PhotosphereTrackingSession.Frame(
-                    luma = luma.bytes,
-                    intrinsics = intrinsics,
-                    timestampNs = image.imageInfo.timestamp,
-                    attitude = attitude.latestSample(),
-                    cameraFromDevice = cameraFromDisplay,
-                    headingDeg = snapshot?.headingDeg,
-                    elevationDeg = snapshot?.elevationDeg,
-                    rollDeg = roll,
-                    convertDurationNs = convertNs,
-                ),
+            val record = FrameRecord(
+                timestampNs = image.imageInfo.timestamp,
+                width = packed.width,
+                height = packed.height,
+                intrinsics = floatArrayOf(r[0], r[1], r[2], r[3]),
+                cameraFromDevice = cameraFromDisplay.copyOf(),
+                attitude = attitude.latestSample(),
+                headingDeg = snapshot?.headingDeg,
+                elevationDeg = snapshot?.elevationDeg,
+                rollDeg = roll,
+                convertNs = convertNs,
+                luma = luma,
             )
-            val pose = result.pose
-            val nowMs = SystemClock.elapsedRealtime()
-            val frameMs = (SystemClock.elapsedRealtimeNanos() - t0) / 1e6f
-            mutate {
-                checklist.observe(
-                    Sample(
-                        timeMs = nowMs,
-                        state = result.state.name,
-                        source = pose?.source?.name,
-                        method = pose?.takeIf { it.source == PhotosphereTrackingSession.PoseSource.KPM }?.matchMethod?.name,
-                        matchMs = pose?.matchDurationMs,
-                        inliers = pose?.inlierCount,
-                        elevationDeg = snapshot?.elevationDeg,
-                        headingDeg = snapshot?.headingDeg,
-                        facingDeg = snapshot?.facingAzimuthDeg,
-                        rebuildErrorDeg = snapshot?.let { rebuildError(it) },
-                        axisStepDeg = snapshot?.let { axisStep(it.deviceToWorld) },
-                        frameMs = frameMs,
-                    ),
-                )
+            lastFrameNs = record.timestampNs
+            recorder()?.frame(record)
+            if (latest.getAndSet(LiveFrame(record, snapshot)) != null) {
+                synchronized(driver.metrics) { driver.metrics.onDropped(1) }
             }
-
-            val mapFromFp = session.mapFromFingerprint
-            val cameraFromFp = when {
-                pose != null && mapFromFp != null -> RigidMath.multiply(pose.cameraFromMap, mapFromFp)
-                else -> result.acceptedCameraFromFingerprint
-            }
-            onView(
-                TrackedView(
-                    cameraFromFingerprint = cameraFromFp,
-                    projection = pose?.projection ?: result.projection,
-                    frameWidth = luma.width,
-                    frameHeight = luma.height,
-                    pageAspect = pageAspect,
-                    telemetry = telemetry(result),
-                    estimated = pose?.source != PhotosphereTrackingSession.PoseSource.KPM,
-                    state = result.state.name,
-                    elevationDeg = snapshot?.elevationDeg,
-                ),
-            )
+            if (draining.compareAndSet(false, true)) trackingExecutor.execute(::drain)
         } catch (t: Throwable) {
             log("analyzer: ${t.javaClass.simpleName}: ${t.message}")
         } finally {
@@ -194,16 +188,88 @@ class Tracker(
         }
     }
 
-    /** The centre 60 % of the frame's shorter side, square, as page 0 (1 unit wide). */
-    private fun capture(luma: ByteArray, width: Int, height: Int) {
-        val side = (minOf(width, height) * 0.6f).toInt()
-        val left = (width - side) / 2
-        val top = (height - side) / 2
-        val crop = ByteArray(side * side)
-        for (row in 0 until side) System.arraycopy(luma, (top + row) * width + left, crop, row * side, side)
-        pageAspect = 1f
-        session.updatePrecisionLayer(PhotosphereTrackingSession.ReferenceImage(crop, side, side))
-        log("captured ${side}x$side target")
+    // --- stage 2: the tracking thread -----------------------------------------------------------
+
+    private fun drain() {
+        while (true) {
+            val f = latest.getAndSet(null)
+            if (f == null) {
+                draining.set(false)
+                // A frame that arrived between the read and the flag: take it now.
+                if (latest.get() != null && draining.compareAndSet(false, true)) continue
+                return
+            }
+            if (closed) continue
+            try {
+                process(f)
+            } catch (t: Throwable) {
+                log("tracking: ${t.javaClass.simpleName}: ${t.message}")
+            }
+        }
+    }
+
+    private fun process(f: LiveFrame) {
+        val frame = f.record
+        val snapshot = f.snapshot
+        val t0 = SystemClock.elapsedRealtimeNanos()
+
+        pendingReference?.let { ref ->
+            pendingReference = null
+            synchronized(driver.metrics) { driver.capture(ref) }
+            reference = ref
+            failures.onCapture(ref.checkId)
+            log("target carried over (${ref.checkId})")
+        }
+        captureFor?.let { checkId ->
+            captureFor = null
+            val capture = SessionDriver.crop(frame, checkId)
+            failures.onCapture(checkId)
+            mutate { checklist.onCapture(SystemClock.elapsedRealtime(), snapshot?.elevationDeg, checkId) }
+            synchronized(driver.metrics) { driver.capture(capture) }
+            reference = capture
+            recorder()?.event(RecordEvent.Capture(capture))
+            log("captured ${capture.side}x${capture.side} target")
+        }
+
+        val step = synchronized(driver.metrics) {
+            // Frame time as replay measures it too: packing plus the session's work (not the wait in line).
+            driver.step(frame) { (frame.convertNs + SystemClock.elapsedRealtimeNanos() - t0) / 1e6f }
+        }
+        val result = step.result
+        val pose = result.pose
+        val nowMs = SystemClock.elapsedRealtime()
+        val frameMs = (SystemClock.elapsedRealtimeNanos() - t0) / 1e6f
+        mutate {
+            checklist.observe(
+                Sample(
+                    timeMs = nowMs,
+                    state = result.state.name,
+                    source = pose?.source?.name,
+                    method = pose?.takeIf { it.source == PhotosphereTrackingSession.PoseSource.KPM }?.matchMethod?.name,
+                    matchMs = pose?.matchDurationMs,
+                    inliers = pose?.inlierCount,
+                    elevationDeg = snapshot?.elevationDeg,
+                    headingDeg = snapshot?.headingDeg,
+                    facingDeg = snapshot?.facingAzimuthDeg,
+                    rebuildErrorDeg = snapshot?.let { rebuildError(it) },
+                    axisStepDeg = snapshot?.let { axisStep(it.deviceToWorld) },
+                    frameMs = frameMs,
+                ),
+            )
+        }
+        onView(
+            TrackedView(
+                cameraFromFingerprint = step.cameraFromFingerprint,
+                projection = pose?.projection ?: result.projection,
+                frameWidth = frame.width,
+                frameHeight = frame.height,
+                pageAspect = driver.pageAspect,
+                telemetry = telemetry(result),
+                estimated = pose?.source != PhotosphereTrackingSession.PoseSource.KPM,
+                state = result.state.name,
+                elevationDeg = snapshot?.elevationDeg,
+            ),
+        )
     }
 
     /** Angle between the sensor rotation and the one rebuilt from its (heading, elevation, roll). */
@@ -238,7 +304,12 @@ class Tracker(
         }
     }
 
-    override fun close() = session.close()
+    /** Stops taking frames and closes the session on its own thread, after any frame in progress. */
+    override fun close() {
+        closed = true
+        trackingExecutor.execute { runCatching { driver.close() } }
+        trackingExecutor.shutdown()
+    }
 }
 
 /**

@@ -7,7 +7,8 @@
   from the plane homography of the matches themselves and keeps the fit that explains more of them,
   so a prediction metres off cannot stop it. When no prediction gives an oblique view and direct
   full solves have missed three times running, every other full solve rectifies a guessed steep view
-  (±45° and ±65° along the wall, then up and down it). The periodic diagnostic gains
+  (±45° and ±65° along the wall, then up and down it; `KpmMatchSpeedConfig.obliqueSearchAfterMisses`,
+  0 disables, and `obliqueSearchTiltsDeg`). The periodic diagnostic gains
   `rect{planned swept kpm solved frontal maxObliq}`.
 
 - **Fix: native engine not loaded on the session path.** Only `KpmBridge.isAvailable()` (and so
@@ -17,7 +18,10 @@
   `KpmBridge` now loads the library when it is first used.
 - **Test app.** New `:testapp` module (not published): an on-device test bench that tracks a
   captured target, draws its outline, grades most device checks itself from live telemetry and reports
-  each run to this repository's issues through the workflows Worker (`docs/TESTAPP.md`).
+  each run to this repository's issues through the workflows Worker (`docs/TESTAPP.md`). Its tuning
+  kit records sessions, replays the library over them on the phone under other settings (one
+  recording, a grid of knob values), and compares continuous measures: locked % by viewing angle,
+  relock time, jitter, jumps, frame time.
 - **Floors and ceilings track like walls.** Painting on a horizontal surface puts the camera at the
   photosphere's nadir or zenith, where the camera-axis heading is sensor noise. Several paths keyed or
   oriented on it:

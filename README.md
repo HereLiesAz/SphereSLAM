@@ -761,7 +761,9 @@ deprecated aliases.
 
 `:testapp` is an on-device test bench: a live standalone tracker, a checklist that grades itself from
 telemetry (lock on wall, floor and ceiling, match speed, rectified matching, gyro bridge, off-wall
-hold, pole attitude, …) and reports every run to this repository's issues. See
+hold, pole attitude, …) and reports every run to this repository's issues. Its tuning kit records
+sessions and replays the library over them on the phone under a grid of `Config` values, scoring each
+on continuous measures (locked % by viewing angle, relock time, jitter, frame time). See
 [docs/TESTAPP.md](docs/TESTAPP.md).
 
 ## Project status

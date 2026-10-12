@@ -67,6 +67,13 @@ class MainActivityTest {
         activity.tap("Back to step")
         assertNotNull(activity.button("All steps"))
 
+        // The tuning panel: the knobs, and Record waits for the camera.
+        activity.tap("Tune")
+        val tuneText = texts(activity.window.decorView).joinToString("\n") { it.text }
+        assertTrue(tuneText, tuneText.contains("Rectify from") && tuneText.contains("Capture a target to start measuring."))
+        assertTrue(!activity.button("Record")!!.isEnabled)
+        activity.tap("Back to step")
+
         val app = activity.application as TestApp
         // Skip every step to the end.
         val steps = app.run.guide.steps.size

@@ -222,13 +222,14 @@ internal class KpmPlanarFrontEnd(
 
     /**
      * A guessed steep view to rectify, when the prediction gave none and direct solves have missed
-     * [SWEEP_AFTER_MISSES] times running: every other full solve, the next of
-     * [ObliqueRectifier.hypotheses] in turn. A lost camera's prediction can say "frontal" from the
+     * [KpmMatchSpeedConfig.obliqueSearchAfterMisses] times running: every other full solve, the next
+     * of [ObliqueRectifier.hypotheses] in turn. A lost camera's prediction can say "frontal" from the
      * wrong place, or there is none; this keeps a steep relock possible either way, at no cost while
      * locked (flow tracks, and a hit resets the streak).
      */
     private fun sweepPlan(predicted: FloatArray?): ObliqueRectifier.Plan? {
-        if (config.obliqueRectificationDeg <= 0f || missStreak < SWEEP_AFTER_MISSES) return null
+        val after = config.obliqueSearchAfterMisses
+        if (config.obliqueRectificationDeg <= 0f || after == 0 || config.obliqueSearchTiltsDeg.isEmpty() || missStreak < after) return null
         if (sweepTurn++ % 2 == 0) return null // alternate with the direct solve
         val frame = planPage()?.let { pageFrames.getValue(it) } ?: return null
         val target = doubleArrayOf(frame.centerXmm.toDouble(), frame.centerYmm.toDouble(), 0.0)
@@ -239,7 +240,7 @@ internal class KpmPlanarFrontEnd(
             ?.let { c -> kotlin.math.sqrt((c[0] - target[0]) * (c[0] - target[0]) + (c[1] - target[1]) * (c[1] - target[1]) + c[2] * c[2]) }
             ?.takeIf { it.isFinite() && it > 1.0 }
             ?: (4.0 * frame.centerXmm)
-        val guesses = ObliqueRectifier.hypotheses(target, distance, SWEEP_TILTS_DEG)
+        val guesses = ObliqueRectifier.hypotheses(target, distance, config.obliqueSearchTiltsDeg.toFloatArray())
         if (guesses.isEmpty()) return null
         val (r, t) = guesses[sweepIndex++ % guesses.size]
         return ObliqueRectifier.plan(r, t, matchK, config.obliqueRectificationDeg, target)?.also { rect.swept++ }
@@ -364,10 +365,6 @@ internal class KpmPlanarFrontEnd(
     private companion object {
         /** Correspondences requested from a rectified solve (its pose is solved from them). */
         const val MIN_RECTIFIED_CORRESPONDENCES = 120
-        /** Direct full solves missed in a row before guessed steep views join the search. */
-        const val SWEEP_AFTER_MISSES = 3
-        /** The guessed views' angles from the wall normal, each way, degrees. */
-        val SWEEP_TILTS_DEG = floatArrayOf(45f, -45f, 65f, -65f)
     }
 
     override fun close() {

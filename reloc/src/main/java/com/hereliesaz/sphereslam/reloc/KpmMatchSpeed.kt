@@ -36,7 +36,10 @@ import kotlin.math.sqrt
  *    at least this oblique, the full solve matches a virtual frontal re-rendering of the frame instead
  *    (`ObliqueRectifier`) — KPM does not match strong foreshortening — and solves the real camera from
  *    the correspondences mapped back to real pixels. It replaces that frame's direct solve. The
- *    virtual view is rendered from the full-resolution frame, not its downscaled copy.
+ *    virtual view is rendered from the full-resolution frame, not its downscaled copy. With no
+ *    oblique prediction, after [obliqueSearchAfterMisses] direct misses in a row every other full
+ *    solve rectifies a guessed view instead ([obliqueSearchTiltsDeg] each way along the wall, then
+ *    up and down it).
  * 5. **Reference scale** ([maxReferenceScale]): a reference much larger than the matched frame (a
  *    full-resolution camera still against a 320 × 240 match) puts the wall outside KPM's scale range;
  *    pages are registered from a copy whose long side is at most this many matcher long sides.
@@ -60,6 +63,10 @@ import kotlin.math.sqrt
  * @property focusWindowMs focused matching only within this long of the last full-solve lock, ms.
  * @property obliqueRectificationDeg rectify the full solve when the predicted view is at least this
  *   oblique (angle between the optical axis and the wall normal), degrees; 0 disables.
+ * @property obliqueSearchAfterMisses direct full-solve misses in a row before guessed oblique views
+ *   join the search; 0 disables the search.
+ * @property obliqueSearchTiltsDeg the guessed views' angles from the wall normal, degrees, tried in
+ *   order about the wall's vertical axis and then its horizontal one.
  * @property maxReferenceScale register a reference whose long side exceeds this many times the matched
  *   image's long side from an area-downscaled copy of that size (page geometry in millimetres is
  *   unchanged); 0 registers references as given.
@@ -79,6 +86,8 @@ data class KpmMatchSpeedConfig(
     val focusedPageMatching: Boolean = true,
     val focusWindowMs: Long = 1_000L,
     val obliqueRectificationDeg: Float = 30f,
+    val obliqueSearchAfterMisses: Int = 3,
+    val obliqueSearchTiltsDeg: List<Float> = listOf(45f, -45f, 65f, -65f),
     val maxReferenceScale: Float = 3f,
 ) {
     init {
@@ -91,6 +100,8 @@ data class KpmMatchSpeedConfig(
         require(maxFlowRmsErrorPx.isFinite() && maxFlowRmsErrorPx > 0f)
         require(maxCorrespondences >= 0)
         require(obliqueRectificationDeg.isFinite() && obliqueRectificationDeg >= 0f && obliqueRectificationDeg < 89f)
+        require(obliqueSearchAfterMisses >= 0)
+        require(obliqueSearchTiltsDeg.all { it.isFinite() && kotlin.math.abs(it) < 89f })
         require(maxReferenceScale == 0f || (maxReferenceScale.isFinite() && maxReferenceScale >= 1f))
     }
 

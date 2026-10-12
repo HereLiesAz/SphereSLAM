@@ -292,7 +292,7 @@ class KpmPlanarFrontEndTest {
         assertNull(fe.match(input(30))) // direct
         // The first guess: 45° along the wall, two page widths out. The camera really is 50° along it.
         val truth = ObliqueGeometry.pose(50.0, centre, 1_200.0)
-        val guess = ObliqueRectifier.hypotheses(centre, 4.0 * centre[0], floatArrayOf(45f, -45f, 65f, -65f)).first()
+        val guess = ObliqueRectifier.hypotheses(centre, 4.0 * centre[0], KpmMatchSpeedConfig().obliqueSearchTiltsDeg.toFloatArray()).first()
         val plan = ObliqueRectifier.plan(guess.first, guess.second, km, 30f, centre)!!
         val virtualFromReal = ObliqueRectifier.invert3(plan.realFromVirtual)!!
         val corr = ArrayList<Float>()
@@ -320,6 +320,15 @@ class KpmPlanarFrontEndTest {
         assertNull(fe.match(input(50)))
         assertNull(fe.diagnosticsAndReset())
         assertEquals(before + 1, b.calls.size)
+    }
+
+    @Test
+    fun `the guessed-view search can be switched off`() {
+        val fe = frontEnd(KpmMatchSpeedConfig(obliqueSearchAfterMisses = 0))
+        fe.addPage(ByteBuffer.allocateDirect(4), 800, 600, 1f, false, 0, RigidMath.identity())
+        backend!!.answer = { null }
+        repeat(8) { fe.match(input(it * 10L)) }
+        assertNull(fe.diagnosticsAndReset())
     }
 
     @Test

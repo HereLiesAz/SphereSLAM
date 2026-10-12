@@ -176,4 +176,24 @@ class ScreenLayoutTest {
         }
         assertClear(s, navPx)
     }
+
+    @Test
+    fun `tuning panel with live measures and the knobs`() {
+        val s = render("8-tune") { screen ->
+            screen.header("Step 8 of 15", Guide.STEPS.indices.map { if (it < 7) Status.PASS else Status.UNTESTED }, 7, "Report sent 11:31:50")
+            screen.status("Locked on target", Status.PASS, "KPM KPM_RECTIFIED · 48.1 ms · 61 inliers", "6° down")
+            screen.show(TestScreen.Mode.TUNE)
+            val m = RunMetrics().apply { start() }
+            var t = 0L
+            repeat(90) { i ->
+                val a = Math.toRadians(i * 0.6)
+                val view = floatArrayOf(Math.cos(a).toFloat(), 0f, Math.sin(a).toFloat(), 0f, 0f, 1f, 0f, 0f, -Math.sin(a).toFloat(), 0f, Math.cos(a).toFloat(), 0f, 0f, 0f, -2f, 1f)
+                m.observe(FrameObservation(t, "LOCKED", if (i < 70) "KPM" else "PHOTOSPHERE", null, 50, 1f, 12f, 38f, view, i < 30))
+                t += 33
+            }
+            screen.tune.bind(Knobs.DEFAULTS + ("oblique.rectifyDeg" to 20f), m.summary(), "Recording 0:42 · 254 MB · 1260 frames", true, applying = true)
+            screen.actions(primary = Action("Back to step") {}, secondary = Action("Stop") {}, tertiary = Action("Recordings") {})
+        }
+        assertClear(s, navPx)
+    }
 }

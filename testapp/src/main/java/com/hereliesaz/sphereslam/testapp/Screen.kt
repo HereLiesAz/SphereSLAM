@@ -153,7 +153,8 @@ class Action(val label: String, val enabled: Boolean = true, val onClick: () -> 
 /**
  * The whole screen, top to bottom with nothing layered except the target outline on the camera image
  * it marks: app bar, step progress, camera, status line, the current step's card, and its actions.
- * The overview (every step and verdict) takes the card's place while it is open; the camera stays.
+ * The overview (every step and verdict) or the tuning panel takes the card's place while open; the
+ * camera stays.
  */
 @SuppressLint("SetTextI18n")
 class TestScreen(
@@ -171,6 +172,7 @@ class TestScreen(
     private val stepCounter = text(13f, Palette.MUTED)
     private val reportLine = text(11f, Palette.MUTED)
     private val overviewButton = flatButton("All steps")
+    private val tuneButton = flatButton("Tune")
     private val progress = StepProgressView(context)
 
     private val camera = FrameLayout(context).apply { setBackgroundColor(Color.BLACK) }
@@ -242,6 +244,15 @@ class TestScreen(
     }
     private val overview = ScrollView(context).apply { addView(overviewList); visibility = View.GONE; setBackgroundColor(Palette.BG) }
 
+    /** The live tuning panel ([TunePanel]): the knobs and live measures, in the card's place. */
+    val tune = TunePanel(context)
+
+    /** What fills the space under the camera. */
+    enum class Mode { STEP, OVERVIEW, TUNE }
+
+    var mode = Mode.STEP
+        private set
+
     /** Called with the step index when the tester taps a step in the overview. */
     var onJump: (Int) -> Unit = {}
     var onNotes: (String) -> Unit = {}
@@ -262,9 +273,12 @@ class TestScreen(
                 addView(text(17f, Palette.TEXT).apply {
                     text = "SphereSLAM device test"
                     typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                    isSingleLine = true
+                    ellipsize = android.text.TextUtils.TruncateAt.END
                 })
                 addView(stepCounter)
             }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            addView(tuneButton, LinearLayout.LayoutParams(WRAP_CONTENT, context.dp(48)))
             addView(overviewButton, LinearLayout.LayoutParams(WRAP_CONTENT, context.dp(48)))
         }
         val header = LinearLayout(context).apply {
@@ -289,6 +303,7 @@ class TestScreen(
         root.addView(telemetryBar, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         root.addView(cardScroll, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
         root.addView(overview, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+        root.addView(tune.view, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
         root.addView(View(context).apply { setBackgroundColor(Palette.OUTLINE) }, LinearLayout.LayoutParams(MATCH_PARENT, 1))
         root.addView(actions, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         padding.attach()
@@ -297,10 +312,12 @@ class TestScreen(
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
             override fun afterTextChanged(s: Editable?) = onNotes(s?.toString().orEmpty())
         })
-        overviewButton.setOnClickListener { showOverview(overview.visibility != View.VISIBLE) }
+        overviewButton.setOnClickListener { show(if (mode == Mode.OVERVIEW) Mode.STEP else Mode.OVERVIEW) }
+        tuneButton.setOnClickListener { show(if (mode == Mode.TUNE) Mode.STEP else Mode.TUNE) }
     }
 
-    val overviewOpen: Boolean get() = overview.visibility == View.VISIBLE
+    val overviewOpen: Boolean get() = mode == Mode.OVERVIEW
+    val tuneOpen: Boolean get() = mode == Mode.TUNE
 
     /** One check: its verdict mark and [text], in the verdict's colour. */
     fun mark(text: String, status: Status): CharSequence = verdict("${Palette.symbol(status)} $text", status, emptyList())
@@ -320,13 +337,25 @@ class TestScreen(
     }
 
     /** The overview takes the step card's place; the camera stays up (and keeps running). */
-    fun showOverview(open: Boolean) {
-        overview.visibility = if (open) View.VISIBLE else View.GONE
-        cardScroll.visibility = if (open) View.GONE else View.VISIBLE
-        // While open, the action bar's "Back to step" is the way out; one button for it, not two.
-        overviewButton.visibility = if (open) View.GONE else View.VISIBLE
-        overviewButton.text = if (open) "Back to step" else "All steps"
+    fun showOverview(open: Boolean) = show(if (open) Mode.OVERVIEW else Mode.STEP)
+
+    /**
+     * The step card, the overview or the tuning panel under the camera (the camera stays up and keeps
+     * running). While a panel is open, the action bar's "Back to step" is the way out, so its app-bar
+     * button hides: one button per way out, not two.
+     */
+    fun show(mode: Mode) {
+        this.mode = mode
+        cardScroll.visibility = if (mode == Mode.STEP) View.VISIBLE else View.GONE
+        overview.visibility = if (mode == Mode.OVERVIEW) View.VISIBLE else View.GONE
+        tune.view.visibility = if (mode == Mode.TUNE) View.VISIBLE else View.GONE
+        overviewButton.visibility = if (mode == Mode.OVERVIEW) View.GONE else View.VISIBLE
+        tuneButton.visibility = if (mode == Mode.TUNE) View.GONE else View.VISIBLE
+        onMode(mode)
     }
+
+    /** Called when [show] switches what is under the camera (the activity re-renders). */
+    var onMode: (Mode) -> Unit = {}
 
     // --- rendering ------------------------------------------------------------------------------
 
@@ -507,16 +536,29 @@ class TestScreen(
         if (view.text.toString() != value) view.text = value
     }
 
-    private fun text(sp: Float, color: Int) = TextView(context).apply {
+    private fun text(sp: Float, color: Int) = Widgets.text(context, sp, color)
+
+    private fun lp(top: Int = 0, bottom: Int = 0) = Widgets.lp(context, top, bottom)
+
+    private fun filledButton(label: String) = Widgets.filledButton(context, label)
+    private fun outlinedButton(label: String) = Widgets.outlinedButton(context, label)
+    private fun flatButton(label: String) = Widgets.flatButton(context, label)
+
+    private fun rounded(color: Int, radius: Float) = Widgets.rounded(color, radius)
+}
+
+/** The app's widgets, shared by every screen so they read as one design. */
+object Widgets {
+    fun text(context: Context, sp: Float, color: Int) = TextView(context).apply {
         setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
         setTextColor(color)
     }
 
-    private fun lp(top: Int = 0, bottom: Int = 0) = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+    fun lp(context: Context, top: Int = 0, bottom: Int = 0) = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
         topMargin = context.dp(top); bottomMargin = context.dp(bottom)
     }
 
-    private fun baseButton(label: String, fg: Int, bg: GradientDrawable?) = TextView(context).apply {
+    private fun baseButton(context: Context, label: String, fg: Int, bg: GradientDrawable?) = TextView(context).apply {
         text = label
         gravity = Gravity.CENTER
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
@@ -524,21 +566,28 @@ class TestScreen(
         setTextColor(fg)
         setPadding(context.dp(20), 0, context.dp(20), 0)
         minWidth = context.dp(64)
+        minHeight = context.dp(48)
         isClickable = true
         isFocusable = true
         val mask = rounded(Color.WHITE, context.dp(24f))
         background = RippleDrawable(ColorStateList.valueOf(Color.argb(60, 255, 255, 255)), bg, mask)
     }
 
-    private fun filledButton(label: String) = baseButton(label, Palette.ON_GOLD, rounded(Palette.GOLD, context.dp(24f)))
-    private fun outlinedButton(label: String) = baseButton(label, Palette.TEXT, rounded(Color.TRANSPARENT, context.dp(24f)).apply {
+    fun filledButton(context: Context, label: String) = baseButton(context, label, Palette.ON_GOLD, rounded(Palette.GOLD, context.dp(24f)))
+    fun outlinedButton(context: Context, label: String) = baseButton(context, label, Palette.TEXT, rounded(Color.TRANSPARENT, context.dp(24f)).apply {
         setStroke(context.dp(1), Palette.OUTLINE)
     })
-    private fun flatButton(label: String) = baseButton(label, Palette.GOLD, null).apply { setPadding(context.dp(12), 0, context.dp(12), 0) }
+    fun flatButton(context: Context, label: String) = baseButton(context, label, Palette.GOLD, null).apply { setPadding(context.dp(12), 0, context.dp(12), 0) }
 
-    private fun rounded(color: Int, radius: Float) = GradientDrawable().apply {
+    fun rounded(color: Int, radius: Float) = GradientDrawable().apply {
         setColor(color)
         cornerRadius = radius
+    }
+
+    /** Enabled look: dimmed when disabled, as the action buttons do. */
+    fun enable(view: View, enabled: Boolean) {
+        view.isEnabled = enabled
+        view.alpha = if (enabled) 1f else 0.4f
     }
 }
 
