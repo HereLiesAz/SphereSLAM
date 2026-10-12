@@ -160,6 +160,21 @@ object KpmBridge {
     }
 
     /**
+     * [matchPlanarEx] against only the reference images named by [pageNos] / [imageNos] (parallel
+     * arrays: image `imageNos[i]` of page `pageNos[i]`, as given to [addPlanarPage] or
+     * [addPlanarPageView]). The native side builds a matcher over just those images on first use and
+     * keeps the few most recently used, so the query's FREAK search runs against them alone. Returns
+     * pageNo, or -1 on no match (also when none of the images exist).
+     */
+    fun matchPlanarImages(session: Long, luma: ByteBuffer, pageNos: IntArray, imageNos: IntArray, out: FloatArray, correspondences: FloatArray?): Int {
+        require(session != 0L)
+        require(luma.isDirect)
+        require(pageNos.isNotEmpty() && pageNos.size == imageNos.size)
+        require(out.size >= MATCH_EX_OUTPUT_FLOATS)
+        return nativeMatchPlanarImages(session, luma, pageNos, imageNos, out, correspondences)
+    }
+
+    /**
      * Drops every page from the session's atlas, keeping its calibration. After this, [matchPlanar]
      * reports no match until a page is added again with [addPlanarPage]; previously added pages can
      * never match again. Returns false when the session is unknown or the matcher could not be
@@ -225,6 +240,14 @@ object KpmBridge {
         session: Long,
         luma: ByteBuffer,
         pageNo: Int,
+        out: FloatArray,
+        correspondences: FloatArray?,
+    ): Int
+    private external fun nativeMatchPlanarImages(
+        session: Long,
+        luma: ByteBuffer,
+        pageNos: IntArray,
+        imageNos: IntArray,
         out: FloatArray,
         correspondences: FloatArray?,
     ): Int

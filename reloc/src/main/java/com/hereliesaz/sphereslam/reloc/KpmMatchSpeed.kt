@@ -46,7 +46,11 @@ import kotlin.math.sqrt
  *    features mapped back to the page, in a second matcher built in the background
  *    (`ReferencePreviews`, `PreviewMatcher`). After that many direct misses in a row, every other
  *    full solve matches the frame against the previews: a steep, near, far or turned view relocks
- *    with no prediction at all. Nothing changes while the lock holds.
+ *    with no position prediction. The phone's rotation is still known while lost, and with the target
+ *    in view it fixes how the camera sees the page (tilt, side, turn); so the first search matches
+ *    only the [previewNearest] previews nearest that view (sizes nearest the last lock's distance),
+ *    each miss widens it by as many again, until all are searched. Nothing changes while the lock
+ *    holds.
  * 6. **Reference scale** ([maxReferenceScale]): a reference much larger than the matched frame (a
  *    full-resolution camera still against a 320 × 240 match) puts the wall outside KPM's scale range;
  *    pages are registered from a copy whose long side is at most this many matcher long sides.
@@ -80,6 +84,8 @@ import kotlin.math.sqrt
  *   both of the page's axes (four previews per angle).
  * @property previewScales size previews: below 1 the reference shrunk, above 1 its centre enlarged.
  * @property previewRotationStepDeg in-plane turn previews every this many degrees; 0 none.
+ * @property previewNearest previews the first search matches, nearest the predicted view; each
+ *   missed search adds as many again. 0 searches them all every time.
  * @property previewMaxFeatures most features KPM keeps per preview.
  * @property previewAtlasPages build previews for pages the atlas grows, not only captured references.
  * @property maxReferenceScale register a reference whose long side exceeds this many times the matched
@@ -107,6 +113,7 @@ data class KpmMatchSpeedConfig(
     val previewTiltsDeg: List<Float> = listOf(30f, 45f, 60f, 70f),
     val previewScales: List<Float> = listOf(0.5f, 0.25f, 2f),
     val previewRotationStepDeg: Float = 45f,
+    val previewNearest: Int = 4,
     val previewMaxFeatures: Int = 600,
     val previewAtlasPages: Boolean = true,
     val maxReferenceScale: Float = 3f,
@@ -126,6 +133,7 @@ data class KpmMatchSpeedConfig(
         require(previewTiltsDeg.all { it.isFinite() && it > 0f && it < 85f })
         require(previewScales.all { it.isFinite() && it > 0f && it <= 4f })
         require(previewRotationStepDeg.isFinite() && previewRotationStepDeg >= 0f && previewRotationStepDeg < 360f)
+        require(previewNearest >= 0)
         require(previewMaxFeatures > 0)
         require(obliqueSearchTiltsDeg.all { it.isFinite() && kotlin.math.abs(it) < 89f })
         require(maxReferenceScale == 0f || (maxReferenceScale.isFinite() && maxReferenceScale >= 1f))

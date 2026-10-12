@@ -30,12 +30,38 @@ internal object ReferencePreviews {
 
     /**
      * One preview: [luma] ([width] × [height], tightly packed) and [pageFromView], the row-major 3×3
-     * mapping a preview pixel back to the reference pixel it shows.
+     * mapping a preview pixel back to the reference pixel it shows. [cameraFromPage] and [scale] are
+     * the view it stands for (see [Plan]).
      */
-    class Preview(val kind: Kind, val label: String, val luma: ByteArray, val width: Int, val height: Int, val pageFromView: FloatArray)
+    class Preview(
+        val kind: Kind,
+        val label: String,
+        val luma: ByteArray,
+        val width: Int,
+        val height: Int,
+        val pageFromView: FloatArray,
+        val cameraFromPage: DoubleArray,
+        val scale: Double,
+    )
 
-    /** A preview to render: the reference-to-preview homography and the preview's size. */
-    class Plan(val kind: Kind, val label: String, val viewFromPage: DoubleArray, val width: Int, val height: Int)
+    /**
+     * A preview to render: the reference-to-preview homography and the preview's size, and the view it
+     * stands for: [cameraFromPage], the row-major rotation from the page's millimetre frame (x right,
+     * y up, z out of the wall) to a camera's (x right, y down, z forward) that would see the page as
+     * the preview shows it, and [scale], the preview's pixels per reference pixel.
+     */
+    class Plan(
+        val kind: Kind,
+        val label: String,
+        val viewFromPage: DoubleArray,
+        val width: Int,
+        val height: Int,
+        val cameraFromPage: DoubleArray = FRONTAL,
+        val scale: Double = 1.0,
+    )
+
+    /** The page seen square-on, upright: page y up is image y down, the wall faces the camera. */
+    val FRONTAL = doubleArrayOf(1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0)
 
     /** Smaller previews than this (short side, px) are not rendered: KPM finds too little in them. */
     const val MIN_SIDE_PX = 64
@@ -55,7 +81,9 @@ internal object ReferencePreviews {
             val a = sign * tilt.toDouble()
             val h = tiltHomography(width, height, a, vertical)
             fitted(h, width, height, longSide)?.let { (fit, w, hh) ->
-                out += Plan(Kind.TILT, "tilt ${if (vertical) "side" else "up/down"} ${a.toInt()}°", fit, w, hh)
+                // The plane turned by the tilt's rotation, in the reference's pixel frame (FRONTAL).
+                val r = mul(tiltRotation(a, vertical), FRONTAL)
+                out += Plan(Kind.TILT, "tilt ${if (vertical) "side" else "up/down"} ${a.toInt()}°", fit, w, hh, r)
             }
         }
         for (s in config.previewScales) {
@@ -65,11 +93,11 @@ internal object ReferencePreviews {
                 if (min(w, hh) < MIN_SIDE_PX) continue
                 // x' = s·(x + ½) − ½ keeps pixel centres aligned with the box-shrunk image.
                 val off = 0.5 * s - 0.5
-                out += Plan(Kind.SIZE, "size ×$s", doubleArrayOf(s.toDouble(), 0.0, off, 0.0, s.toDouble(), off, 0.0, 0.0, 1.0), w, hh)
+                out += Plan(Kind.SIZE, "size ×$s", doubleArrayOf(s.toDouble(), 0.0, off, 0.0, s.toDouble(), off, 0.0, 0.0, 1.0), w, hh, scale = s.toDouble())
             } else {
                 // The centre 1/s of the reference, enlarged to the reference's size.
                 val cx = (width - 1) / 2.0; val cy = (height - 1) / 2.0
-                out += Plan(Kind.SIZE, "size ×$s", doubleArrayOf(s.toDouble(), 0.0, cx - s * cx, 0.0, s.toDouble(), cy - s * cy, 0.0, 0.0, 1.0), width, height)
+                out += Plan(Kind.SIZE, "size ×$s", doubleArrayOf(s.toDouble(), 0.0, cx - s * cx, 0.0, s.toDouble(), cy - s * cy, 0.0, 0.0, 1.0), width, height, scale = s.toDouble())
             }
         }
         val step = config.previewRotationStepDeg
@@ -80,7 +108,9 @@ internal object ReferencePreviews {
                 val cx = (width - 1) / 2.0; val cy = (height - 1) / 2.0
                 val c = cos(r); val sn = sin(r)
                 val rot = doubleArrayOf(c, -sn, cx - c * cx + sn * cy, sn, c, cy - sn * cx - c * cy, 0.0, 0.0, 1.0)
-                fitted(rot, width, height, null)?.let { (fit, w, hh) -> out += Plan(Kind.ROTATION, "turn ${a.toInt()}°", fit, w, hh) }
+                // Turning the image turns the camera about its optical axis by the same angle.
+                val roll = doubleArrayOf(c, -sn, 0.0, sn, c, 0.0, 0.0, 0.0, 1.0)
+                fitted(rot, width, height, null)?.let { (fit, w, hh) -> out += Plan(Kind.ROTATION, "turn ${a.toInt()}°", fit, w, hh, mul(roll, FRONTAL)) }
                 a += step
             }
         }
@@ -95,15 +125,31 @@ internal object ReferencePreviews {
     fun tiltHomography(width: Int, height: Int, angleDeg: Double, vertical: Boolean): DoubleArray {
         val f = max(width, height) * 1.2
         val cx = (width - 1) / 2.0; val cy = (height - 1) / 2.0
-        val a = Math.toRadians(angleDeg)
-        val c = cos(a); val s = sin(a)
         // Rotation of the plane about the axis through its centre, then seen from distance f.
-        val r = if (vertical) doubleArrayOf(c, 0.0, s, 0.0, 1.0, 0.0, -s, 0.0, c) else doubleArrayOf(1.0, 0.0, 0.0, 0.0, c, -s, 0.0, s, c)
+        val r = tiltRotation(angleDeg, vertical)
         // Plane point (X, Y, 0) with X = x − cx, Y = y − cy → camera (R·P + (0, 0, f)) → pixel.
         val k = doubleArrayOf(f, 0.0, cx, 0.0, f, cy, 0.0, 0.0, 1.0)
         val m = doubleArrayOf(r[0], r[1], 0.0, r[3], r[4], 0.0, r[6], r[7], f)
         val center = doubleArrayOf(1.0, 0.0, -cx, 0.0, 1.0, -cy, 0.0, 0.0, 1.0)
         return mul(mul(k, m), center)
+    }
+
+    /** The tilt preview's turn of the plane, about its vertical ([vertical]) or horizontal axis. */
+    private fun tiltRotation(angleDeg: Double, vertical: Boolean): DoubleArray {
+        val a = Math.toRadians(angleDeg)
+        val c = cos(a); val s = sin(a)
+        return if (vertical) doubleArrayOf(c, 0.0, s, 0.0, 1.0, 0.0, -s, 0.0, c) else doubleArrayOf(1.0, 0.0, 0.0, 0.0, c, -s, 0.0, s, c)
+    }
+
+    /**
+     * Angle in degrees between two views ([cameraFromPage] rotations): how far a camera at one must
+     * turn to be at the other.
+     */
+    fun viewAngleDeg(a: DoubleArray, b: DoubleArray): Double {
+        // trace(A·Bᵀ) = 1 + 2 cos θ.
+        var trace = 0.0
+        for (i in 0..2) for (k in 0..2) trace += a[i * 3 + k] * b[i * 3 + k]
+        return Math.toDegrees(kotlin.math.acos(((trace - 1.0) / 2.0).coerceIn(-1.0, 1.0)))
     }
 
     /**
@@ -132,7 +178,7 @@ internal object ReferencePreviews {
         val pageFromView = invert(plan.viewFromPage) ?: error("singular preview homography")
         val pixels = (if (useOpenCv) renderOpenCv(luma, width, height, plan) else null)
             ?: renderKotlin(luma, width, height, plan, pageFromView)
-        return Preview(plan.kind, plan.label, pixels, plan.width, plan.height, FloatArray(9) { pageFromView[it].toFloat() })
+        return Preview(plan.kind, plan.label, pixels, plan.width, plan.height, FloatArray(9) { pageFromView[it].toFloat() }, plan.cameraFromPage, plan.scale)
     }
 
     /**

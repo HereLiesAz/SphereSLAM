@@ -130,6 +130,13 @@ class PlanarMatch(
     }
 }
 
+/** Image [imageNo] of registered page [pageNo]: the page itself (0) or a [PlanarPageView]. */
+data class PlanarImage(val pageNo: Int, val imageNo: Int) {
+    init {
+        require(pageNo >= 0 && imageNo >= 0)
+    }
+}
+
 /**
  * Options for [SphereSlamEngine.match] beyond the plain all-pages match.
  *
@@ -138,14 +145,18 @@ class PlanarMatch(
  *   Engines without page restriction may ignore it and match all pages.
  * @property maxCorrespondences how many inlier correspondences to return in
  *   [PlanarMatch.correspondences] (0 = none). Engines may return fewer, or none.
+ * @property images when not empty, matching runs against only these images (with [pageNo] −1): a
+ *   few [PlanarPageView]s chosen out of many. Engines without image restriction match nothing.
  */
 data class PlanarMatchRequest(
     val pageNo: Int = ALL_PAGES,
     val maxCorrespondences: Int = 0,
+    val images: List<PlanarImage> = emptyList(),
 ) {
     init {
         require(pageNo >= ALL_PAGES)
         require(maxCorrespondences >= 0)
+        require(images.isEmpty() || pageNo == ALL_PAGES)
     }
 
     companion object {

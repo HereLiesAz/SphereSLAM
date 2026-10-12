@@ -1,5 +1,6 @@
 package com.hereliesaz.sphereslam.reloc
 
+import com.hereliesaz.sphereslam.PlanarImage
 import com.hereliesaz.sphereslam.PlanarMatchRequest
 import com.hereliesaz.sphereslam.SphereSlamPoseMath
 import com.hereliesaz.sphereslam.camera.CameraIntrinsics
@@ -48,6 +49,13 @@ class KpmPlanarFrontEndTest {
             calls += Call(pageNo, maxCorrespondences, luma.remaining())
             lastLuma = ByteArray(luma.remaining()).also { luma.duplicate().get(it) }
             return answer(pageNo)
+        }
+
+        val imageCalls = mutableListOf<List<PlanarImage>>()
+
+        override fun matchImages(luma: ByteBuffer, timestampNs: Long, images: List<PlanarImage>, maxCorrespondences: Int): KpmMatcherBackend.Solve? {
+            imageCalls += images
+            return answer(images.first().pageNo)
         }
 
         override fun cameraFromCanonical(pageNo: Int, cameraFromPage3x4: FloatArray): FloatArray = view.copyOf()
@@ -359,6 +367,54 @@ class KpmPlanarFrontEndTest {
         val before = pb.calls.size
         fe.match(input(50))
         assertEquals(before, pb.calls.size)
+    }
+
+    @Test
+    fun `a lost search starts with the previews nearest the predicted view and widens on each miss`() {
+        val pb = FakeBackend(k).apply { answer = { null } }
+        val matcher = PreviewMatcher(pb, KpmMatchSpeedConfig(), java.util.concurrent.Executor { it.run() }, useOpenCv = false)
+        val fe = frontEnd(
+            KpmMatchSpeedConfig(flowTracking = false, obliqueSearchAfterMisses = 0, obliqueRectificationDeg = 0f),
+            previews = { matcher },
+        )
+        val g = fe.addPage(ByteBuffer.allocateDirect(400 * 300), 400, 300, 1f, false, 0, RigidMath.identity().also { it[12] = 0.4f }).geometry
+        val centre = doubleArrayOf(g.centerXmm.toDouble(), g.centerYmm.toDouble(), 0.0)
+        // Upright (the synthetic pose is rolled half a turn), 58° off the wall's normal from its right.
+        val predicted = canonicalView(ObliqueGeometry.pose(58.0, centre, 1_500.0, rollDeg = 180.0), centre)
+        backend!!.answer = { null }
+        val n = KpmMatchSpeedConfig().previewNearest
+        val all = matcher.views.size
+        var t = 0L
+        repeat(2) { assertNull(fe.match(input(t, predicted))); t += 10 }
+        // Preview searches (every other full solve) take the nearest n, then 2n, 3n …, then all.
+        var expected = n
+        while (expected < all) {
+            assertNull(fe.match(input(t, predicted))); t += 10
+            assertEquals(expected, pb.imageCalls.last().size)
+            assertNull(fe.match(input(t, predicted))); t += 10 // direct
+            expected += n
+        }
+        val guided = pb.imageCalls.size
+        assertEquals(0, pb.calls.size)
+        assertNull(fe.match(input(t, predicted))); t += 10
+        assertEquals(guided, pb.imageCalls.size)
+        assertEquals(1, pb.calls.size) // all of them
+        // The first set was the side tilts on the camera's side, nearest first.
+        val labels = pb.imageCalls.first().map { im -> matcher.views.single { it.imageNo == im.imageNo }.label }
+        assertEquals("tilt side 60°", labels.first().replace("-", ""))
+        assertTrue(labels.toString(), labels.take(2).all { it.startsWith("tilt side") })
+        assertTrue(fe.diagnosticsAndReset()!!.contains("guided=$guided "))
+        // A hit resets the search: the next one starts from the nearest n again.
+        pb.answer = { solve(0) }
+        assertNull(fe.match(input(t, predicted))); t += 10 // direct
+        assertEquals(VisualMatchMethod.KPM_PREVIEW, fe.match(input(t, predicted))!!.method); t += 10
+        pb.answer = { null }
+        repeat(3) { fe.match(input(t, predicted)); t += 10 } // two direct misses, then the previews
+        assertEquals(n, pb.imageCalls.last().size)
+        // Without a prediction, every preview is searched.
+        val before = pb.calls.size
+        repeat(2) { fe.match(input(t)); t += 10 }
+        assertEquals(before + 1, pb.calls.size)
     }
 
     @Test

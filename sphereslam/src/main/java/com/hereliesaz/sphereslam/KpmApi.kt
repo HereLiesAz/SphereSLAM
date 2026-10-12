@@ -36,6 +36,12 @@ internal interface KpmApi {
         return page
     }
 
+    /**
+     * [KpmBridge.matchPlanarImages]: [matchEx] against only the images named by [pageNos] / [imageNos].
+     * The default cannot (−1).
+     */
+    fun matchImages(session: Long, luma: ByteBuffer, pageNos: IntArray, imageNos: IntArray, out: FloatArray, correspondences: FloatArray?): Int = -1
+
     fun destroy(session: Long)
 
     /** Remove every page from [session]'s atlas, keeping its calibration; false = unsupported/failed. */
@@ -92,6 +98,15 @@ internal object NativeKpmApi : KpmApi {
         out: FloatArray,
         correspondences: FloatArray?,
     ): Int = KpmBridge.matchPlanarEx(session, luma, pageNo, out, correspondences)
+
+    override fun matchImages(
+        session: Long,
+        luma: ByteBuffer,
+        pageNos: IntArray,
+        imageNos: IntArray,
+        out: FloatArray,
+        correspondences: FloatArray?,
+    ): Int = KpmBridge.matchPlanarImages(session, luma, pageNos, imageNos, out, correspondences)
 
     override fun destroy(session: Long) = KpmBridge.destroySession(session)
 

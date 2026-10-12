@@ -399,6 +399,14 @@ result.pose?.let { draw(it.cameraFromMap, it.projection) }
   fast) and are searched on every other full solve once direct solves have missed
   `previewSearchAfterMisses` (2) times running. 0 builds none. `previewAtlasPages` previews grown
   atlas pages too; `previewMaxFeatures` (600) caps each.
+  The search is guided by the phone's rotation, which stays right while the target is lost (only the
+  position goes stale). Assuming the target is in view, the rotation fixes how the camera sees the
+  page: how steep, from which side, how turned. Each preview records the camera rotation it stands
+  for, and the first search matches only the `previewNearest` (4) previews nearest the predicted one
+  (the angle between the two rotations, plus 30° per doubling of size off the scale the last lock's
+  distance predicts). Each missed search adds as many again until every preview is searched; a lock
+  starts over. The native side matches a chosen image set with a matcher built from those images'
+  features (`KpmBridge.matchPlanarImages`), keeping the 8 most recently used.
 - **Reference scale** — a reference far larger than the matched frame (a full-resolution camera
   still against a 320 × 240 match) leaves the wall outside KPM's scale range. A page is registered
   from an area-downscaled copy whose long side is at most `maxReferenceScale` (3) × the matched
@@ -490,9 +498,10 @@ monocular-depth points, and rotation / 6-DoF tile fixes adopted in the window.
 frames rectified from the prediction (`maxObliq` its steepest, degrees) and from a guessed view, how
 many of those KPM matched and how many gave a pose, and predictions too frontal to rectify.
 
-`previews{images features builtMs ready tried solved}` (with previews): reference images the preview
-session holds (pages and previews), their features, the last build's time, whether it is searchable,
-and the lost-frame searches made and solved in the window (`method=KPM_PREVIEW`).
+`previews{images features builtMs ready tried guided solved}` (with previews): reference images the
+preview session holds (pages and previews), their features, the last build's time, whether it is
+searchable, and the lost-frame searches made (`guided` of them over only the previews nearest the
+predicted view) and solved in the window (`method=KPM_PREVIEW`).
 
 `attempts` frames ran the matcher and `matched` of them got a pose back (before gating). `error` is
 the mean squared reprojection error in pixels² of the image the pose was solved in (KPM: the

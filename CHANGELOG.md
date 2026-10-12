@@ -10,8 +10,15 @@
   twice running, so a lost camera relocks from a steep, near, far or turned view with no prediction.
   `KpmMatchSpeedConfig.previewSearchAfterMisses` (0 builds none), `previewTiltsDeg`, `previewScales`,
   `previewRotationStepDeg`, `previewMaxFeatures`, `previewAtlasPages`; `VisualMatchMethod.KPM_PREVIEW`.
-  The periodic diagnostic gains `previews{images features builtMs ready tried solved}`. The test app's
-  tuning panel gains a Previews group.
+  The periodic diagnostic gains `previews{images features builtMs ready tried guided solved}`. The
+  test app's tuning panel gains a Previews group.
+- **Previews nearest the sensors first.** The phone's rotation stays right while the target is lost,
+  and with the target in view it fixes how the camera sees the page (tilt, side, turn). Each preview
+  records the rotation it stands for; a lost search first matches only the
+  `KpmMatchSpeedConfig.previewNearest` (4) nearest the predicted view (sizes nearest the last lock's
+  distance), and each miss adds as many again until all are searched. New
+  `PlanarMatchRequest.images` / `PlanarImage` and `KpmBridge.matchPlanarImages` match a chosen set of
+  reference images.
 - **Steep relocks.** A lost camera's predicted pose is the photosphere's placement: right in rotation,
   but where the lock was in position. The oblique solve (`ObliqueRectifier.solve`) now also starts
   from the plane homography of the matches themselves and keeps the fit that explains more of them,

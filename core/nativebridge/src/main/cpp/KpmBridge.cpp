@@ -60,6 +60,9 @@ struct KpmSession {
     // Lazily built single-page matchers over the same atlas features (focused matching). Built from
     // the already-extracted reference features, so they never re-run reference feature extraction.
     std::map<int, KpmHandle *> pageHandles;
+    // Matchers over a chosen set of reference images (page, image), newest use first, at most
+    // kMaxImageHandles (nativeMatchPlanarImages: the previews nearest a predicted view).
+    std::vector<std::pair<std::vector<int64_t>, KpmHandle *>> imageHandles;
     // Serializes every use of THIS session's handle/atlas (add, match, clone, clear). Different
     // sessions never share a lock, so a background atlas build on a cloned session cannot stall the
     // live matcher (the previous design held one global lock across kpmMatching).
@@ -67,6 +70,9 @@ struct KpmSession {
 
     ~KpmSession() {
         for (auto &entry : pageHandles) {
+            if (entry.second) kpmDeleteHandle(&entry.second);
+        }
+        for (auto &entry : imageHandles) {
             if (entry.second) kpmDeleteHandle(&entry.second);
         }
         if (atlas) kpmDeleteRefDataSet(&atlas);
@@ -243,6 +249,88 @@ void deletePageHandles(KpmSession *session) {
     session->pageHandles.clear();
 }
 
+// Image-set matchers built from an atlas that has since changed.
+void deleteImageHandles(KpmSession *session) {
+    for (auto &entry : session->imageHandles) {
+        if (entry.second) kpmDeleteHandle(&entry.second);
+    }
+    session->imageHandles.clear();
+}
+
+constexpr size_t kMaxImageHandles = 8;
+
+int64_t imageKey(int pageNo, int imageNo) {
+    return (static_cast<int64_t>(pageNo) << 32) | static_cast<uint32_t>(imageNo);
+}
+
+// A matcher holding only the reference images in [keys] (sorted imageKey values), built from the
+// session atlas (no image processing). Each keeps its page's millimetres, so a pose is the page's.
+KpmHandle *buildImagesHandle(KpmSession *session, const std::vector<int64_t> &keys) {
+    if (!session->atlas || !session->cameraParams || keys.empty()) return nullptr;
+    const KpmRefDataSet *atlas = session->atlas;
+    auto wanted = [&keys](int pageNo, int imageNo) {
+        return std::binary_search(keys.begin(), keys.end(), imageKey(pageNo, imageNo));
+    };
+    std::vector<KpmPageInfo> pages;
+    std::vector<std::vector<KpmImageInfo>> images;
+    for (int i = 0; i < atlas->pageNum; ++i) {
+        const KpmPageInfo &page = atlas->pageInfo[i];
+        std::vector<KpmImageInfo> chosen;
+        for (int j = 0; j < page.imageNum; ++j) {
+            if (wanted(page.pageNo, page.imageInfo[j].imageNo)) chosen.push_back(page.imageInfo[j]);
+        }
+        if (chosen.empty()) continue;
+        images.push_back(std::move(chosen));
+        KpmPageInfo info{};
+        info.pageNo = page.pageNo;
+        pages.push_back(info);
+    }
+    if (pages.empty()) return nullptr;
+    for (size_t i = 0; i < pages.size(); ++i) {
+        pages[i].imageInfo = images[i].data();
+        pages[i].imageNum = static_cast<int>(images[i].size());
+    }
+    std::vector<KpmRefData> points;
+    for (int i = 0; i < atlas->num; ++i) {
+        if (wanted(atlas->refPoint[i].pageNo, atlas->refPoint[i].refImageNo)) points.push_back(atlas->refPoint[i]);
+    }
+    if (points.empty()) return nullptr;
+    // kpmSetRefDataSet deep-copies refPoint, pageInfo and imageInfo.
+    KpmRefDataSet subset{};
+    subset.refPoint = points.data();
+    subset.num = static_cast<int>(points.size());
+    subset.pageInfo = pages.data();
+    subset.pageNum = static_cast<int>(pages.size());
+    KpmHandle *handle = kpmCreateHandle(session->cameraParams);
+    if (handle && kpmSetRefDataSet(handle, &subset) < 0) kpmDeleteHandle(&handle);
+    return handle;
+}
+
+// The cached matcher for [keys], built on first use; the least recently used beyond
+// kMaxImageHandles is freed. Null when none of the images exist.
+KpmHandle *imagesHandle(KpmSession *session, const std::vector<int64_t> &keys) {
+    auto &cache = session->imageHandles;
+    for (size_t i = 0; i < cache.size(); ++i) {
+        if (cache[i].first == keys) {
+            if (i > 0) std::rotate(cache.begin(), cache.begin() + static_cast<long>(i), cache.begin() + static_cast<long>(i) + 1);
+            return cache.front().second;
+        }
+    }
+    KpmHandle *built = buildImagesHandle(session, keys);
+    if (!built) return nullptr;
+    try {
+        cache.insert(cache.begin(), std::make_pair(keys, built));
+    } catch (...) {
+        kpmDeleteHandle(&built);
+        throw;
+    }
+    while (cache.size() > kMaxImageHandles) {
+        if (cache.back().second) kpmDeleteHandle(&cache.back().second);
+        cache.pop_back();
+    }
+    return built;
+}
+
 void refreshSkipPages(KpmSession *session) {
     session->skipPages.clear();
     if (!session->atlas) return;
@@ -381,6 +469,7 @@ int matchWithHandle(
 // previews merges unindexed and indexes once, with its last image; nothing matches in between.
 // Returns 0, or -4 (merge failed) / -6 (matcher rebuild failed).
 int mergeAndIndex(KpmSession *session, KpmRefDataSet **page, const char *who, bool reindex = true) {
+    deleteImageHandles(session);
     const int mergeResult = kpmMergeRefDataSet(&session->atlas, page); // consumes `page`
     if (*page) kpmDeleteRefDataSet(page);
     if (mergeResult < 0 || !session->atlas) {
@@ -827,6 +916,68 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeMatchPlanarEx(
 #endif
 }
 
+// Like nativeMatchPlanarEx, against only the reference images named by the parallel pageNos /
+// imageNos arrays (a cached matcher over those images: the query's FREAK search runs against them
+// alone). Returns the matched pageNo or -1 (also when none of the images exist).
+JNIEXPORT jint JNICALL
+Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeMatchPlanarImages(
+        JNIEnv *env,
+        jobject,
+        jlong sessionValue,
+        jobject lumaBuffer,
+        jintArray pageNosArray,
+        jintArray imageNosArray,
+        jfloatArray outArray,
+        jfloatArray corrArray) {
+#ifdef HAVE_ARX_KPM
+    try {
+    std::shared_ptr<KpmSession> session = findSession(sessionValue);
+    if (!session || !outArray || !pageNosArray || !imageNosArray) return -1;
+    std::lock_guard<std::mutex> workLock(session->work);
+    if (!session->handle || !session->atlas || !session->indexed) return -1;
+    if (env->GetArrayLength(outArray) < 15) return -1;
+    const jsize n = env->GetArrayLength(pageNosArray);
+    if (n <= 0 || env->GetArrayLength(imageNosArray) != n) return -1;
+
+    const jlong requiredBytes =
+        static_cast<jlong>(session->frameWidth) * static_cast<jlong>(session->frameHeight);
+    ARUint8 *luma = nullptr;
+    if (!directBuffer(env, lumaBuffer, requiredBytes, &luma)) return -1;
+
+    std::vector<jint> pageNos(static_cast<size_t>(n)), imageNos(static_cast<size_t>(n));
+    env->GetIntArrayRegion(pageNosArray, 0, n, pageNos.data());
+    env->GetIntArrayRegion(imageNosArray, 0, n, imageNos.data());
+    std::vector<int64_t> keys;
+    for (jsize i = 0; i < n; ++i) keys.push_back(imageKey(pageNos[i], imageNos[i]));
+    std::sort(keys.begin(), keys.end());
+    keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+    KpmHandle *handle = imagesHandle(session.get(), keys);
+    if (!handle) return -1;
+    // As skipRedundantPoseSolves: one pose solve, not one per page slot.
+    std::vector<int> skip;
+    for (int i = 1; i < handle->refDataSet.pageNum; ++i) skip.push_back(handle->refDataSet.pageInfo[i].pageNo);
+
+    const int corrCapacity = corrArray ? env->GetArrayLength(corrArray) / 4 : 0;
+    std::vector<jfloat> corr(static_cast<size_t>(corrCapacity) * 4);
+    jfloat out[15] = {};
+    const int matched = matchWithHandle(
+        handle, skip, luma, out, 15, corrCapacity > 0 ? corr.data() : nullptr, corrCapacity);
+    if (matched < 0) return -1;
+    env->SetFloatArrayRegion(outArray, 0, 15, out);
+    const int written = static_cast<int>(out[14]);
+    if (corrArray && written > 0) env->SetFloatArrayRegion(corrArray, 0, written * 4, corr.data());
+    return static_cast<jint>(matched);
+    } catch (...) {
+        LOGE("nativeMatchPlanarImages: native exception");
+        return -1;
+    }
+#else
+    (void) env; (void) sessionValue; (void) lumaBuffer; (void) pageNosArray; (void) imageNosArray;
+    (void) outArray; (void) corrArray;
+    return -1;
+#endif
+}
+
 // Replace the atlas with an empty one. KPM has no API to remove pages from a handle's reference set,
 // so the handle is rebuilt from the session's retained calibration; old pages can never match again.
 JNIEXPORT jboolean JNICALL
@@ -839,6 +990,7 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeClearPages(
     std::lock_guard<std::mutex> workLock(session->work);
     if (!session->cameraParams) return JNI_FALSE;
     deletePageHandles(session.get());
+    deleteImageHandles(session.get());
     session->skipPages.clear();
     if (session->handle) kpmDeleteHandle(&session->handle);
     if (session->atlas) kpmDeleteRefDataSet(&session->atlas);

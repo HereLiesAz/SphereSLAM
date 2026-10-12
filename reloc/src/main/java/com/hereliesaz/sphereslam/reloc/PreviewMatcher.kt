@@ -1,5 +1,6 @@
 package com.hereliesaz.sphereslam.reloc
 
+import com.hereliesaz.sphereslam.PlanarImage
 import com.hereliesaz.sphereslam.PlanarMatchRequest
 import java.nio.ByteBuffer
 import java.util.concurrent.Executor
@@ -16,6 +17,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * [match] answers only once a build has finished and none is running (a build re-indexes KPM, which
  * a query must not see half-done), so it never waits on one. Shared by a front end and its forks
  * ([retain] / [release]); the last release closes it.
+ *
+ * Each preview's [View] says which camera view it stands for, so a search can start with the previews
+ * nearest the view the sensors predict ([nearest]) and match only those ([match] with `images`).
  */
 @ExperimentalSphereSlamRelocApi
 internal class PreviewMatcher(
@@ -29,6 +33,17 @@ internal class PreviewMatcher(
     @Volatile private var built = false
     @Volatile private var closed = false
     private val nextImage = HashMap<Int, Int>()
+
+    /**
+     * A preview held: KPM image [imageNo] of page [pageNo], showing the page as a camera at
+     * [cameraFromPage] would see it ([ReferencePreviews.Plan]), [scale] preview pixels per pixel of the
+     * [referenceWidthPx]-wide reference.
+     */
+    class View(val pageNo: Int, val imageNo: Int, val label: String, val cameraFromPage: DoubleArray, val scale: Double, val referenceWidthPx: Int)
+
+    /** Every preview held (not the pages themselves), replaced whole when a build finishes. */
+    @Volatile var views: List<View> = emptyList()
+        private set
 
     /** Reference images held (pages and previews) and their features, for the diagnostic. */
     @Volatile var images = 0
@@ -88,6 +103,7 @@ internal class PreviewMatcher(
             return // a featureless page: no previews either
         }
         val plans = ReferencePreviews.plans(width, height, config)
+        val added = ArrayList<View>()
         plans.forEachIndexed { i, plan ->
             if (closed) return
             val preview = ReferencePreviews.render(luma, width, height, plan, useOpenCv)
@@ -100,20 +116,54 @@ internal class PreviewMatcher(
             if (n > 0) {
                 images++
                 features += n
+                added += View(pageNo, imageNo, plan.label, plan.cameraFromPage, plan.scale, width)
             }
         }
+        views = views + added
         buildMs = (System.nanoTime() - t0) / 1_000_000L
         built = true
     }
 
-    /** The previews' best match for this frame, or null (none, or not ready). */
-    fun match(luma: ByteBuffer, timestampNs: Long, pageNo: Int = PlanarMatchRequest.ALL_PAGES, maxCorrespondences: Int): KpmMatcherBackend.Solve? {
+    /**
+     * The previews' best match for this frame, or null (none, or not ready): among [images] only when
+     * given (see [nearest]), else every page and preview.
+     */
+    fun match(luma: ByteBuffer, timestampNs: Long, maxCorrespondences: Int, images: List<PlanarImage>? = null): KpmMatcherBackend.Solve? {
         if (!isReady) return null
-        return backend.match(luma, timestampNs, pageNo, maxCorrespondences)
+        if (images != null) return backend.matchImages(luma, timestampNs, images, maxCorrespondences)
+        return backend.match(luma, timestampNs, PlanarMatchRequest.ALL_PAGES, maxCorrespondences)
     }
 
-    private companion object {
+    companion object {
         /** KPM refused: the session holds its limit of reference images. */
-        const val ERROR_FULL = -8
+        private const val ERROR_FULL = -8
+
+        /** Degrees of view angle that weigh as much as a doubling of size in [nearest]. */
+        const val DEG_PER_OCTAVE = 30.0
+
+        /**
+         * [views] nearest first to the view the sensors predict. [predicted] gives, for a page (and its
+         * reference's width), the camera's rotation from that page's frame (as [View.cameraFromPage])
+         * and the [View.scale] that would look like the frame at its predicted distance (null when
+         * unknown), or null
+         * when there is no prediction for that page (its previews go last). Assuming the target is in
+         * view, the camera's rotation alone fixes how it sees the page — the tilt, which side, and the
+         * turn — so the distance is the angle between the two views, plus [DEG_PER_OCTAVE] per doubling
+         * of size off the predicted scale. Ties go to [preferredPage].
+         */
+        fun nearest(views: List<View>, predicted: (pageNo: Int, referenceWidthPx: Int) -> Pair<DoubleArray, Double?>?, preferredPage: Int?): List<View> {
+            val cache = HashMap<Int, Pair<DoubleArray, Double?>?>()
+            fun cost(v: View): Double {
+                val (r, scale) = cache.getOrPut(v.pageNo) { predicted(v.pageNo, v.referenceWidthPx) } ?: return Double.MAX_VALUE
+                var c = ReferencePreviews.viewAngleDeg(r, v.cameraFromPage)
+                if (scale != null && scale > 0.0 && scale.isFinite()) {
+                    c += DEG_PER_OCTAVE * kotlin.math.abs(kotlin.math.ln(v.scale / scale) / kotlin.math.ln(2.0))
+                }
+                return c
+            }
+            return views.map { it to cost(it) }
+                .sortedWith(compareBy<Pair<View, Double>>({ it.second }, { if (it.first.pageNo == preferredPage) 0 else 1 }, { it.first.pageNo }, { it.first.imageNo }))
+                .map { it.first }
+        }
     }
 }

@@ -130,6 +130,11 @@ class KpmBridgeInstrumentedTest {
                 put(f); flip()
             }
             assertEquals(0, KpmBridge.matchPlanar(s, frame, out))
+            // Matched against the preview alone, through the image-set matcher (built, then cached).
+            val ex = FloatArray(KpmBridge.MATCH_EX_OUTPUT_FLOATS)
+            repeat(2) { assertEquals(0, KpmBridge.matchPlanarImages(s, frame.duplicate(), intArrayOf(0), intArrayOf(1), ex, null)) }
+            // An image the session does not hold matches nothing.
+            assertEquals(-1, KpmBridge.matchPlanarImages(s, frame.duplicate(), intArrayOf(0), intArrayOf(9), ex, null))
         } finally {
             KpmBridge.destroySession(s)
         }
