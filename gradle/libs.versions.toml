@@ -4,6 +4,9 @@
 [versions]
 agp = "9.4.1"
 coreKtx = "1.19.1"
+# :testapp only (the on-device test bench; not published).
+camerax = "1.6.1"
+activity = "1.13.0"
 onnxruntime = "1.30.0"
 # Exception: LiteRT stays on the 1.x classic Interpreter + GPU delegate line, because litert 2.x
 # removes org.tensorflow.lite.Delegate (an API break for DepthRuntime's GPU delegate). Do not mix
@@ -19,6 +22,10 @@ jdk = "21"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-activity = { group = "androidx.activity", name = "activity-ktx", version.ref = "activity" }
+androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
+androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
+androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
 # OpenCV from Maven Central (Java + native libopencv_java5.so); used by :reloc only.
 opencv = { group = "org.opencv", name = "opencv", version.ref = "opencv" }
 onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
@@ -31,3 +38,4 @@ androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version
 
 [plugins]
 android-library = { id = "com.android.library", version.ref = "agp" }
+android-application = { id = "com.android.application", version.ref = "agp" }
