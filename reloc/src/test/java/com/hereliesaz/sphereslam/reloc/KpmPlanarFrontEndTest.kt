@@ -30,17 +30,21 @@ class KpmPlanarFrontEndTest {
         val calls = mutableListOf<Call>()
         var answer: (pageNo: Int) -> KpmMatcherBackend.Solve? = { solve(0) }
         var closed = false
+        val references = mutableListOf<Triple<Int, Int, Int>>() // width, height, luma bytes
+        var lastLuma: ByteArray? = null
 
         override fun addReference(
             luma: ByteBuffer, width: Int, height: Int, referenceWidthUnits: Float,
             physicallyMetric: Boolean, pageNo: Int, canonicalFromPage: FloatArray,
         ): PhotosphereTrackingSession.RegisteredPage {
+            references += Triple(width, height, luma.remaining())
             val dpi = SphereSlamPoseMath.dpiForReferenceWidth(width, referenceWidthUnits)
             return PhotosphereTrackingSession.RegisteredPage(pageNo, 100, SphereSlamPoseMath.pageGeometry(width, height, dpi), physicallyMetric)
         }
 
         override fun match(luma: ByteBuffer, timestampNs: Long, pageNo: Int, maxCorrespondences: Int): KpmMatcherBackend.Solve? {
             calls += Call(pageNo, maxCorrespondences, luma.remaining())
+            lastLuma = ByteArray(luma.remaining()).also { luma.duplicate().get(it) }
             return answer(pageNo)
         }
 
@@ -244,6 +248,15 @@ class KpmPlanarFrontEndTest {
         assertEquals(VisualMatchMethod.KPM_RECTIFIED, r.method)
         val call = backend!!.calls.single()
         assertEquals(mk.width * mk.height, call.lumaBytes)
+        // KPM saw the virtual view rendered from the full-resolution frame, not its downscaled copy.
+        val expectedView = ObliqueRectifier.warp(
+            frameBytes, k.width, k.height, fe.factor, mk.width, mk.height,
+            ObliqueRectifier.plan(truth.first, truth.second, km, 30f, centre)!!, ByteBuffer.allocateDirect(mk.width * mk.height),
+        ).let { b -> ByteArray(b.remaining()).also { b.get(it) } }
+        // (Within a level: the front end's plan comes from the float canonical round trip.)
+        val seen = backend!!.lastLuma!!
+        val off = expectedView.indices.count { kotlin.math.abs((expectedView[it].toInt() and 0xff) - (seen[it].toInt() and 0xff)) > 2 }
+        assertEquals(0, off)
         assertTrue(call.maxCorrespondences >= KpmMatchSpeedConfig().maxCorrespondences)
         assertTrue(r.reprojectionError < 0.01f)
         // Flow is seeded in full-frame pixels of the real (not the virtual) image.
@@ -272,6 +285,25 @@ class KpmPlanarFrontEndTest {
         backend!!.answer = { null }
         assertNull(fe.match(input(0, canonicalView(truth, centre))))
         assertEquals(1, backend!!.calls.size)
+    }
+
+    @Test
+    fun `a reference far larger than the matched frame is registered from a copy, same page geometry`() {
+        val fe = frontEnd()
+        val big = ByteBuffer.allocateDirect(4000 * 3000)
+        val r = fe.addPage(big, 4000, 3000, 2f, true, 0, RigidMath.identity())
+        // 3 × the 320 px matcher long side.
+        assertEquals(Triple(960, 720, 960 * 720), backend!!.references.single())
+        assertEquals(2f, r.geometry.widthMeters, 1e-5f)
+        assertEquals(1.5f, r.geometry.heightMeters, 1e-5f)
+
+        val asGiven = frontEnd(KpmMatchSpeedConfig(maxReferenceScale = 0f))
+        asGiven.addPage(ByteBuffer.allocateDirect(4000 * 3000), 4000, 3000, 2f, true, 0, RigidMath.identity())
+        assertEquals(Triple(4000, 3000, 4000 * 3000), backend!!.references.single())
+        // Already small enough: untouched.
+        val small = frontEnd()
+        small.addPage(ByteBuffer.allocateDirect(800 * 600), 800, 600, 1f, false, 0, RigidMath.identity())
+        assertEquals(Triple(800, 600, 800 * 600), backend!!.references.single())
     }
 
     @Test

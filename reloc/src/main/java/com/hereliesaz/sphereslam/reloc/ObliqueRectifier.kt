@@ -128,35 +128,62 @@ internal object ObliqueRectifier {
     }
 
     /**
-     * Render the virtual image: every [width] × [height] pixel of [dst] samples [src] (the real matcher
-     * image, tightly packed) at its [Plan.realFromVirtual] image, bilinearly; outside the real frame
-     * it is mid-grey (no hard border for the detector to fire on).
+     * Render the virtual image: every [width] × [height] (matcher-size) pixel of [dst] samples [src] at
+     * its [Plan.realFromVirtual] image, bilinearly; outside the real frame it is mid-grey (no hard
+     * border for the detector to fire on).
+     *
+     * [src] is the real frame at [srcScale] × the matcher's resolution ([srcWidth] × [srcHeight],
+     * tightly packed): sampling the full frame rather than its downscaled copy keeps the detail the
+     * foreshortened side of the wall is short of. A matcher pixel `x` is the frame pixel
+     * `(x + ½)·srcScale − ½` (the box-downscale convention of `KpmMatchScale`), and each virtual pixel
+     * averages srcScale × srcScale sub-samples so the uncompressed direction does not alias.
      */
-    fun warp(src: ByteArray, width: Int, height: Int, plan: Plan, dst: ByteBuffer): ByteBuffer {
-        require(src.size >= width * height && dst.capacity() >= width * height)
+    fun warp(
+        src: ByteArray,
+        srcWidth: Int,
+        srcHeight: Int,
+        srcScale: Int,
+        width: Int,
+        height: Int,
+        plan: Plan,
+        dst: ByteBuffer,
+    ): ByteBuffer {
+        require(srcScale >= 1 && src.size >= srcWidth * srcHeight && dst.capacity() >= width * height)
+        require(srcWidth >= 2 && srcHeight >= 2)
         val h = plan.realFromVirtual
+        val n = srcScale
+        val maxX = (srcWidth - 1).toDouble()
+        val maxY = (srcHeight - 1).toDouble()
         dst.clear()
         for (v in 0 until height) {
             for (u in 0 until width) {
-                val w = h[6] * u + h[7] * v + h[8]
-                var value = 128
-                if (w > 1e-12) {
-                    val x = (h[0] * u + h[1] * v + h[2]) / w
-                    val y = (h[3] * u + h[4] * v + h[5]) / w
-                    if (x >= 0 && y >= 0 && x <= width - 1 && y <= height - 1) {
-                        val x0 = floor(x).toInt().coerceAtMost(width - 2)
-                        val y0 = floor(y).toInt().coerceAtMost(height - 2)
+                var sum = 0.0
+                var inside = 0
+                for (sj in 0 until n) {
+                    val vv = v + (sj + 0.5) / n - 0.5
+                    for (si in 0 until n) {
+                        val uu = u + (si + 0.5) / n - 0.5
+                        val w = h[6] * uu + h[7] * vv + h[8]
+                        if (w <= 1e-12) continue
+                        val x = ((h[0] * uu + h[1] * vv + h[2]) / w + 0.5) * n - 0.5
+                        val y = ((h[3] * uu + h[4] * vv + h[5]) / w + 0.5) * n - 0.5
+                        if (x < 0 || y < 0 || x > maxX || y > maxY) continue
+                        val x0 = floor(x).toInt().coerceAtMost(srcWidth - 2)
+                        val y0 = floor(y).toInt().coerceAtMost(srcHeight - 2)
                         val fx = x - x0
                         val fy = y - y0
-                        val i = y0 * width + x0
+                        val i = y0 * srcWidth + x0
                         val a = src[i].toInt() and 0xff
                         val b = src[i + 1].toInt() and 0xff
-                        val c = src[i + width].toInt() and 0xff
-                        val d = src[i + width + 1].toInt() and 0xff
-                        value = ((a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy + 0.5).toInt()
+                        val c = src[i + srcWidth].toInt() and 0xff
+                        val d = src[i + srcWidth + 1].toInt() and 0xff
+                        sum += (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy
+                        inside++
                     }
                 }
-                dst.put(value.toByte())
+                // Sub-samples off the frame count as mid-grey, so the frame's edge stays soft.
+                val value = if (inside == 0) 128 else ((sum + 128.0 * (n * n - inside)) / (n * n) + 0.5).toInt()
+                dst.put(value.coerceIn(0, 255).toByte())
             }
         }
         dst.flip()

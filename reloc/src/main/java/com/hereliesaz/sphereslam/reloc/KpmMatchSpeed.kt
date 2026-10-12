@@ -35,7 +35,11 @@ import kotlin.math.sqrt
  * 4. **Oblique rectification** ([obliqueRectificationDeg]): when the predicted view of the wall is
  *    at least this oblique, the full solve matches a virtual frontal re-rendering of the frame instead
  *    (`ObliqueRectifier`) — KPM does not match strong foreshortening — and solves the real camera from
- *    the correspondences mapped back to real pixels. It replaces that frame's direct solve.
+ *    the correspondences mapped back to real pixels. It replaces that frame's direct solve. The
+ *    virtual view is rendered from the full-resolution frame, not its downscaled copy.
+ * 5. **Reference scale** ([maxReferenceScale]): a reference much larger than the matched frame (a
+ *    full-resolution camera still against a 320 × 240 match) puts the wall outside KPM's scale range;
+ *    pages are registered from a copy whose long side is at most this many matcher long sides.
  *
  * Flow tracking needs the OpenCV Java native library loaded by the host (as [Relocalizer] does); when
  * it is not, flow tracking switches itself off and every frame takes the full KPM path.
@@ -56,6 +60,9 @@ import kotlin.math.sqrt
  * @property focusWindowMs focused matching only within this long of the last full-solve lock, ms.
  * @property obliqueRectificationDeg rectify the full solve when the predicted view is at least this
  *   oblique (angle between the optical axis and the wall normal), degrees; 0 disables.
+ * @property maxReferenceScale register a reference whose long side exceeds this many times the matched
+ *   image's long side from an area-downscaled copy of that size (page geometry in millimetres is
+ *   unchanged); 0 registers references as given.
  */
 @ExperimentalSphereSlamRelocApi
 data class KpmMatchSpeedConfig(
@@ -72,6 +79,7 @@ data class KpmMatchSpeedConfig(
     val focusedPageMatching: Boolean = true,
     val focusWindowMs: Long = 1_000L,
     val obliqueRectificationDeg: Float = 30f,
+    val maxReferenceScale: Float = 3f,
 ) {
     init {
         require(matchDownscale >= 1)
@@ -83,6 +91,7 @@ data class KpmMatchSpeedConfig(
         require(maxFlowRmsErrorPx.isFinite() && maxFlowRmsErrorPx > 0f)
         require(maxCorrespondences >= 0)
         require(obliqueRectificationDeg.isFinite() && obliqueRectificationDeg >= 0f && obliqueRectificationDeg < 89f)
+        require(maxReferenceScale == 0f || (maxReferenceScale.isFinite() && maxReferenceScale >= 1f))
     }
 
     companion object {
@@ -163,6 +172,43 @@ internal object KpmMatchScale {
      * pixels²: a residual of `d` downscaled pixels spans `d · factor` frame pixels.
      */
     fun errorToFramePixelsSq(meanSquaredErrorPx: Float, factor: Int): Float = meanSquaredErrorPx * factor * factor
+
+    /**
+     * Area downscale of tightly packed [src] (`width × height`) to `dstWidth × dstHeight` (each no
+     * larger): every output pixel averages the source pixels its footprint covers, so the result spans
+     * the same extent as [src]. Returns a new direct buffer ready for reading.
+     */
+    fun resampleArea(src: ByteArray, width: Int, height: Int, dstWidth: Int, dstHeight: Int): ByteBuffer {
+        require(src.size >= width * height && dstWidth in 1..width && dstHeight in 1..height)
+        val sx = width.toDouble() / dstWidth
+        val sy = height.toDouble() / dstHeight
+        val dst = ByteBuffer.allocateDirect(dstWidth * dstHeight)
+        for (y in 0 until dstHeight) {
+            val y0 = (y * sy).toInt()
+            val y1 = maxOf(y0 + 1, minOf(height, ((y + 1) * sy).toInt()))
+            for (x in 0 until dstWidth) {
+                val x0 = (x * sx).toInt()
+                val x1 = maxOf(x0 + 1, minOf(width, ((x + 1) * sx).toInt()))
+                var sum = 0
+                for (yy in y0 until y1) {
+                    val row = yy * width
+                    for (xx in x0 until x1) sum += src[row + xx].toInt() and 0xFF
+                }
+                val area = (y1 - y0) * (x1 - x0)
+                dst.put(((sum + area / 2) / area).toByte())
+            }
+        }
+        dst.flip()
+        return dst
+    }
+
+    /** The size a `width × height` reference is registered at: long side ≤ [maxLongSide], aspect kept. */
+    fun referenceSize(width: Int, height: Int, maxLongSide: Int): Pair<Int, Int> {
+        val long = maxOf(width, height)
+        if (maxLongSide <= 0 || long <= maxLongSide) return width to height
+        val s = maxLongSide.toDouble() / long
+        return maxOf(1, Math.round(width * s).toInt()) to maxOf(1, Math.round(height * s).toInt())
+    }
 
     /**
      * Box-filter downscale of tightly packed [src] (`width × height`) by [factor] into [dst]

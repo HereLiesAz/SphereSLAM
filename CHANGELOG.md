@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Oblique rectification reads the full frame.** The virtual frontal view was rendered from the
+  half-resolution matcher image, so the foreshortened side of the wall — the side short of pixels —
+  lost half of what the camera had. It is now rendered from the full-resolution frame, 2 × 2
+  sub-samples per virtual pixel; the matcher image is no longer downscaled on rectified frames.
+- **Reference scale.** A full-resolution reference (e.g. a 4000 × 3000 still) against a 320 × 240
+  match put the wall at ~1/12 scale, outside KPM's range. `KpmPlanarFrontEnd.addPage` now registers a
+  reference whose long side exceeds `KpmMatchSpeedConfig.maxReferenceScale` (default 3) × the
+  matched image's long side from an area-downscaled copy of that size (960 px at the defaults). Page
+  geometry in millimetres is unchanged; 0 restores registration as given.
 - **Extreme perspectives.** KPM is not affine-invariant: past ~45° off the wall's normal the page
   stopped matching, where ARCore's tracking kept the artwork warped onto the wall. When the
   predicted view is at least `KpmMatchSpeedConfig.obliqueRectificationDeg` (default 30°, 0 disables)
