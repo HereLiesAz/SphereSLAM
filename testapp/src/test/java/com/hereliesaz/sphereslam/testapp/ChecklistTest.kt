@@ -22,7 +22,7 @@ class ChecklistTest {
     @Test
     fun `a floor capture that locks passes the floor check, not the wall one`() {
         val c = Checklist()
-        c.onCapture(1_000L, -82f)
+        c.onCapture(1_000L, -82f, "lock_floor")
         c.observe(sample(3_000L, "LOCKED", "KPM", "KPM_FULL"))
         assertEquals(Status.PASS, c["lock_floor"].status)
         assertEquals(Status.UNTESTED, c["lock_wall"].status)
@@ -32,7 +32,7 @@ class ChecklistTest {
     @Test
     fun `no lock within 30 s fails the capture's check`() {
         val c = Checklist()
-        c.onCapture(0L, 5f)
+        c.onCapture(0L, 5f, "lock_wall")
         c.observe(sample(31_000L, "INITIALIZING"))
         assertEquals(Status.FAIL, c["lock_wall"].status)
     }

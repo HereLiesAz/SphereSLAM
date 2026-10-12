@@ -4,8 +4,9 @@ import kotlin.math.abs
 
 /*
  * The device checklist. Most checks grade themselves from live telemetry ([Sample]s and session
- * events); the visual ones ([Check.manual]) take the tester's verdict. Pure Kotlin, no Android, so
- * every grading rule is unit-tested on the JVM.
+ * events); the visual ones ([Check.manual]) take the tester's verdict. [Checklist.progress] says how
+ * far an undecided check has got, for the guided run ([Guide]). Pure Kotlin, no Android, so every
+ * grading rule is unit-tested on the JVM.
  */
 
 enum class Status { UNTESTED, PASS, FAIL, SKIPPED }
@@ -49,6 +50,7 @@ data class Sample(
  */
 class Checklist {
     val checks: List<Check> = listOf(
+        Check("layout_clear", "Every control clears the system bars and display cutout", "Automatic at start."),
         Check("attitude_sensor", "Rotation-vector sensor delivers reliable samples", "Open the app; wave the phone in a figure-8 if it says unreliable."),
         Check("lens_correction", "Camera delivers a distortion-corrected stream", "Automatic at camera start."),
         Check("lock_wall", "Locks a wall target within 30 s", "Point at a textured wall, tap Capture, keep it in view."),
@@ -92,7 +94,31 @@ class Checklist {
         set(id, status, evidence)
     }
 
+    /** Returns [ids] to UNTESTED and forgets what their grading had accumulated (the tester's Retry). */
+    fun reset(ids: Collection<String>) {
+        for (id in ids) {
+            val c = byId.getValue(id)
+            if (c.status != Status.UNTESTED || c.evidence.isNotEmpty()) {
+                c.status = Status.UNTESTED
+                c.evidence = ""
+                changes++
+            }
+            when (id) {
+                "match_speed" -> matchTimes.clear()
+                "rectified" -> rectifiedCount = 0
+                "pole_attitude" -> { poleSamples = 0; maxPoleError = 0f }
+                "pole_facing" -> { stillStartMs = Long.MIN_VALUE; stillFacing.clear(); stillHeading.clear() }
+                "bridge" -> bridgeStartMs = Long.MIN_VALUE
+                "lock_wall", "lock_floor", "lock_ceiling" -> if (captureCheck == id) captureCheck = null
+            }
+        }
+    }
+
     // --- events ---------------------------------------------------------------------------------
+
+    /** [clear] when no control overlaps a system bar or the display cutout; [evidence] gives the measurements. */
+    fun onLayout(clear: Boolean, evidence: String) =
+        set("layout_clear", if (clear) Status.PASS else Status.FAIL, evidence)
 
     fun onAttitude(available: Boolean, reliable: Boolean) {
         when {
@@ -111,15 +137,49 @@ class Checklist {
     private var captureCheck: String? = null
     private var captureElevation = 0f
 
-    /** A target was captured at [elevationDeg]. */
-    fun onCapture(timeMs: Long, elevationDeg: Float?) {
+    /** A target was captured at [elevationDeg] for [checkId] (`lock_wall`, `lock_floor` or `lock_ceiling`). */
+    fun onCapture(timeMs: Long, elevationDeg: Float?, checkId: String) {
+        require(checkId in LOCK_CHECKS) { checkId }
         captureMs = timeMs
         captureElevation = elevationDeg ?: 0f
-        captureCheck = when {
-            elevationDeg == null -> "lock_wall"
-            elevationDeg <= -POLE_TARGET_DEG -> "lock_floor"
-            elevationDeg >= POLE_TARGET_DEG -> "lock_ceiling"
-            abs(elevationDeg) <= WALL_TARGET_DEG -> "lock_wall"
+        captureCheck = checkId
+    }
+
+    // --- progress -------------------------------------------------------------------------------
+
+    /** The latest sample's tracking state, or null before the first frame. */
+    val trackingState: String? get() = lastState
+
+    /** Milliseconds since the last KPM pose (the target was last seen), or null if it never was. */
+    fun msSinceTargetSeen(nowMs: Long): Long? = if (lastKpmMs == Long.MIN_VALUE) null else nowMs - lastKpmMs
+
+    /** How far an undecided check has got, in the tester's words; null when there is nothing to show. */
+    fun progress(id: String, nowMs: Long): String? {
+        if (byId.getValue(id).status != Status.UNTESTED) return null
+        return when (id) {
+            "lock_wall", "lock_floor", "lock_ceiling" ->
+                if (captureCheck == id) "Locking… ${(nowMs - captureMs) / 1000} s of ${LOCK_TIMEOUT_MS / 1000} s (${lastState ?: "starting"})"
+                else "Waiting for Capture"
+            "match_speed" -> "${matchTimes.size} of $MATCH_SAMPLES tracked frames" +
+                (if (matchTimes.isNotEmpty()) ", median ${"%.1f".format(matchTimes.sorted()[matchTimes.size / 2])} ms" else "")
+            "flow_used" -> if (lastState == "LOCKED") "Locked; waiting for a flow-tracked frame" else "Waiting for a lock"
+            "rectified" -> "$rectifiedCount of 3 steep-angle matches"
+            "bridge" -> when (lastState) {
+                "LOCKED" -> "Locked. Cover the lens now"
+                "IMU_BRIDGE" -> "Bridging on the gyro. Uncover the lens"
+                else -> "Waiting for a lock (${lastState ?: "starting"})"
+            }
+            "off_wall" -> if (everLocked) "Waiting for a pose without the target" else "Lock a target first"
+            "relock_after_away" -> msSinceTargetSeen(nowMs)?.let { away ->
+                if (away < AWAY_MS) "Away ${away / 1000} s of ${AWAY_MS / 1000} s" else "Away long enough. Point back at the target"
+            } ?: "Lock a target first"
+            "map_solved" -> "Waiting for the first lock"
+            "atlas_growth" -> "Waiting for a new atlas page"
+            "tile_fixes" -> "Waiting for a tile fix"
+            "pole_attitude" -> "$poleSamples of $POLE_SAMPLES samples at the pole"
+            "pole_facing" -> if (stillStartMs == Long.MIN_VALUE) "Hold still, pointing straight down"
+                else "Still for ${"%.1f".format((nowMs - stillStartMs) / 1000f)} s of ${STILL_WINDOW_MS / 1000} s"
+            "attitude_sensor" -> "Waiting for reliable rotation samples"
             else -> null
         }
     }
@@ -236,6 +296,7 @@ class Checklist {
     }
 
     companion object {
+        val LOCK_CHECKS = setOf("lock_wall", "lock_floor", "lock_ceiling")
         const val LOCK_TIMEOUT_MS = 30_000L
         const val AWAY_MS = 10_000L
         const val MATCH_SAMPLES = 100
