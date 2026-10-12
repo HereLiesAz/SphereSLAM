@@ -390,15 +390,26 @@ result.pose?.let { draw(it.cameraFromMap, it.projection) }
   sub-samples per pixel), not its downscaled copy, so the foreshortened side of the wall keeps the
   detail the frame has.
 - **Previews** — the reference rendered as the camera may see it, so a lost camera relocks without a
-  prediction of where it is: tilted in perspective (30°, 45°, 60°, 70° each way about both axes;
-  `previewTiltsDeg`), at `previewScales` (½, ¼: far off; 2×: its centre, close up) and turned every
-  `previewRotationStepDeg` (45°). Rendered with OpenCV's `warpPerspective` (area-shrunk first when
-  small), each preview joins KPM as another image of its page, every feature's millimetres mapped back
-  through the warp, so a match against one solves the real pose directly. They live in a second KPM
-  session built off the camera thread (KPM checks every image on every query; the live matcher stays
-  fast) and are searched on every other full solve once direct solves have missed
-  `previewSearchAfterMisses` (2) times running. 0 builds none. `previewAtlasPages` previews grown
-  atlas pages too; `previewMaxFeatures` (600) caps each.
+  prediction of where it is. Where from is the **anticipation resolution**
+  (`AnticipationResolution(distance, latitude, longitude)`, default 3 × 8 × 3). Picture a
+  half-sphere over the target, the target at its core and the square-on view at its pole: `latitude`
+  meridians run from the pole to the equator, cut by `longitude` circles (3 circles: 22.5°, 45°,
+  67.5° from square-on); a preview is taken at the pole and at every cut, aimed at the core, none on
+  the equator (edge-on). `distance` nests that many half-spheres from `anticipationNearestWidths`
+  (0.5) to `anticipationFarthestWidths` (4) target widths, evenly in log distance. Previews per page:
+  `distance × (1 + latitude × longitude)` (75), plus turned square-on views every
+  `previewRotationStepDeg` (45°) on the middle half-sphere. Each is what this phone's camera (the
+  matched image's intrinsics) would see from there, cropped to its frame: a near view large, partly
+  out of frame and strongly foreshortened, a far one small (dropped under 64 px). Rendered with
+  OpenCV's `warpPerspective` (area-shrunk first when small), each joins KPM as another image of its
+  page, every feature's millimetres mapped back through the warp, so a match against one solves the
+  real pose directly. They live in a second KPM session built off the camera thread, 4 at a time,
+  each batch indexed once (`KpmBridge.reindex`), farthest first (each next view the one farthest from
+  those built: the angle between optical axes, a quarter of the full rotation for turns, 30° per
+  doubling of size), so a partial build already spreads over the views. KPM checks every image on
+  every query, so the live matcher stays fast; the previews are searched on every other full solve
+  once direct solves have missed `previewSearchAfterMisses` (2) times running. 0 builds none.
+  `previewAtlasPages` previews grown atlas pages too; `previewMaxFeatures` (600) caps each.
   The search is guided by the phone's rotation, which stays right while the target is lost (only the
   position goes stale). Assuming the target is in view, the rotation fixes how the camera sees the
   page: how steep, from which side, how turned. Each preview records the camera rotation it stands
@@ -407,6 +418,19 @@ result.pose?.let { draw(it.cameraFromMap, it.projection) }
   distance predicts). Each missed search adds as many again until every preview is searched; a lock
   starts over. The native side matches a chosen image set with a matcher built from those images'
   features (`KpmBridge.matchPlanarImages`), keeping the 8 most recently used.
+  **Throttling** is the library's. The resolution is a maximum
+  (`PhotosphereTrackingSession.anticipationResolution`, starting at the config's); the session cuts
+  it by battery, heat and its own load, weighted by `AnticipationThrottle(battery, heat, compute)`
+  (default ½, 1, ½; `anticipationThrottle`). Pressures, each 0–1: battery its discharge (none while
+  charging), heat Android's thermal headroom (full where Android throttles), compute the session's
+  frame time from half the camera's frame interval (none) to all of it (full); they come from
+  `devicePressure` (`AndroidDevicePressure(context)`; none when unset, so only load throttles). The
+  cuts multiply into a factor; every 2 s the session searches the largest subset of the maximum that
+  fits (`AnticipationDecimation`: every other meridian, circle or half-sphere, and so on, each step a
+  subset of the one before), lower at once, higher after it has fitted for 10 s. Throttling builds
+  nothing and lifting it reuses what was built; a new maximum builds only its new views.
+  `PhotosphereTrackingSession.anticipation` reports the effective resolution and the pressures. All
+  three settings apply from the next frame, without a restart.
 - **Reference scale** — a reference far larger than the matched frame (a full-resolution camera
   still against a 320 × 240 match) leaves the wall outside KPM's scale range. A page is registered
   from an area-downscaled copy whose long side is at most `maxReferenceScale` (3) × the matched
@@ -498,10 +522,12 @@ monocular-depth points, and rotation / 6-DoF tile fixes adopted in the window.
 frames rectified from the prediction (`maxObliq` its steepest, degrees) and from a guessed view, how
 many of those KPM matched and how many gave a pose, and predictions too frontal to rectify.
 
-`previews{images features builtMs ready tried guided solved}` (with previews): reference images the
-preview session holds (pages and previews), their features, the last build's time, whether it is
-searchable, and the lost-frame searches made (`guided` of them over only the previews nearest the
-predicted view) and solved in the window (`method=KPM_PREVIEW`).
+`previews{images features builtMs ready anticipation factor battery heat compute searchable tried
+guided solved}` (with previews): reference images the preview session holds (pages and previews),
+their features, the time spent building, whether it is searchable; the effective and maximum
+anticipation resolution (`3d×4lat×1lon/3d×8lat×3lon`), the throttle factor and the pressures behind
+it; the previews it allows; and the lost-frame searches made (`guided` of them over only the previews
+nearest the predicted view) and solved in the window (`method=KPM_PREVIEW`).
 
 `attempts` frames ran the matcher and `matched` of them got a pose back (before gating). `error` is
 the mean squared reprojection error in pixels² of the image the pose was solved in (KPM: the

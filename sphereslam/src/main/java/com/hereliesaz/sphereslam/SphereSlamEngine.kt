@@ -185,6 +185,12 @@ interface SphereSlamEngine : AutoCloseable {
      */
     fun addPageView(luma: ByteBuffer, width: Int, height: Int, view: PlanarPageView): Int = -1
 
+    /**
+     * Re-indexes every page and view added so far: ends a batch of [addPageView] calls made with
+     * [PlanarPageView.reindex] false. Returns 0, or < 0 when the engine cannot (the default) or failed.
+     */
+    fun reindex(): Int = -1
+
     fun match(luma: ByteBuffer): PlanarMatch?
 
     /** [match] with a [PlanarMatchRequest]; the default ignores the request and matches all pages. */

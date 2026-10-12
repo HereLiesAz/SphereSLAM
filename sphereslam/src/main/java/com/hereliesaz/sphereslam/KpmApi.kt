@@ -17,6 +17,9 @@ internal interface KpmApi {
     ): Int
     fun match(session: Long, luma: ByteBuffer, out: FloatArray): Int
 
+    /** [KpmBridge.reindex]; the default cannot (−1). */
+    fun reindex(session: Long): Int = -1
+
     /** [KpmBridge.addPlanarPageView]; the default does not support previews. */
     fun addPageView(
         session: Long,
@@ -84,6 +87,8 @@ internal object NativeKpmApi : KpmApi {
 
     override fun match(session: Long, luma: ByteBuffer, out: FloatArray): Int =
         KpmBridge.matchPlanar(session, luma, out)
+
+    override fun reindex(session: Long): Int = KpmBridge.reindex(session)
 
     override fun addPageView(session: Long, luma: ByteBuffer, width: Int, height: Int, view: PlanarPageView): Int =
         KpmBridge.addPlanarPageView(

@@ -80,6 +80,12 @@ class PhotosphereTrackingSessionTest {
             verdicts += accepted
         }
 
+        val anticipations = mutableListOf<AnticipationStatus>()
+
+        override fun setAnticipation(status: AnticipationStatus) {
+            anticipations += status
+        }
+
         override fun fork(): PlanarFrontEnd? {
             val register = forkInto ?: return null
             check(!closed) { "forked a closed matcher" }
@@ -222,6 +228,33 @@ class PhotosphereTrackingSessionTest {
         assertNull(r.pose)
         assertTrue(fronts.isEmpty())
         assertFalse(s.hasReference)
+    }
+
+    @Test
+    fun `the anticipation reaches the matcher every frame, throttled by device pressure`() {
+        val start = AnticipationResolution(2, 4, 1)
+        val s = session(PhotosphereTrackingSession.Config(matchSpeed = KpmMatchSpeedConfig(anticipationResolution = start)))
+        assertEquals(start, s.anticipationResolution)
+        s.onFrame(frame(yaw(0.0)))
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame(yaw(0.0)))
+        assertEquals(start, fronts.single().anticipations.last().max)
+        assertEquals(AnticipationDecimation.FULL, fronts.single().anticipations.last().decimation)
+        // A new maximum applies on the next frame.
+        s.anticipationResolution = AnticipationResolution(1, 8, 2)
+        s.onFrame(frame(yaw(0.0)))
+        assertEquals(AnticipationResolution(1, 8, 2), fronts.single().anticipations.last().max)
+        // A hot device throttles it to nothing at the next reading.
+        s.devicePressure = DevicePressureSource { DevicePressure(battery = 0f, heat = 1f) }
+        advance(2_500)
+        s.onFrame(frame(yaw(0.0)))
+        assertEquals(AnticipationDecimation.NONE, fronts.single().anticipations.last().decimation)
+        assertEquals(1f, s.anticipation.heatPressure)
+        // Heat ignored: full again once relief has held.
+        s.anticipationThrottle = AnticipationThrottle(battery = 0f, heat = 0f, compute = 0f)
+        advance(2_500); s.onFrame(frame(yaw(0.0)))
+        advance(10_500); s.onFrame(frame(yaw(0.0)))
+        assertEquals(AnticipationDecimation.FULL, s.anticipation.decimation)
     }
 
     @Test

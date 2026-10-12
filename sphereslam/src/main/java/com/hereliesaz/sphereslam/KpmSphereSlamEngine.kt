@@ -46,6 +46,8 @@ internal class KpmSphereSlamEngine private constructor(
         return result
     }
 
+    override fun reindex(): Int = api.reindex(requireOpen())
+
     override fun addPageView(luma: ByteBuffer, width: Int, height: Int, view: PlanarPageView): Int {
         val active = requireOpen()
         return api.addPageView(active, packedView(luma, width, height), width, height, view)

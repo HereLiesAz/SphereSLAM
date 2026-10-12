@@ -1,5 +1,6 @@
 package com.hereliesaz.sphereslam.reloc
 
+import com.hereliesaz.sphereslam.camera.CameraIntrinsics
 import org.opencv.core.CvType
 import org.opencv.core.Mat
 import org.opencv.core.Size
@@ -13,11 +14,16 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * Previews of a reference image as the camera may see it: tilted in perspective, smaller or larger,
- * and turned in its plane. KPM learns each one as another image of the same page
- * ([com.hereliesaz.sphereslam.SphereSlamStandaloneSession.addReferenceView]), its features mapped back
- * to the page through [Preview.pageFromView], so a frame that looks like a preview matches without
- * any prediction of where the camera is.
+ * Previews of a reference image as the camera may see it, placed on a half-sphere over the target
+ * ([AnticipationResolution]): the target at the core, the square-on view at the pole, meridians
+ * (latitude) from the pole to the equator cut by circles (longitude), one preview at the pole and at
+ * every cut, each from a camera aimed at the core; nested half-spheres for the distances. Each is
+ * what this phone's camera ([CameraIntrinsics] of the matched image) would see from there, cropped to
+ * its frame: near ones large and strongly foreshortened, far ones small. Turned copies of the
+ * square-on view are an extra ([KpmMatchSpeedConfig.previewRotationStepDeg]). KPM learns each preview
+ * as another image of the same page ([com.hereliesaz.sphereslam.SphereSlamStandaloneSession.addReferenceView]),
+ * its features mapped back to the page through [Preview.pageFromView], so a frame that looks like a
+ * preview matches without any prediction of where the camera is.
  *
  * Pixels use the pixel-centre convention (pixel `i` at coordinate `i`) on both sides, as OpenCV's
  * warps and KPM's feature coordinates do.
@@ -25,8 +31,8 @@ import kotlin.math.sqrt
 @ExperimentalSphereSlamRelocApi
 internal object ReferencePreviews {
 
-    /** What a preview shows. */
-    enum class Kind { TILT, SIZE, ROTATION }
+    /** What a preview shows: the square-on view (a pole), a view from a cut, or a turned pole. */
+    enum class Kind { POLE, CUT, TURN }
 
     /**
      * One preview: [luma] ([width] × [height], tightly packed) and [pageFromView], the row-major 3×3
@@ -45,10 +51,18 @@ internal object ReferencePreviews {
     )
 
     /**
+     * Where a plan sits on the half-spheres of an [AnticipationResolution]: half-sphere [shell] (0
+     * nearest), circle [circle] (0 the pole, 1 nearest it), meridian [meridian] (0 to the page's right,
+     * counterclockwise), and [turn] (0 none; turned poles count from 1).
+     */
+    data class Site(val shell: Int, val circle: Int, val meridian: Int, val turn: Int = 0)
+
+    /**
      * A preview to render: the reference-to-preview homography and the preview's size, and the view it
      * stands for: [cameraFromPage], the row-major rotation from the page's millimetre frame (x right,
      * y up, z out of the wall) to a camera's (x right, y down, z forward) that would see the page as
-     * the preview shows it, and [scale], the preview's pixels per reference pixel.
+     * the preview shows it, and [scale], the preview's pixels per reference pixel at the target's
+     * centre. [label] names the view (the same view always gets the same label); [site] places it.
      */
     class Plan(
         val kind: Kind,
@@ -58,6 +72,7 @@ internal object ReferencePreviews {
         val height: Int,
         val cameraFromPage: DoubleArray = FRONTAL,
         val scale: Double = 1.0,
+        val site: Site = Site(0, 0, 0),
     )
 
     /** The page seen square-on, upright: page y up is image y down, the wall faces the camera. */
@@ -67,78 +82,168 @@ internal object ReferencePreviews {
     const val MIN_SIDE_PX = 64
 
     /**
-     * The previews of a [width] × [height] reference for [config]: for each tilt in
-     * [KpmMatchSpeedConfig.previewTiltsDeg], both ways about the vertical axis (walking along the wall)
-     * and the horizontal one (looking up or down it); each size in [KpmMatchSpeedConfig.previewScales]
-     * (below 1 the whole image shrunk, above 1 its centre enlarged to the same size); and in-plane turns
-     * every [KpmMatchSpeedConfig.previewRotationStepDeg]. Each family on its own: FREAK's scale pyramid
-     * and orientation cover the gaps between them.
+     * The half-spheres' radii in target widths: [count] steps from [nearest] to [farthest], evenly
+     * spaced in log distance (each the same factor farther); one is their geometric mean.
      */
-    fun plans(width: Int, height: Int, config: KpmMatchSpeedConfig): List<Plan> {
+    fun shells(count: Int, nearest: Float, farthest: Float): List<Double> = when {
+        count <= 0 -> emptyList()
+        count == 1 -> listOf(sqrt(nearest.toDouble() * farthest))
+        else -> List(count) { i -> nearest * Math.pow(farthest.toDouble() / nearest, i / (count - 1.0)) }
+    }
+
+    /**
+     * The previews of a [width] × [height] reference (the whole target) at [resolution], as [camera]
+     * (the matched image's intrinsics) would see them: on each half-sphere, the pole and every cut of
+     * a meridian by a circle (the equator, edge-on, excluded), then turned poles on the middle
+     * half-sphere every [KpmMatchSpeedConfig.previewRotationStepDeg]. Views that leave the target
+     * too small to match (under [MIN_SIDE_PX]) are dropped.
+     */
+    fun plans(width: Int, height: Int, camera: CameraIntrinsics, config: KpmMatchSpeedConfig, resolution: AnticipationResolution): List<Plan> {
         val out = ArrayList<Plan>()
-        val longSide = max(width, height).toDouble()
-        for (tilt in config.previewTiltsDeg) for (sign in listOf(1, -1)) for (vertical in listOf(true, false)) {
-            val a = sign * tilt.toDouble()
-            val h = tiltHomography(width, height, a, vertical)
-            fitted(h, width, height, longSide)?.let { (fit, w, hh) ->
-                // The plane turned by the tilt's rotation, in the reference's pixel frame (FRONTAL).
-                val r = mul(tiltRotation(a, vertical), FRONTAL)
-                out += Plan(Kind.TILT, "tilt ${if (vertical) "side" else "up/down"} ${a.toInt()}°", fit, w, hh, r)
-            }
-        }
-        for (s in config.previewScales) {
-            if (s == 1f) continue
-            if (s < 1f) {
-                val w = Math.round(width * s); val hh = Math.round(height * s)
-                if (min(w, hh) < MIN_SIDE_PX) continue
-                // x' = s·(x + ½) − ½ keeps pixel centres aligned with the box-shrunk image.
-                val off = 0.5 * s - 0.5
-                out += Plan(Kind.SIZE, "size ×$s", doubleArrayOf(s.toDouble(), 0.0, off, 0.0, s.toDouble(), off, 0.0, 0.0, 1.0), w, hh, scale = s.toDouble())
-            } else {
-                // The centre 1/s of the reference, enlarged to the reference's size.
-                val cx = (width - 1) / 2.0; val cy = (height - 1) / 2.0
-                out += Plan(Kind.SIZE, "size ×$s", doubleArrayOf(s.toDouble(), 0.0, cx - s * cx, 0.0, s.toDouble(), cy - s * cy, 0.0, 0.0, 1.0), width, height, scale = s.toDouble())
+        val radii = shells(resolution.distance, config.anticipationNearestWidths, config.anticipationFarthestWidths)
+        for ((si, r) in radii.withIndex()) {
+            view(width, height, camera, r, 0.0, 0.0, 0.0, Kind.POLE, Site(si, 0, 0))?.let { out += it }
+            for (c in 1..resolution.longitude) {
+                val tilt = c * 90.0 / (resolution.longitude + 1)
+                for (m in 0 until resolution.latitude) {
+                    val azimuth = m * 360.0 / resolution.latitude
+                    view(width, height, camera, r, tilt, azimuth, 0.0, Kind.CUT, Site(si, c, m))?.let { out += it }
+                }
             }
         }
         val step = config.previewRotationStepDeg
-        if (step > 0f) {
+        if (step > 0f && radii.isNotEmpty()) {
+            val mid = radii.size / 2
             var a = step.toDouble()
+            var n = 1
             while (a < 360.0 - 1e-6) {
-                val r = Math.toRadians(a)
-                val cx = (width - 1) / 2.0; val cy = (height - 1) / 2.0
-                val c = cos(r); val sn = sin(r)
-                val rot = doubleArrayOf(c, -sn, cx - c * cx + sn * cy, sn, c, cy - sn * cx - c * cy, 0.0, 0.0, 1.0)
-                // Turning the image turns the camera about its optical axis by the same angle.
-                val roll = doubleArrayOf(c, -sn, 0.0, sn, c, 0.0, 0.0, 0.0, 1.0)
-                fitted(rot, width, height, null)?.let { (fit, w, hh) -> out += Plan(Kind.ROTATION, "turn ${a.toInt()}°", fit, w, hh, mul(roll, FRONTAL)) }
+                view(width, height, camera, radii[mid], 0.0, 0.0, a, Kind.TURN, Site(mid, 0, 0, n))?.let { out += it }
                 a += step
+                n++
             }
         }
         return out
     }
 
     /**
-     * The view of the reference from a camera turned [angleDeg] off its normal about its vertical
-     * ([vertical]) or horizontal axis, looking at its centre from about one image-width away (a phone
-     * camera's field of view).
+     * The view from [distance] target widths, [tiltDeg] from the pole toward [azimuthDeg] (0 the
+     * page's right, counterclockwise), aimed at the core, upright (image up toward the page's up) and
+     * then turned [rollDeg] about its optical axis; cropped to [camera]'s frame and to the target.
+     * Null when too little of the target is in view.
      */
-    fun tiltHomography(width: Int, height: Int, angleDeg: Double, vertical: Boolean): DoubleArray {
-        val f = max(width, height) * 1.2
+    fun view(
+        width: Int,
+        height: Int,
+        camera: CameraIntrinsics,
+        distance: Double,
+        tiltDeg: Double,
+        azimuthDeg: Double,
+        rollDeg: Double,
+        kind: Kind,
+        site: Site,
+    ): Plan? {
+        val t = Math.toRadians(tiltDeg); val a = Math.toRadians(azimuthDeg)
+        val dir = doubleArrayOf(sin(t) * cos(a), sin(t) * sin(a), cos(t))
+        val centre = DoubleArray(3) { distance * dir[it] }
+        val r = mul(roll(rollDeg), lookingFrom(dir))
+        // Reference pixel (x, y) → page point in target widths (y up, z = 0) → camera → pixel.
         val cx = (width - 1) / 2.0; val cy = (height - 1) / 2.0
-        // Rotation of the plane about the axis through its centre, then seen from distance f.
-        val r = tiltRotation(angleDeg, vertical)
-        // Plane point (X, Y, 0) with X = x − cx, Y = y − cy → camera (R·P + (0, 0, f)) → pixel.
-        val k = doubleArrayOf(f, 0.0, cx, 0.0, f, cy, 0.0, 0.0, 1.0)
-        val m = doubleArrayOf(r[0], r[1], 0.0, r[3], r[4], 0.0, r[6], r[7], f)
-        val center = doubleArrayOf(1.0, 0.0, -cx, 0.0, 1.0, -cy, 0.0, 0.0, 1.0)
-        return mul(mul(k, m), center)
+        val w = width.toDouble()
+        fun cameraPoint(x: Double, y: Double): DoubleArray {
+            val p = doubleArrayOf((x - cx) / w - centre[0], -(y - cy) / w - centre[1], -centre[2])
+            return DoubleArray(3) { i -> r[i * 3] * p[0] + r[i * 3 + 1] * p[1] + r[i * 3 + 2] * p[2] }
+        }
+        // Homography columns: d/dx, d/dy and the camera point of reference pixel (0, 0).
+        val o = cameraPoint(0.0, 0.0); val dx = cameraPoint(1.0, 0.0); val dy = cameraPoint(0.0, 1.0)
+        val m = doubleArrayOf(
+            dx[0] - o[0], dy[0] - o[0], o[0],
+            dx[1] - o[1], dy[1] - o[1], o[1],
+            dx[2] - o[2], dy[2] - o[2], o[2],
+        )
+        val k = doubleArrayOf(camera.fx.toDouble(), 0.0, camera.cx.toDouble(), 0.0, camera.fy.toDouble(), camera.cy.toDouble(), 0.0, 0.0, 1.0)
+        val h = mul(k, m)
+        // The target's outline in camera space, clipped to the space in front of the camera, projected.
+        val corners = listOf(-0.5 to -0.5, width - 0.5 to -0.5, width - 0.5 to height - 0.5, -0.5 to height - 0.5)
+            .map { (x, y) -> cameraPoint(x, y) }
+        val outline = clipInFront(corners).map { p ->
+            doubleArrayOf(camera.fx * p[0] / p[2] + camera.cx, camera.fy * p[1] / p[2] + camera.cy)
+        }
+        if (outline.size < 3) return null
+        val minX = max(0.0, floor(outline.minOf { it[0] })); val maxX = min(camera.width - 1.0, ceil(outline.maxOf { it[0] }))
+        val minY = max(0.0, floor(outline.minOf { it[1] })); val maxY = min(camera.height - 1.0, ceil(outline.maxOf { it[1] }))
+        val pw = (maxX - minX).toInt() + 1; val ph = (maxY - minY).toInt() + 1
+        if (min(pw, ph) < MIN_SIDE_PX) return null
+        val shift = doubleArrayOf(1.0, 0.0, -minX, 0.0, 1.0, -minY, 0.0, 0.0, 1.0)
+        val label = when (kind) {
+            Kind.POLE -> "pole ${fmt(distance)}w"
+            Kind.CUT -> "${fmt(distance)}w tilt ${fmt(tiltDeg)}° toward ${fmt(azimuthDeg)}°"
+            Kind.TURN -> "pole ${fmt(distance)}w turn ${fmt(rollDeg)}°"
+        }
+        return Plan(kind, label, mul(shift, h), pw, ph, r, camera.fx / (distance * w), site)
     }
 
-    /** The tilt preview's turn of the plane, about its vertical ([vertical]) or horizontal axis. */
-    private fun tiltRotation(angleDeg: Double, vertical: Boolean): DoubleArray {
-        val a = Math.toRadians(angleDeg)
+    private fun fmt(v: Double) = String.format(java.util.Locale.ROOT, "%.4g", v).trimEnd('0').trimEnd('.')
+
+    /**
+     * Rotation (page frame → camera) of a camera at [dir] from the core (page frame, unit), aimed at
+     * the core, its image up toward the page's up. Square-on it is [FRONTAL].
+     */
+    private fun lookingFrom(dir: DoubleArray): DoubleArray {
+        val f = DoubleArray(3) { -dir[it] }
+        // Image x ⟂ the forward axis and the page's up; image y down (completes a right-handed frame).
+        val up = doubleArrayOf(0.0, 1.0, 0.0)
+        var x = cross(f, up)
+        val n = sqrt(x.sumOf { it * it })
+        x = if (n < 1e-9) doubleArrayOf(1.0, 0.0, 0.0) else DoubleArray(3) { x[it] / n }
+        val y = cross(f, x)
+        return doubleArrayOf(x[0], x[1], x[2], y[0], y[1], y[2], f[0], f[1], f[2])
+    }
+
+    /** A turn of the camera by [deg] about its optical axis (the image turns the same way). */
+    private fun roll(deg: Double): DoubleArray {
+        val a = Math.toRadians(deg)
         val c = cos(a); val s = sin(a)
-        return if (vertical) doubleArrayOf(c, 0.0, s, 0.0, 1.0, 0.0, -s, 0.0, c) else doubleArrayOf(1.0, 0.0, 0.0, 0.0, c, -s, 0.0, s, c)
+        return doubleArrayOf(c, -s, 0.0, s, c, 0.0, 0.0, 0.0, 1.0)
+    }
+
+    private fun cross(a: DoubleArray, b: DoubleArray) =
+        doubleArrayOf(a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+    /** [polygon] (camera space) clipped to z ≥ a small near distance (Sutherland–Hodgman, one plane). */
+    private fun clipInFront(polygon: List<DoubleArray>): List<DoubleArray> {
+        val near = 1e-3
+        val out = ArrayList<DoubleArray>()
+        for (i in polygon.indices) {
+            val a = polygon[i]; val b = polygon[(i + 1) % polygon.size]
+            val aIn = a[2] >= near; val bIn = b[2] >= near
+            if (aIn) out += a
+            if (aIn != bIn) {
+                val t = (near - a[2]) / (b[2] - a[2])
+                out += DoubleArray(3) { a[it] + t * (b[it] - a[it]) }
+            }
+        }
+        return out
+    }
+
+    /**
+     * [plans] reordered so every prefix covers the views evenly: starting from the reference itself
+     * (square-on, full size), each next plan is the one farthest from all chosen so far, by [cost]
+     * (`PreviewMatcher.priorityCost`). Ties keep [plans]' order.
+     */
+    fun prioritized(plans: List<Plan>, cost: (Plan, DoubleArray, Double) -> Double): List<Plan> {
+        val left = plans.toMutableList()
+        val chosen = ArrayList<Plan>(plans.size)
+        // Distance from each remaining plan to its nearest chosen view (the reference to start).
+        val nearest = left.map { cost(it, FRONTAL, 1.0) }.toMutableList()
+        while (left.isNotEmpty()) {
+            var best = 0
+            for (i in 1 until left.size) if (nearest[i] > nearest[best] + 1e-9) best = i
+            val pick = left.removeAt(best)
+            nearest.removeAt(best)
+            chosen += pick
+            for (i in left.indices) nearest[i] = minOf(nearest[i], cost(left[i], pick.cameraFromPage, pick.scale))
+        }
+        return chosen
     }
 
     /**
@@ -152,32 +257,12 @@ internal object ReferencePreviews {
         return Math.toDegrees(kotlin.math.acos(((trace - 1.0) / 2.0).coerceIn(-1.0, 1.0)))
     }
 
-    /**
-     * [h] moved and scaled so the reference's corners land inside a preview with no wasted border:
-     * scaled to [longSide] when given (the tilt previews stay the reference's size), else unscaled.
-     * Null when a corner falls behind the virtual camera or the preview would be too small.
-     */
-    private fun fitted(h: DoubleArray, width: Int, height: Int, longSide: Double?): Triple<DoubleArray, Int, Int>? {
-        val corners = listOf(0.0 to 0.0, width - 1.0 to 0.0, width - 1.0 to height - 1.0, 0.0 to height - 1.0).map { (x, y) ->
-            apply(h, x, y) ?: return null
-        }
-        val minX = corners.minOf { it[0] }; val maxX = corners.maxOf { it[0] }
-        val minY = corners.minOf { it[1] }; val maxY = corners.maxOf { it[1] }
-        val spanX = maxX - minX; val spanY = maxY - minY
-        if (spanX <= 1 || spanY <= 1) return null
-        val s = longSide?.let { (it - 1) / max(spanX, spanY) } ?: 1.0
-        val w = ceil(spanX * s).toInt() + 1
-        val hh = ceil(spanY * s).toInt() + 1
-        if (min(w, hh) < MIN_SIDE_PX) return null
-        val t = doubleArrayOf(s, 0.0, -minX * s, 0.0, s, -minY * s, 0.0, 0.0, 1.0)
-        return Triple(mul(t, h), w, hh)
-    }
-
     /** Renders [plan] from the reference ([luma], [width] × [height]). */
     fun render(luma: ByteArray, width: Int, height: Int, plan: Plan, useOpenCv: Boolean = true): Preview {
         val pageFromView = invert(plan.viewFromPage) ?: error("singular preview homography")
         val pixels = (if (useOpenCv) renderOpenCv(luma, width, height, plan) else null)
             ?: renderKotlin(luma, width, height, plan, pageFromView)
+        maskBehind(pixels, plan.width, plan.height, pageFromView, luma)
         return Preview(plan.kind, plan.label, pixels, plan.width, plan.height, FloatArray(9) { pageFromView[it].toFloat() }, plan.cameraFromPage, plan.scale)
     }
 
@@ -236,6 +321,20 @@ internal object ReferencePreviews {
             out[v * plan.width + u] = (value + 0.5).toInt().coerceIn(0, 255).toByte()
         }
         return out
+    }
+
+    /**
+     * Fills the preview's pixels whose rays miss the target's plane (above its horizon in a steep,
+     * near view) with the reference's mean level: the warp would mirror the plane into them. The
+     * test is linear in the pixel, so a preview whose corners all see the plane has none.
+     */
+    private fun maskBehind(pixels: ByteArray, w: Int, h: Int, pageFromView: DoubleArray, reference: ByteArray) {
+        fun sees(u: Int, v: Int) = pageFromView[6] * u + pageFromView[7] * v + pageFromView[8] > 0
+        if (sees(0, 0) && sees(w - 1, 0) && sees(0, h - 1) && sees(w - 1, h - 1)) return
+        var sum = 0L
+        for (b in reference) sum += b.toInt() and 0xff
+        val mean = (sum / reference.size.coerceAtLeast(1)).toInt().toByte()
+        for (v in 0 until h) for (u in 0 until w) if (!sees(u, v)) pixels[v * w + u] = mean
     }
 
     /** How much the preview shrinks the reference at its most compressed corner (≤ 1 shrinks). */
