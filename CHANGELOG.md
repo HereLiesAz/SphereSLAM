@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Extreme perspectives.** KPM is not affine-invariant: past ~45° off the wall's normal the page
+  stopped matching, where ARCore's tracking kept the artwork warped onto the wall. When the
+  predicted view is at least `KpmMatchSpeedConfig.obliqueRectificationDeg` (default 30°, 0 disables)
+  oblique, the full solve now matches a virtual frontal re-rendering of the frame (`ObliqueRectifier`:
+  plane homography from the predicted pose) and solves the real pose from the correspondences mapped
+  back — exact regardless of prediction error. Such poses report `VisualMatchMethod.KPM_RECTIFIED`
+  and seed flow tracking as usual.
 - **Fixes from an audit of the full-sphere / scan-progress release.**
   - `CoverageGlowRenderer`: in `OUTLINE`, scan progress now draws before any tile is current (it
     returned early with no boundary to glow along — exactly the first sweep).

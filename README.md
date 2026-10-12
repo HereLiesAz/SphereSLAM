@@ -371,8 +371,15 @@ result.pose?.let { draw(it.cameraFromMap, it.projection) }
 - **Focused pages** — with a multi-page atlas and a recent lock, the page under the gyro-predicted
   optical axis is matched alone first. If it misses, that frame reports no match and the next full
   solve searches all pages (a frame never pays for both).
+- **Oblique rectification** — KPM's features do not survive strong foreshortening, so a wall seen
+  from the side never matched. When the predicted view is at least `obliqueRectificationDeg` (30°)
+  off the wall's normal, the full solve warps the frame to a virtual camera facing the wall square-on
+  (same intrinsics, same distance, aimed where the real optical axis meets it), matches that, maps
+  the correspondences back to real pixels and solves the real pose from them by RANSAC PnP. The
+  result is exact however rough the prediction: the prediction only chooses the warp. Needs a
+  predicted pose (gyro bridge or last lock); 0 disables.
 
-`TrackedPose.matchMethod` (`VisualMatchMethod.KPM_FULL`, `KPM_FOCUSED`, `FLOW`) says which path
+`TrackedPose.matchMethod` (`VisualMatchMethod.KPM_FULL`, `KPM_FOCUSED`, `FLOW`, `KPM_RECTIFIED`) says which path
 produced a pose. `KpmMatchSpeedConfig.FULL_KPM_EVERY_FRAME` restores a full-resolution all-pages
 solve on every frame.
 

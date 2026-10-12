@@ -32,6 +32,10 @@ import kotlin.math.sqrt
  *    recent, the full solve first matches only the page under the predicted optical axis (or the last
  *    locked page). When that page misses, the frame reports no match and the next full solve
  *    matches all pages — a frame never pays for both a focused and an all-pages solve.
+ * 4. **Oblique rectification** ([obliqueRectificationDeg]): when the predicted view of the wall is
+ *    at least this oblique, the full solve matches a virtual frontal re-rendering of the frame instead
+ *    (`ObliqueRectifier`) — KPM does not match strong foreshortening — and solves the real camera from
+ *    the correspondences mapped back to real pixels. It replaces that frame's direct solve.
  *
  * Flow tracking needs the OpenCV Java native library loaded by the host (as [Relocalizer] does); when
  * it is not, flow tracking switches itself off and every frame takes the full KPM path.
@@ -50,6 +54,8 @@ import kotlin.math.sqrt
  * @property maxCorrespondences most KPM inlier correspondences requested per full solve to seed flow.
  * @property focusedPageMatching try the predicted page alone before matching the whole atlas.
  * @property focusWindowMs focused matching only within this long of the last full-solve lock, ms.
+ * @property obliqueRectificationDeg rectify the full solve when the predicted view is at least this
+ *   oblique (angle between the optical axis and the wall normal), degrees; 0 disables.
  */
 @ExperimentalSphereSlamRelocApi
 data class KpmMatchSpeedConfig(
@@ -65,6 +71,7 @@ data class KpmMatchSpeedConfig(
     val maxCorrespondences: Int = 200,
     val focusedPageMatching: Boolean = true,
     val focusWindowMs: Long = 1_000L,
+    val obliqueRectificationDeg: Float = 30f,
 ) {
     init {
         require(matchDownscale >= 1)
@@ -75,6 +82,7 @@ data class KpmMatchSpeedConfig(
         require(minFlowInlierFraction in 0f..1f)
         require(maxFlowRmsErrorPx.isFinite() && maxFlowRmsErrorPx > 0f)
         require(maxCorrespondences >= 0)
+        require(obliqueRectificationDeg.isFinite() && obliqueRectificationDeg >= 0f && obliqueRectificationDeg < 89f)
     }
 
     companion object {
@@ -98,6 +106,9 @@ enum class VisualMatchMethod {
 
     /** Frame-to-frame flow tracking + PnP since the last KPM solve ([KpmMatchSpeedConfig.flowTracking]). */
     FLOW,
+
+    /** KPM on a virtual frontal view of an oblique wall ([KpmMatchSpeedConfig.obliqueRectificationDeg]). */
+    KPM_RECTIFIED,
 }
 
 /**
