@@ -1,8 +1,6 @@
 package com.hereliesaz.sphereslam
 
 import com.hereliesaz.sphereslam.math.RigidMath
-import kotlin.math.cos
-import kotlin.math.sin
 
 /**
  * Coordinate contract for a planar (KPM) fingerprint placed inside a [PhotosphereMap], ported from
@@ -12,9 +10,10 @@ import kotlin.math.sin
  * along the wall, +Y image-up, +Z the wall normal toward the camera; units as
  * [SphereSlamPoseMath.PageGeometry] (metres when physically metric).
  *
- * Map frame (GL style): +X right across the wall-facing arc, +Y up, and the wall heading's centre
- * direction points toward −Z. The fingerprint never becomes the world origin: precision poses are
- * rebased into the map with [cameraFromMap].
+ * Map frame (GL style, [AttitudeBasis]): gravity-level and north-referenced — +X east, +Y up, −Z
+ * north — the same frame the reloc tracking session's base map uses, so a provisional placement and
+ * the base photosphere agree at every elevation, floors and ceilings included. The fingerprint never
+ * becomes the world origin: precision poses are rebased into the map with [cameraFromMap].
  */
 object PhotosphereFingerprintFrame {
     private const val MILLIMETERS_PER_INCH = 25.4f
@@ -80,32 +79,39 @@ object PhotosphereFingerprintFrame {
     }
 
     /**
-     * Column-major map-from-fingerprint for a wall patch at [azimuthDeltaDeg] (relative to the map's
-     * wall heading, clockwise positive) and [elevationDeg] (up positive), at [rangeUnits] (metres only
-     * when the photosphere has metric range, else a normalized radius). Fingerprint +Z faces the
-     * camera; +Y is the tangent of increasing elevation; +X = Y × Z.
+     * Column-major map-from-fingerprint for a patch seen along [rayEnu] (East-North-Up, any length)
+     * at [rangeUnits] (metres only when the photosphere has metric range, else a normalized radius).
+     * Fingerprint +Z faces back along the ray; +Y is the camera's image-up [imageUpEnu] made
+     * perpendicular to it (the rectified reference's up IS the camera image's up); +X = Y × Z.
+     *
+     * @return null when [rayEnu] is degenerate or parallel to [imageUpEnu].
      */
-    fun mapFromFingerprint(azimuthDeltaDeg: Float, elevationDeg: Float, rangeUnits: Float): FloatArray {
-        require(azimuthDeltaDeg.isFinite() && elevationDeg.isFinite())
+    fun mapFromFingerprint(rayEnu: DoubleArray, imageUpEnu: DoubleArray, rangeUnits: Float): FloatArray? {
+        require(rayEnu.size == 3 && imageUpEnu.size == 3)
         require(rangeUnits.isFinite() && rangeUnits > 0f)
-        val az = Math.toRadians(azimuthDeltaDeg.toDouble())
-        val el = Math.toRadians(elevationDeg.toDouble())
-        val sinAz = sin(az).toFloat(); val cosAz = cos(az).toFloat()
-        val sinEl = sin(el).toFloat(); val cosEl = cos(el).toFloat()
-        val forward = floatArrayOf(sinAz * cosEl, sinEl, -cosAz * cosEl)
-        val z = floatArrayOf(-forward[0], -forward[1], -forward[2])
-        val y = floatArrayOf(-sinAz * sinEl, cosEl, cosAz * sinEl)
-        val x = floatArrayOf(
-            y[1] * z[2] - y[2] * z[1],
-            y[2] * z[0] - y[0] * z[2],
-            y[0] * z[1] - y[1] * z[0],
-        )
+        val forward = AttitudeBasis.normalized(AttitudeBasis.enuToMap(rayEnu)) ?: return null
+        val z = doubleArrayOf(-forward[0], -forward[1], -forward[2])
+        val upMap = AttitudeBasis.enuToMap(imageUpEnu)
+        val along = AttitudeBasis.dot(upMap, z)
+        val y = AttitudeBasis.normalized(DoubleArray(3) { upMap[it] - along * z[it] }) ?: return null
+        val x = AttitudeBasis.cross(y, z)
         return floatArrayOf(
-            x[0], x[1], x[2], 0f,
-            y[0], y[1], y[2], 0f,
-            z[0], z[1], z[2], 0f,
-            forward[0] * rangeUnits, forward[1] * rangeUnits, forward[2] * rangeUnits, 1f,
+            x[0].toFloat(), x[1].toFloat(), x[2].toFloat(), 0f,
+            y[0].toFloat(), y[1].toFloat(), y[2].toFloat(), 0f,
+            z[0].toFloat(), z[1].toFloat(), z[2].toFloat(), 0f,
+            (forward[0] * rangeUnits).toFloat(), (forward[1] * rangeUnits).toFloat(), (forward[2] * rangeUnits).toFloat(), 1f,
         )
+    }
+
+    /**
+     * [mapFromFingerprint] for an unrolled camera looking straight at the patch: at [azimuthDeg]
+     * (compass bearing, 0 = north, clockwise) and [elevationDeg] (up positive), +Y along the tangent of
+     * increasing elevation (at the zenith/nadir: the image-up of a camera facing [azimuthDeg]).
+     */
+    fun mapFromFingerprint(azimuthDeg: Float, elevationDeg: Float, rangeUnits: Float): FloatArray {
+        require(azimuthDeg.isFinite() && elevationDeg.isFinite())
+        val basis = AttitudeBasis.basis(azimuthDeg, elevationDeg, 0f)!!
+        return mapFromFingerprint(basis.forward, basis.up, rangeUnits)!!
     }
 
     /** `camera_from_map = camera_from_fingerprint · inverse(map_from_fingerprint)` (column-major, rigid). */
@@ -119,32 +125,35 @@ object PhotosphereFingerprintFrame {
      * Place a fingerprint captured at normalized image point ([nx], [ny]) (top-left origin, `[0, 1]`;
      * the image centre by default) of [view] into [map].
      *
-     * The tapped pixel's absolute direction comes from [PhotosphereMap.directionOfPixel], which
-     * accounts for camera roll (GraffitiXR added `atan` pixel offsets straight onto heading and
-     * elevation, which is wrong for any rolled camera and approximate off-axis). The tile's metric
-     * range is used when known; otherwise the placement is at unit radius and non-metric.
+     * The tapped pixel's ray and the reference's orientation both come from the view's full camera
+     * rotation ([AttitudeBasis]): the ray through heading, elevation AND roll
+     * ([PhotosphereMap.directionOfPixel]), the page's +Y from the camera's image-up. Nothing depends on
+     * the compass heading alone, so a fingerprint captured looking straight down at a floor is placed
+     * as repeatably as one on a wall. The tile's metric range is used when known; otherwise the
+     * placement is at unit radius and non-metric.
      *
      * @return null when the map has no wall heading or the direction is outside its lattice.
      */
     fun placement(map: PhotosphereMap, view: PhotosphereView, nx: Float = 0.5f, ny: Float = 0.5f): Placement? {
-        val wallHeading = map.snapshot().wallHeadingDeg ?: return null
+        if (!map.hasWallHeading()) return null
         val u = nx.coerceIn(0f, 1f) * view.width
         val v = ny.coerceIn(0f, 1f) * view.height
-        val dir = PhotosphereMap.directionOfPixel(
+        val ray = PhotosphereMap.rayOfPixel(
             u, v, view.fx, view.fy, view.cx, view.cy,
             view.headingDeg, view.elevationDeg, view.rollDeg,
         ) ?: return null
-        val elevation = dir.elevationDeg.coerceIn(-89f, 89f)
-        val tileId = map.tileAt(dir.azimuthDeg, elevation) ?: return null
+        val basis = AttitudeBasis.basis(view.headingDeg, view.elevationDeg, view.rollDeg) ?: return null
+        val dir = AttitudeBasis.direction(ray)
+        val tileId = map.tileAt(dir.azimuthDeg, dir.elevationDeg) ?: return null
         val tile = map.tile(tileId) ?: return null
         val metricRange = tile.rangeMeters?.takeIf { it.isFinite() && it > 0f }
         val range = metricRange ?: 1f
         return Placement(
-            mapFromFingerprint = mapFromFingerprint(SphereGrid.signedDelta(dir.azimuthDeg, wallHeading), elevation, range),
+            mapFromFingerprint = mapFromFingerprint(ray, basis.up, range) ?: return null,
             referenceWidthUnits = (range * view.width / view.fx).coerceAtLeast(1e-4f),
             physicallyMetric = metricRange != null,
             tileId = tileId,
-            direction = SphereCoverage.Direction(dir.azimuthDeg, elevation),
+            direction = dir,
         )
     }
 }

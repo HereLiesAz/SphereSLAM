@@ -56,12 +56,15 @@ class CameraAttitudeProviderTest {
     }
 
     @Test
-    fun `near-vertical axis has no meaningful heading`() {
-        assertNull(
-            CameraAttitudeProvider.cameraAxisHeadingElevation(
-                matrixWithCameraAxis(east = 0f, north = 0f, up = 1f),
-            ),
-        )
+    fun `a vertical axis still decodes, to an elevation of 90 and a consistent heading`() {
+        // Device face-down: body z points down, so the rear camera (body −z) looks at the zenith.
+        val r = floatArrayOf(1f, 0f, 0f, 0f, -1f, 0f, 0f, 0f, -1f)
+        val (heading, elevation) = CameraAttitudeProvider.cameraAxisHeadingElevation(r)!!
+        assertEquals(90f, elevation, 1e-4f)
+        // Heading and roll of the same matrix rebuild it (PoleRobustnessTest covers this in depth).
+        val roll = CameraAttitudeProvider.cameraRollDegrees(r)!!
+        val m = CoverageGlowProjection.worldFromCamera(heading, elevation, roll)!!
+        for (i in 0..8) assertEquals(r[i], m[i], 1e-4f)
     }
 
     @Test

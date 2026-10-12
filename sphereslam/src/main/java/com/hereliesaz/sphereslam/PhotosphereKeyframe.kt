@@ -113,9 +113,9 @@ class PhotosphereKeyframeStore(
      * roll) advances every tile's scan progress ([PhotosphereMap.recordView]); tiles that reach
      * completion become current.
      *
-     * @return what changed, or null when the keyframe's direction lies outside the map's lattice (or
-     *   its axis is straight up/down, where heading is undefined) — then nothing is stored and the map
-     *   is left unchanged (in particular, the wall heading is not anchored).
+     * @return what changed, or null when the keyframe's direction lies outside the map's lattice —
+     *   then nothing is stored and the map is left unchanged (in particular, the wall heading is not
+     *   anchored).
      */
     fun record(keyframe: PhotosphereKeyframe, nowMs: Long): Recorded? {
         // An anchored map can tell up front whether the axis is addressable; check before recordView
@@ -123,8 +123,8 @@ class PhotosphereKeyframeStore(
         if (map.hasWallHeading() && map.tileAt(keyframe.headingDeg, keyframe.elevationDeg) == null) return null
         val k = keyframe.intrinsics
         val lens = CoverageGlowProjection.Lens.fromIntrinsics(k[0], k[1], k[2], k[3], keyframe.width, keyframe.height)
-        // recordView anchors the map on the first addressable view; an unaddressable one (outside the
-        // lattice, or straight up/down) changes nothing and is not stored.
+        // recordView anchors the map on the first addressable view; one outside the lattice changes
+        // nothing and is not stored.
         val update = map.recordView(
             keyframe.headingDeg, keyframe.elevationDeg, keyframe.rollDeg, lens,
             nowMs = nowMs, representativeOrientation = keyframe.orientationQuaternion,
@@ -154,21 +154,23 @@ class PhotosphereKeyframeStore(
     }
 
     /**
-     * The capture view for the current camera attitude: the current tile's own keyframe when it has
-     * one, otherwise the session intrinsics of [latest] paired with the CURRENT attitude (never
-     * another tile's direction).
+     * The capture view for the current camera attitude: always the CURRENT attitude, with the
+     * intrinsics of the current tile's own keyframe when it has one, else of [latest].
+     *
+     * The stored keyframe's attitude is never substituted: near the zenith/nadir the tile under the
+     * axis is picked by a noise-dominated heading, so its keyframe may have been taken facing any
+     * direction, and projecting a live tap through it would rotate the tap about the pole.
      *
      * @return null without a usable attitude, any keyframe, or usable intrinsics.
      */
     fun view(headingDeg: Float, elevationDeg: Float, rollDeg: Float = 0f): PhotosphereView? {
         if (!headingDeg.isFinite() || !elevationDeg.isFinite() || !rollDeg.isFinite()) return null
-        val tileFrame = map.tileAt(headingDeg, elevationDeg)?.let { frames[it] }
-        val source = tileFrame ?: latest ?: return null
+        val source = map.tileAt(headingDeg, elevationDeg)?.let { frames[it] } ?: latest ?: return null
         val k = source.intrinsics
         return PhotosphereView(
-            headingDeg = tileFrame?.headingDeg ?: headingDeg,
-            elevationDeg = tileFrame?.elevationDeg ?: elevationDeg,
-            rollDeg = tileFrame?.rollDeg ?: rollDeg,
+            headingDeg = headingDeg,
+            elevationDeg = elevationDeg,
+            rollDeg = rollDeg,
             width = source.width,
             height = source.height,
             fx = k[0], fy = k[1], cx = k[2], cy = k[3],

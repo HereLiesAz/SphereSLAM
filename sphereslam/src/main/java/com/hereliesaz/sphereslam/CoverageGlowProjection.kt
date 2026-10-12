@@ -267,29 +267,18 @@ object CoverageGlowProjection {
      * The result is row-major 3×3 whose **columns** are the GL camera axes — x right, y up, z backward
      * (the camera looks down −z) — in East-North-Up world coordinates, so `v_world = M · v_camera`.
      *
-     * @return the rotation, or null for non-finite input or a view axis within ~0.006° of vertical
-     *   (heading and roll are undefined there — use a sensor rotation, [worldFromCamera] of a
-     *   device→world matrix, to look straight up or down).
+     * Defined at every elevation ([AttitudeBasis]); straight up or down it needs the heading and roll
+     * of one sample, as `CameraAttitudeProvider.latestAttitude` gives them.
+     *
+     * @return the rotation, or null for non-finite input.
      */
     fun worldFromCamera(cameraHeadingDeg: Float, cameraElevationDeg: Float, cameraRollDeg: Float = 0f): FloatArray? {
-        if (!(cameraHeadingDeg.isFinite() && cameraElevationDeg.isFinite() && cameraRollDeg.isFinite())) return null
-        val h = Math.toRadians(cameraHeadingDeg.toDouble())
-        val e = Math.toRadians(cameraElevationDeg.toDouble())
-        val fx = cos(e) * sin(h); val fy = cos(e) * cos(h); val fz = sin(e)
-        val rx0 = fy; val ry0 = -fx
-        val rn = kotlin.math.sqrt(rx0 * rx0 + ry0 * ry0)
-        if (rn < 1e-4) return null
-        val r0x = rx0 / rn; val r0y = ry0 / rn
-        // u0 = r0 × f (r0.z = 0)
-        val u0x = r0y * fz; val u0y = -r0x * fz; val u0z = r0x * fy - r0y * fx
-        val roll = Math.toRadians(cameraRollDeg.toDouble())
-        val cr = cos(roll); val sr = sin(roll)
-        val rx = cr * r0x + sr * u0x; val ry = cr * r0y + sr * u0y; val rz = sr * u0z
-        val ux = -sr * r0x + cr * u0x; val uy = -sr * r0y + cr * u0y; val uz = cr * u0z
+        val basis = AttitudeBasis.basis(cameraHeadingDeg, cameraElevationDeg, cameraRollDeg) ?: return null
+        val r = basis.right; val u = basis.up; val f = basis.forward
         return floatArrayOf(
-            rx.toFloat(), ux.toFloat(), (-fx).toFloat(),
-            ry.toFloat(), uy.toFloat(), (-fy).toFloat(),
-            rz.toFloat(), uz.toFloat(), (-fz).toFloat(),
+            r[0].toFloat(), u[0].toFloat(), (-f[0]).toFloat(),
+            r[1].toFloat(), u[1].toFloat(), (-f[1]).toFloat(),
+            r[2].toFloat(), u[2].toFloat(), (-f[2]).toFloat(),
         )
     }
 

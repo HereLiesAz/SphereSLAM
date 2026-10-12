@@ -115,6 +115,8 @@ class SphereSlamSession internal constructor(
      * @param nowElapsedRealtimeNs current realtime clock (ns).
      * @param timestampSource the camera's timestamp source.
      * @param nowMs monotonic millisecond clock.
+     * @param rollDeg image-right axis angle above the horizon, degrees, of the same attitude sample as
+     *   [headingDeg] — it orients the in-view candidate set near a floor or ceiling.
      * @return the pose to draw this frame (column-major 16, camera-from-map), or null to draw nothing.
      */
     fun onFrame(
@@ -126,6 +128,7 @@ class SphereSlamSession internal constructor(
         nowElapsedRealtimeNs: Long,
         timestampSource: CameraTimestampSource,
         nowMs: Long,
+        rollDeg: Float = 0f,
     ): FloatArray? = processFrame(
         evaluate = { candidates -> evaluateFrame(gray, candidates) },
         attitudeQuat = attitudeQuat,
@@ -135,6 +138,7 @@ class SphereSlamSession internal constructor(
         nowElapsedRealtimeNs = nowElapsedRealtimeNs,
         timestampSource = timestampSource,
         nowMs = nowMs,
+        rollDeg = rollDeg,
     )
 
     /** [onFrame] with the native matching step injected — the whole per-frame wiring, testable. */
@@ -147,9 +151,10 @@ class SphereSlamSession internal constructor(
         nowElapsedRealtimeNs: Long,
         timestampSource: CameraTimestampSource,
         nowMs: Long,
+        rollDeg: Float = 0f,
     ): FloatArray? {
         // 1. Which tiles to try: the in-view cone normally, the recency/adjacency relock set when lost.
-        val candidateIds = chooseCandidates(lastState, headingDeg, elevationDeg)
+        val candidateIds = chooseCandidates(lastState, headingDeg, elevationDeg, rollDeg)
         val candidates = LinkedHashMap<TileId, Fingerprint>(candidateIds.size)
         for (id in candidateIds) fingerprints[id]?.let { candidates[id] = it }
 
@@ -191,7 +196,7 @@ class SphereSlamSession internal constructor(
         // coverage. If live-feature detection failed, evaluate() reports neither matches nor misses.
         val confirmed = evaluation?.recognized ?: emptySet()
         val checked = evaluation?.checkedButUnmatched ?: emptySet()
-        val review = reviewLoop.onFrame(headingDeg, elevationDeg, nowMs, confirmed, checked)
+        val review = reviewLoop.onFrame(headingDeg, elevationDeg, nowMs, confirmed, checked, rollDeg)
         glowDirections = review.directionsNeedingUpdate
         coverageFraction = review.coverageFraction
 
@@ -234,11 +239,16 @@ class SphereSlamSession internal constructor(
     }
 
     /** The in-view candidate set, or the relock set when tracking is lost/reacquiring. */
-    internal fun chooseCandidates(state: TrackingState, headingDeg: Float, elevationDeg: Float): List<TileId> =
+    internal fun chooseCandidates(
+        state: TrackingState,
+        headingDeg: Float,
+        elevationDeg: Float,
+        rollDeg: Float = 0f,
+    ): List<TileId> =
         if (reacquiring(state)) {
             photosphere.relockSeeds(relockSeedLimit)
         } else {
-            reviewLoop.candidates(headingDeg, elevationDeg)
+            reviewLoop.candidates(headingDeg, elevationDeg, rollDeg)
         }
 
     companion object {

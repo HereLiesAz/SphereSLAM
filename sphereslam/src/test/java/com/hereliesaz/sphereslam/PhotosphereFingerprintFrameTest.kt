@@ -84,7 +84,7 @@ class PhotosphereFingerprintFrameTest {
     @Test
     fun centerPhotosphereFingerprint_hasExplicitNonIdentityMapTransform() {
         val m = PhotosphereFingerprintFrame.mapFromFingerprint(
-            azimuthDeltaDeg = 0f,
+            azimuthDeg = 0f,
             elevationDeg = 0f,
             rangeUnits = 1f,
         )
@@ -104,7 +104,7 @@ class PhotosphereFingerprintFrameTest {
     @Test
     fun cameraFromMap_removesFingerprintModelTransform() {
         val mapFromFingerprint = PhotosphereFingerprintFrame.mapFromFingerprint(
-            azimuthDeltaDeg = 25f,
+            azimuthDeg = 25f,
             elevationDeg = -10f,
             rangeUnits = 2.5f,
         )
@@ -130,7 +130,7 @@ class PhotosphereFingerprintFrameTest {
     @Test
     fun photosphereFingerprintTransform_isRightHandedAtObliqueDirection() {
         val m = PhotosphereFingerprintFrame.mapFromFingerprint(
-            azimuthDeltaDeg = 30f,
+            azimuthDeg = 30f,
             elevationDeg = 15f,
             rangeUnits = 2f,
         )

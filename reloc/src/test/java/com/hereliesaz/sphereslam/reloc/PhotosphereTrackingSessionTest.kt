@@ -182,13 +182,14 @@ class PhotosphereTrackingSessionTest {
     }
 
     @Test
-    fun `base map is identity at the first attitude then rotation only`() {
+    fun `base map is the absolute attitude, rotation only`() {
         val s = session()
         assertNull(s.onFrame(frame(attitude = null)).baseCameraFromMap)
         val first = s.onFrame(frame(yaw(0.0))).baseCameraFromMap!!
-        assertArrayEquals(RigidMath.identity(), first, 1e-6f)
+        val expected = PhotosphereTrackingSession.absoluteCameraRotation(RotationMath.IDENTITY_3X3, yaw(0.0).quaternion)
+        for (row in 0..2) for (col in 0..2) assertEquals(expected[row * 3 + col], first[col * 4 + row], 1e-6f)
         val turned = s.onFrame(frame(yaw(20.0))).baseCameraFromMap!!
-        assertEquals(20f, RigidMath.rotationAngleDeg(turned), 1e-2f)
+        assertEquals(20f, RigidMath.rotationDeltaDeg(first, turned), 1e-2f)
         assertEquals(0f, RigidMath.translationNorm(turned), 0f)
     }
 
@@ -404,7 +405,7 @@ class PhotosphereTrackingSessionTest {
     fun `a weak reference is a recoverable failure that a new reference clears`() {
         featuresFor = { 3 }
         val s = session()
-        s.onFrame(frame(yaw(0.0))) // defines the base map
+        val base0 = s.onFrame(frame(yaw(0.0))).baseCameraFromMap!!
         s.updatePrecisionLayer(reference)
         val r = s.onFrame(frame(yaw(10.0)))
         assertEquals(TrackingState.FATAL, r.state)
@@ -418,7 +419,7 @@ class PhotosphereTrackingSessionTest {
         val held = s.onFrame(frame(yaw(20.0)))
         assertNull(held.pose)
         assertEquals(TrackingState.FATAL, held.state)
-        assertEquals(20f, RigidMath.rotationAngleDeg(held.baseCameraFromMap!!), 1e-2f)
+        assertEquals(20f, RigidMath.rotationDeltaDeg(base0, held.baseCameraFromMap!!), 1e-2f)
         assertEquals(1, fronts.size) // no rebuild of the same weak reference
         s.updatePrecisionLayer(reference)
         s.onFrame(frame())
@@ -438,7 +439,7 @@ class PhotosphereTrackingSessionTest {
         val locked = s.onFrame(frame(yaw(20.0)))
         assertEquals(TrackingState.LOCKED, locked.state)
         assertNotNull(locked.pose)
-        assertEquals(20f, RigidMath.rotationAngleDeg(locked.baseCameraFromMap!!), 1e-2f) // base map preserved
+        assertEquals(20f, RigidMath.rotationDeltaDeg(base0, locked.baseCameraFromMap!!), 1e-2f) // base map preserved
     }
 
     @Test
@@ -513,6 +514,35 @@ class PhotosphereTrackingSessionTest {
         repeat(2) { s.onFrame(frame(yaw(30.0))) }
         assertEquals(2, rec.solved.size)
         assertNotNull(s.mapFromFingerprint)
+    }
+
+    @Test
+    fun `the first lock refines a host-supplied map that disagrees, and keeps one that agrees`() {
+        fun lockWith(hostMap: (FloatArray) -> FloatArray): Pair<PhotosphereTrackingSession, FloatArray> {
+            fronts.clear(); rec.solved.clear()
+            val s = session()
+            val base = s.onFrame(frame(yaw(15.0))).baseCameraFromMap!!
+            val wall = viewAt(0.2f, 0.1f, 2f)
+            val exact = RigidMath.multiply(RigidMath.rigidInverse(base), wall)
+            s.updatePrecisionLayer(reference, mapFromFingerprint = hostMap(exact))
+            s.onFrame(frame(yaw(15.0)))
+            fronts.single().next = match(wall)
+            repeat(3) { s.onFrame(frame(yaw(15.0))) }
+            return s to exact
+        }
+        // A provisional placement 10° off (e.g. a floor capture's guessed page orientation): replaced.
+        val (off, exact) = lockWith { RigidMath.multiply(it, rotY(10.0)) }
+        assertEquals(1, rec.solved.size)
+        assertArrayEquals(exact, off.mapFromFingerprint!!, 1e-4f)
+        // One within tolerance (a persisted solve, round-tripped): kept, nothing re-published.
+        lockWith { RigidMath.multiply(it, rotY(0.5)) }
+        assertTrue(rec.solved.isEmpty())
+    }
+
+    private fun rotY(deg: Double): FloatArray {
+        val a = Math.toRadians(deg)
+        val c = kotlin.math.cos(a).toFloat(); val sn = kotlin.math.sin(a).toFloat()
+        return floatArrayOf(c, 0f, -sn, 0f, 0f, 1f, 0f, 0f, sn, 0f, c, 0f, 0f, 0f, 0f, 1f)
     }
 
     @Test
@@ -599,18 +629,35 @@ class PhotosphereTrackingSessionTest {
             textured, intrinsics, nowNs, att,
             cameraFromDevice = com.hereliesaz.sphereslam.attitude.DeviceCameraRotation.cameraFromDeviceForDisplayFrame(displayDeg),
         )
-        s.onFrame(f(yaw(0.0), 0))
+        val upright = s.onFrame(f(yaw(0.0), 0)).baseCameraFromMap!!
         // Same device attitude, display turned 90°: the image (camera frame) is rolled by 90°.
         val rolled = s.onFrame(f(yaw(0.0), 90)).baseCameraFromMap!!
         val c90 = com.hereliesaz.sphereslam.attitude.DeviceCameraRotation.cameraFromDeviceForDisplayFrame(90)
-        for (row in 0..2) for (col in 0..2) assertEquals(c90[row * 3 + col], rolled[col * 4 + row], 1e-6f)
-        // Plus a yaw: C_now · ΔR · C_refᵀ.
+        val uprightR = DoubleArray(9) { upright[(it % 3) * 4 + it / 3].toDouble() }
+        for (row in 0..2) for (col in 0..2) {
+            val expected = (0..2).sumOf { k -> c90[row * 3 + k] * uprightR[k * 3 + col] }
+            assertEquals(expected.toFloat(), rolled[col * 4 + row], 1e-6f)
+        }
+        // Plus a yaw: C · R(q)ᵀ · W, absolute.
         val turned = s.onFrame(f(yaw(20.0), 90)).baseCameraFromMap!!
-        val expected = PhotosphereTrackingSession.baseCameraRotation(
-            RotationMath.IDENTITY_3X3, yaw(0.0).quaternion, c90, yaw(20.0).quaternion,
-        )
+        val expected = PhotosphereTrackingSession.absoluteCameraRotation(c90, yaw(20.0).quaternion)
         for (row in 0..2) for (col in 0..2) assertEquals(expected[row * 3 + col], turned[col * 4 + row], 1e-6f)
         assertEquals(0f, RigidMath.translationNorm(turned), 0f)
+    }
+
+    @Test
+    fun `the base map is gravity-level and north-referenced whatever the first frame`() {
+        // Device in its natural orientation looking north at the horizon: device→ENU columns are
+        // x→east, y→up, z→south (+90° about east). That camera IS the map frame (−Z north, +Y up).
+        val half = (Math.sqrt(0.5)).toFloat()
+        val northQ = floatArrayOf(half, 0f, 0f, half)
+        val nadirFirst = session()
+        // Started looking straight down (identity device attitude: device −Z = down).
+        nadirFirst.onFrame(PhotosphereTrackingSession.Frame(textured, intrinsics, nowNs, AttitudeSample(floatArrayOf(0f, 0f, 0f, 1f), nowNs)))
+        val north = nadirFirst.onFrame(
+            PhotosphereTrackingSession.Frame(textured, intrinsics, nowNs, AttitudeSample(northQ, nowNs)),
+        ).baseCameraFromMap!!
+        assertEquals(0f, RigidMath.rotationDeltaDeg(RigidMath.identity(), north), 0.01f)
     }
 
     @Test

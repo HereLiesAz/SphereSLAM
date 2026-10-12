@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- **Floors and ceilings track like walls.** Painting on a horizontal surface puts the camera at the
+  photosphere's nadir or zenith, where the camera-axis heading is sensor noise. Several paths keyed or
+  oriented on it:
+  - The tracking session's base map was the first frame's camera, so a session started looking down
+    put the map's −Z at the floor, a quarter turn from every provisional fingerprint placement (and
+    no two sessions shared a frame). It is now gravity-level and north-referenced (+X east, +Y up,
+    −Z north), the frame `PhotosphereFingerprintFrame` places in. A host-supplied
+    `map_from_fingerprint` is checked against the same-frame solve on the first confirmed lock and
+    replaced when they differ by more than 2° or 5 % of the page distance.
+  - `PhotosphereFingerprintFrame.placement` oriented the page by the tapped azimuth's meridian,
+    ignoring roll, and clamped elevation to ±89°. The page's +Y is now the camera's image-up (the
+    rectified reference's own up), with no clamp: a floor capture lands the same way every time.
+    `mapFromFingerprint(azimuthDeg, …)` takes a compass bearing (it was relative to the wall heading);
+    a vector overload takes the ray and image-up.
+  - `PhotosphereKeyframeStore.view` returned a stored keyframe's attitude for the current tile; at the
+    poles that keyframe may have been taken facing anywhere, rotating the capture tap about the pole.
+    It always returns the live attitude now (intrinsics still from the tile's keyframe).
+  - `PhotosphereMap.tilesInView` ignored roll (new `rollDeg` parameter); `recordView` anchored an
+    unanchored map at the noise-dominated heading — now at the facing azimuth.
+  - `CameraAttitudeProvider` stopped updating inside ~0.006° of vertical, leaving stale values, and
+    published heading, elevation and roll as separate reads. Every sample now decodes (heading from
+    the device top edge straight up/down, roll measured from that heading), and `latestAttitude()`
+    returns all three with the matrix as one snapshot. `worldFromCamera(heading, elevation, roll)` and
+    `directionOfPixel` are defined at every elevation.
+  - New `AttitudeBasis`: the camera basis behind every (heading, elevation, roll) triple,
+    `facingAzimuthDeg` (pole-stable bearing), and the map frame convention. `PoleRobustnessTest`
+    covers floor captures with jitter.
+
 - **`SphereSlamTracker` goes through `SphereSlamEngine`.** The ARCore-side tracker had its own private
   JNI path to `KpmBridge` (session create/destroy, page add/clear, match, direct-buffer handling),
   duplicating the engine's. It now drives a `KpmSphereSlamEngine` on its worker thread, so native KPM

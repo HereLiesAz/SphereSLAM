@@ -52,10 +52,30 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
     /** True when this device has a magnetometer-fused rotation-vector sensor. */
     val isAvailable: Boolean get() = rotationSensor != null
 
-    @Volatile private var latestHeadingDeg: Float? = null
-    @Volatile private var latestElevationDeg: Float? = null
-    @Volatile private var latestRollDeg: Float? = null
-    @Volatile private var latestDeviceToWorld: FloatArray? = null
+    /**
+     * One sample's camera-axis heading, elevation and roll (degrees, as [latestHeadingDegrees],
+     * [latestElevationDegrees], [latestRollDegrees]) and its device→world matrix, decoded together.
+     * Near the zenith/nadir the angles are only meaningful as a set — heading alone is noise there
+     * (see [cameraAxisHeadingElevation]) — so read them from one snapshot, not one getter each.
+     */
+    class Attitude internal constructor(
+        val headingDeg: Float,
+        val elevationDeg: Float,
+        val rollDeg: Float,
+        deviceToWorld: FloatArray,
+    ) {
+        private val matrix = deviceToWorld.copyOf()
+
+        /** Device→world East-North-Up rotation (row-major 3×3, a fresh copy). */
+        val deviceToWorld: FloatArray get() = matrix.copyOf()
+
+        internal fun matrixRef(): FloatArray = matrix
+
+        /** The pole-stable bearing the camera faces ([AttitudeBasis.facingAzimuthDeg]). */
+        val facingAzimuthDeg: Float? get() = AttitudeBasis.facingAzimuthDeg(headingDeg, elevationDeg, rollDeg)
+    }
+
+    @Volatile private var latest: Attitude? = null
     private val samples = AttitudeSampleBuffer()
 
     /**
@@ -73,13 +93,16 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
      * @return latest camera-axis compass heading in degrees `[0, 360)` (0 = north, clockwise), or null
      *   before the first sample, after [stop], or on a device without the sensor.
      */
-    fun latestHeadingDegrees(): Float? = latestHeadingDeg
+    fun latestHeadingDegrees(): Float? = latest?.headingDeg
+
+    /** The latest sample's heading, elevation, roll and matrix as one consistent snapshot, or null. */
+    fun latestAttitude(): Attitude? = latest
 
     /**
      * @return latest camera-axis elevation in degrees `[-90, 90]` (above the horizon positive), or
      *   null in the same cases as [latestHeadingDegrees].
      */
-    fun latestElevationDegrees(): Float? = latestElevationDeg
+    fun latestElevationDegrees(): Float? = latest?.elevationDeg
 
     /**
      * @return latest roll of the device's +x axis (image-right for a rear camera solved in the
@@ -87,10 +110,10 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
      *   cases as [latestHeadingDegrees]. For another image frame use [cameraRollDegrees] with
      *   [latestDeviceToWorldMatrix] and its `cameraFromDevice` rotation.
      */
-    fun latestRollDegrees(): Float? = latestRollDeg
+    fun latestRollDegrees(): Float? = latest?.rollDeg
 
     /** Latest device→world East-North-Up rotation (row-major 3×3, a fresh copy), or null. */
-    fun latestDeviceToWorldMatrix(): FloatArray? = latestDeviceToWorld?.copyOf()
+    fun latestDeviceToWorldMatrix(): FloatArray? = latest?.deviceToWorld
 
     /**
      * Latest sample as a body→world (East-North-Up) quaternion with its `SensorEvent.timestamp`
@@ -116,10 +139,7 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
         synchronized(lock) {
             if (registered) return
             reliable = true
-            latestHeadingDeg = null
-            latestElevationDeg = null
-            latestRollDeg = null
-            latestDeviceToWorld = null
+            latest = null
             samples.clear()
             attitudeExtrapolator.clear()
             registered = sm.registerListener(this, sensor, samplingPeriodUs)
@@ -135,10 +155,7 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
             if (!registered) return
             sensorManager?.unregisterListener(this)
             registered = false
-            latestHeadingDeg = null
-            latestElevationDeg = null
-            latestRollDeg = null
-            latestDeviceToWorld = null
+            latest = null
             samples.clear()
             attitudeExtrapolator.clear()
         }
@@ -162,12 +179,9 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
         }
         samples.ingestRotationVector(values, timestampNs)
         samples.latest()?.let { attitudeExtrapolator.push(it) }
-        cameraAxisHeadingElevation(r)?.let { (h, e) ->
-            latestHeadingDeg = h
-            latestElevationDeg = e
-            latestRollDeg = cameraRollDegrees(r)
-            latestDeviceToWorld = r
-        }
+        val (h, e) = cameraAxisHeadingElevation(r) ?: return
+        val roll = cameraRollDegrees(r) ?: return
+        latest = Attitude(h, e, roll, r)
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
@@ -193,22 +207,31 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
 
         /**
          * Camera-axis (heading, elevation) in degrees from a device→world East-North-Up rotation
-         * matrix [r] (row-major 3×3), or null when the axis is too near vertical for a meaningful
-         * heading. The rear camera looks along device −Z, whose world vector is the negated third
-         * column `(-r[2], -r[5], -r[8])` = (east, north, up); heading is `atan2(east, north)`,
-         * elevation is `asin(up)`. Pure math — the unit-testable seam, since `SensorEvent` and
-         * `getRotationMatrixFromVector` need the Android runtime.
+         * matrix [r] (row-major 3×3). The rear camera looks along device −Z, whose world vector is the
+         * negated third column `(-r[2], -r[5], -r[8])` = (east, north, up); heading is
+         * `atan2(east, north)`, elevation is `asin(up)`. Pure math — the unit-testable seam, since
+         * `SensorEvent` and `getRotationMatrixFromVector` need the Android runtime.
+         *
+         * Defined at every attitude. Within ~0.006° of vertical, where the axis has no horizontal
+         * part, heading is the bearing the device top points toward when looking down (away from it
+         * when looking up) — the limit the axis heading approaches from there. Near the poles heading
+         * is noise-dominated on its own; [cameraRollDegrees] is measured from the same heading, so the
+         * (heading, elevation, roll) triple of one matrix stays exact (see [AttitudeBasis]).
          *
          * @param r device→world East-North-Up rotation matrix, row-major 3×3 (length ≥ 9).
-         * @return `(headingDeg in [0,360), elevationDeg in [-90,90])`, or null when [r] is too short or
-         *   the camera axis is within ~0.006° of vertical (heading undefined there).
+         * @return `(headingDeg in [0,360), elevationDeg in [-90,90])`, or null when [r] is too short.
          */
         internal fun cameraAxisHeadingElevation(r: FloatArray): Pair<Float, Float>? {
             if (r.size < 9) return null
-            val east = -r[2]
-            val north = -r[5]
             val up = (-r[8]).coerceIn(-1f, 1f)
-            if (east * east + north * north < 1e-8f) return null // near-vertical: heading undefined
+            var east = -r[2]
+            var north = -r[5]
+            if (east * east + north * north < 1e-8f) {
+                // Straight down/up: the device +Y (top edge) world vector is horizontal here.
+                val sign = if (up < 0f) 1f else -1f
+                east = sign * r[1]
+                north = sign * r[4]
+            }
             var heading = Math.toDegrees(kotlin.math.atan2(east.toDouble(), north.toDouble())).toFloat()
             heading = ((heading % 360f) + 360f) % 360f
             val elevation = Math.toDegrees(kotlin.math.asin(up.toDouble())).toFloat()
@@ -218,19 +241,21 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
         /**
          * Roll of the camera image's right axis above the horizon, degrees `(-180, 180]` — positive
          * when the right edge of the image points above the horizon (device turned counter-clockwise
-         * as the user sees the screen). Pairs with [cameraAxisHeadingElevation] and
-         * [PhotosphereMap.directionOfPixel].
+         * as the user sees the screen). Measured from the horizontal right `(cos h, −sin h, 0)` of
+         * [cameraAxisHeadingElevation]'s heading, so the triple rebuilds [r] exactly at every
+         * attitude ([AttitudeBasis.basis], [PhotosphereMap.directionOfPixel]).
          *
          * @param r device→world East-North-Up rotation matrix, row-major 3×3.
          * @param cameraFromDevice row-major 3×3 from the device body frame to the image's GL camera
          *   frame (`com.hereliesaz.sphereslam.attitude.DeviceCameraRotation`); identity = device +x is
          *   image-right.
-         * @return the roll, or null when [r] is malformed or the camera axis is near vertical.
+         * @return the roll, or null when [r] or [cameraFromDevice] is malformed.
          */
         fun cameraRollDegrees(r: FloatArray, cameraFromDevice: FloatArray? = null): Float? {
             if (r.size < 9) return null
             val c = cameraFromDevice ?: floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
             if (c.size != 9) return null
+            val (headingDeg, _) = cameraAxisHeadingElevation(r) ?: return null
             // Image right in device coordinates is the first row of cameraFromDevice.
             val dx = c[0]; val dy = c[1]; val dz = c[2]
             val right = floatArrayOf(
@@ -239,10 +264,8 @@ class CameraAttitudeProvider(context: Context) : SensorEventListener {
                 r[6] * dx + r[7] * dy + r[8] * dz,
             )
             val f = floatArrayOf(-r[2], -r[5], -r[8]) // camera axis (device −Z) in world
-            val hx = f[1]; val hy = -f[0] // forward × up, horizontal right
-            val hn = kotlin.math.sqrt(hx * hx + hy * hy)
-            if (hn < 1e-4f) return null
-            val r0 = floatArrayOf(hx / hn, hy / hn, 0f)
+            val h = Math.toRadians(headingDeg.toDouble())
+            val r0 = floatArrayOf(kotlin.math.cos(h).toFloat(), (-kotlin.math.sin(h)).toFloat(), 0f)
             val u0 = floatArrayOf(
                 r0[1] * f[2] - r0[2] * f[1],
                 r0[2] * f[0] - r0[0] * f[2],

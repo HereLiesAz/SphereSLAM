@@ -274,14 +274,16 @@ class PhotosphereMap(
      * [representativeOrientation]); until then [scanProgress] / [regionsInProgress] report how far it
      * has come — what the coverage glow shows as a tile growing more opaque until it opens.
      *
-     * Anchors the wall heading on the first call when unset (like [markUpdated]).
+     * Anchors the wall heading on the first call when unset, at the bearing the camera faces
+     * ([AttitudeBasis.facingAzimuthDeg]): the axis heading near the horizon, the bearing the top of
+     * the image points along when looking down at a floor — never the noise-dominated axis heading
+     * near the poles.
      *
      * @param headingDeg camera-axis compass heading, degrees (0 = north, clockwise).
      * @param elevationDeg camera-axis elevation, degrees.
-     * @param rollDeg image-right axis angle above the horizon, degrees.
+     * @param rollDeg image-right axis angle above the horizon, degrees (same sample as [headingDeg]).
      * @param lens the view's projection (`CoverageGlowProjection.Lens.fromIntrinsics`).
-     * @return what changed; empty when an input is non-finite or the axis is within ~0.006° of
-     *   vertical (heading and roll undefined there).
+     * @return what changed; empty when an input is non-finite.
      */
     fun recordView(
         headingDeg: Float,
@@ -302,7 +304,8 @@ class PhotosphereMap(
         val m = CoverageGlowProjection.worldFromCamera(headingDeg, elevationDeg, rollDeg) ?: return none
         if (wallHeadingDeg == null) {
             if (grid.bandOf(elevationDeg) == null) return none
-            wallHeadingDeg = SphereGrid.norm360(headingDeg)
+            wallHeadingDeg = AttitudeBasis.facingAzimuthDeg(headingDeg, elevationDeg, rollDeg)
+                ?: SphereGrid.norm360(headingDeg)
         }
         val anchor = wallHeadingDeg!!
         if (anchor != sampleCacheAnchor || sampleStepDeg != sampleCacheStep) {
@@ -604,59 +607,54 @@ class PhotosphereMap(
     }
 
     /**
-     * The tiles whose centers currently fall within the camera's view cone — the candidate set a tile
+     * The tiles whose centers currently fall within the camera's view — the candidate set a tile
      * matcher should try to recognize this frame, so matching stays cheap no matter how large the map
-     * grows. A tile is a candidate when its center is within half the field of view of the camera
-     * axis in both heading and elevation, or lies inside the camera's frustum (pinhole, no roll) —
-     * the second catches tiles near the zenith/nadir, far apart in heading but close on screen.
-     * Needs the map anchored.
+     * grows. A tile is a candidate when its center lies inside the camera's pinhole frustum, or within
+     * half the field of view of the camera axis in both of the camera's own angles (yaw about image-up,
+     * pitch toward it) — the second keeps tiles whose centre sits just past a frustum corner. Both are
+     * measured in the full, rolled camera basis ([AttitudeBasis]), so the set is as exact looking
+     * straight down at a floor as at the horizon. Needs the map anchored.
      *
      * @param headingDeg camera-axis compass bearing now, degrees (0 = north, clockwise).
      * @param elevationDeg camera-axis angle above (+) / below (−) the horizon now, degrees.
      * @param hFovDeg horizontal field of view, degrees (`> 0`).
      * @param vFovDeg vertical field of view, degrees (`> 0`).
+     * @param rollDeg image-right axis angle above the horizon, degrees (from the same sample as
+     *   [headingDeg]; near the poles heading alone does not orient the frustum).
      * @return the in-view tiles' ids; empty when unanchored, an input is non-finite, or an fov `<= 0`.
      */
-    fun tilesInView(headingDeg: Float, elevationDeg: Float, hFovDeg: Float, vFovDeg: Float): List<TileId> {
+    fun tilesInView(
+        headingDeg: Float,
+        elevationDeg: Float,
+        hFovDeg: Float,
+        vFovDeg: Float,
+        rollDeg: Float = 0f,
+    ): List<TileId> {
         val anchor = wallHeadingDeg ?: return emptyList()
-        if (!headingDeg.isFinite() || !elevationDeg.isFinite() || hFovDeg <= 0f || vFovDeg <= 0f) {
-            return emptyList()
-        }
+        if (!hFovDeg.isFinite() || !vFovDeg.isFinite() || hFovDeg <= 0f || vFovDeg <= 0f) return emptyList()
+        val basis = AttitudeBasis.basis(headingDeg, elevationDeg, rollDeg) ?: return emptyList()
         val tanH = kotlin.math.tan(Math.toRadians(hFovDeg / 2.0).coerceAtMost(Math.PI / 2 - 1e-6))
         val tanV = kotlin.math.tan(Math.toRadians(vFovDeg / 2.0).coerceAtMost(Math.PI / 2 - 1e-6))
-        // Camera basis in world (x east, y north, z up): forward, right (horizontal), up.
-        val h = Math.toRadians(headingDeg.toDouble())
-        val e = Math.toRadians(elevationDeg.toDouble())
-        val fx = kotlin.math.cos(e) * kotlin.math.sin(h)
-        val fy = kotlin.math.cos(e) * kotlin.math.cos(h)
-        val fz = kotlin.math.sin(e)
-        val rx = kotlin.math.cos(h)
-        val ry = -kotlin.math.sin(h)
-        val ux = ry * fz
-        val uy = -rx * fz
-        val uz = rx * fy - ry * fx
-        val halfH = hFovDeg / 2f
-        val halfV = vFovDeg / 2f
-        val camHeading = SphereGrid.norm360(headingDeg)
+        val halfH = hFovDeg / 2.0 + 1e-4
+        val halfV = vFovDeg / 2.0 + 1e-4
         val out = ArrayList<TileId>()
         for (s in 0 until grid.sectorCount) {
-            val azDeg = SphereGrid.norm360(anchor + grid.sectorCenterDelta(s))
-            val headingNear = abs(SphereGrid.signedDelta(azDeg, camHeading)) <= halfH
-            val az = Math.toRadians(azDeg.toDouble())
+            val az = Math.toRadians(SphereGrid.norm360(anchor + grid.sectorCenterDelta(s)).toDouble())
             for (b in 0 until grid.elevationBandCount) {
-                if (headingNear && abs(grid.bandCenterElevation(b) - elevationDeg) <= halfV) {
-                    out.add(TileId(s, b))
-                    continue
-                }
                 val el = Math.toRadians(grid.bandCenterElevation(b).toDouble())
-                val dx = kotlin.math.cos(el) * kotlin.math.sin(az)
-                val dy = kotlin.math.cos(el) * kotlin.math.cos(az)
-                val dz = kotlin.math.sin(el)
-                val z = dx * fx + dy * fy + dz * fz
+                val d = doubleArrayOf(
+                    kotlin.math.cos(el) * kotlin.math.sin(az),
+                    kotlin.math.cos(el) * kotlin.math.cos(az),
+                    kotlin.math.sin(el),
+                )
+                val z = AttitudeBasis.dot(d, basis.forward)
                 if (z <= 0.0) continue
-                val x = dx * rx + dy * ry
-                val y = dx * ux + dy * uy + dz * uz
-                if (abs(x) <= z * tanH + 1e-9 && abs(y) <= z * tanV + 1e-9) out.add(TileId(s, b))
+                val x = AttitudeBasis.dot(d, basis.right)
+                val y = AttitudeBasis.dot(d, basis.up)
+                val inFrustum = abs(x) <= z * tanH + 1e-9 && abs(y) <= z * tanV + 1e-9
+                val yaw = Math.toDegrees(kotlin.math.atan2(x, z))
+                val pitch = Math.toDegrees(kotlin.math.asin(y.coerceIn(-1.0, 1.0)))
+                if (inFrustum || (abs(yaw) <= halfH && abs(pitch) <= halfV)) out.add(TileId(s, b))
             }
         }
         return out
@@ -677,8 +675,7 @@ class PhotosphereMap(
      *   keyframe's intrinsics.
      * @param minCoveredFraction share of a tile's area that must be in frame, `(0, 1]`.
      * @param sampleStepDeg sampling pitch over a tile, degrees, `> 0`.
-     * @return covered tile ids; empty when unanchored, an input is non-finite, or the view axis is
-     *   within ~0.006° of vertical (heading/roll undefined there).
+     * @return covered tile ids; empty when unanchored or an input is non-finite.
      */
     fun tilesCovered(
         headingDeg: Float,
@@ -858,8 +855,9 @@ class PhotosphereMap(
          * direction in elevation too, and even unrolled the azimuth of an off-axis pixel depends on
          * elevation.
          *
-         * @return the direction, or null for non-finite input, non-positive focal lengths, or a camera
-         *   axis within ~0.006° of vertical (heading undefined).
+         * Defined at every elevation ([AttitudeBasis]).
+         *
+         * @return the direction, or null for non-finite input or non-positive focal lengths.
          */
         fun directionOfPixel(
             u: Float,
@@ -874,30 +872,27 @@ class PhotosphereMap(
         ): SphereCoverage.Direction? {
             val inputs = floatArrayOf(u, v, fx, fy, cx, cy, cameraHeadingDeg, cameraElevationDeg, cameraRollDeg)
             if (inputs.any { !it.isFinite() } || fx <= 0f || fy <= 0f) return null
-            val h = Math.toRadians(cameraHeadingDeg.toDouble())
-            val e = Math.toRadians(cameraElevationDeg.toDouble())
-            // East-North-Up camera basis: forward, horizontal right = forward × up, up = right × forward.
-            val f = doubleArrayOf(kotlin.math.cos(e) * kotlin.math.sin(h), kotlin.math.cos(e) * kotlin.math.cos(h), kotlin.math.sin(e))
-            val rx = f[1]; val ry = -f[0]
-            val rn = kotlin.math.sqrt(rx * rx + ry * ry)
-            if (rn < 1e-4) return null
-            val r0 = doubleArrayOf(rx / rn, ry / rn, 0.0)
-            val u0 = doubleArrayOf(
-                r0[1] * f[2] - r0[2] * f[1],
-                r0[2] * f[0] - r0[0] * f[2],
-                r0[0] * f[1] - r0[1] * f[0],
-            )
-            val roll = Math.toRadians(cameraRollDeg.toDouble())
-            val cr = kotlin.math.cos(roll); val sr = kotlin.math.sin(roll)
-            val right = DoubleArray(3) { cr * r0[it] + sr * u0[it] }
-            val up = DoubleArray(3) { -sr * r0[it] + cr * u0[it] }
+            val ray = rayOfPixel(u, v, fx, fy, cx, cy, cameraHeadingDeg, cameraElevationDeg, cameraRollDeg) ?: return null
+            return AttitudeBasis.direction(ray)
+        }
+
+        /** [directionOfPixel] as an East-North-Up vector (not normalized), or null for bad input. */
+        internal fun rayOfPixel(
+            u: Float,
+            v: Float,
+            fx: Float,
+            fy: Float,
+            cx: Float,
+            cy: Float,
+            cameraHeadingDeg: Float,
+            cameraElevationDeg: Float,
+            cameraRollDeg: Float,
+        ): DoubleArray? {
+            if (fx <= 0f || fy <= 0f || !u.isFinite() || !v.isFinite()) return null
+            val b = AttitudeBasis.basis(cameraHeadingDeg, cameraElevationDeg, cameraRollDeg) ?: return null
             val xn = (u - cx) / fx.toDouble()
             val yn = (v - cy) / fy.toDouble()
-            val d = DoubleArray(3) { f[it] + xn * right[it] - yn * up[it] }
-            val n = kotlin.math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2])
-            val az = Math.toDegrees(kotlin.math.atan2(d[0], d[1])).toFloat()
-            val el = Math.toDegrees(kotlin.math.asin((d[2] / n).coerceIn(-1.0, 1.0))).toFloat()
-            return SphereCoverage.Direction(SphereGrid.norm360(az), el)
+            return DoubleArray(3) { b.forward[it] + xn * b.right[it] - yn * b.up[it] }
         }
 
         /**

@@ -60,9 +60,13 @@ class PhotosphereReviewLoop(
         val coverageFraction: Float,
     )
 
-    /** The tiles in view for ([headingDeg], [elevationDeg]) — the recognition candidate set. */
-    fun candidates(headingDeg: Float, elevationDeg: Float): List<TileId> =
-        map.tilesInView(headingDeg, elevationDeg, config.hFovDeg, config.vFovDeg)
+    /**
+     * The tiles in view for ([headingDeg], [elevationDeg], [rollDeg]) — the recognition candidate
+     * set. Pass the roll of the same attitude sample: near a floor or ceiling the heading alone does
+     * not orient the view.
+     */
+    fun candidates(headingDeg: Float, elevationDeg: Float, rollDeg: Float = 0f): List<TileId> =
+        map.tilesInView(headingDeg, elevationDeg, config.hFovDeg, config.vFovDeg, rollDeg)
 
     /**
      * Fold one frame's recognition verdict into the map and return the refreshed view.
@@ -73,6 +77,7 @@ class PhotosphereReviewLoop(
      * @param confirmed tiles the matcher recognized this frame (marked current).
      * @param checkedButUnmatched in-view tiles the matcher tried and failed; a previously-current one
      *   here is treated as changed (stale + neighbor propagation), a never-scanned one is ignored.
+     * @param rollDeg image-right axis angle above the horizon, degrees, of the same attitude sample.
      */
     fun onFrame(
         headingDeg: Float,
@@ -80,6 +85,7 @@ class PhotosphereReviewLoop(
         nowMs: Long,
         confirmed: Collection<TileId> = emptyList(),
         checkedButUnmatched: Collection<TileId> = emptyList(),
+        rollDeg: Float = 0f,
     ): Outcome {
         if (config.ttlMs > 0L) map.expireOlderThan(nowMs - config.ttlMs)
 
@@ -97,7 +103,7 @@ class PhotosphereReviewLoop(
         for (id in staleEligible) map.recordStale(id)
         for (id in confirmedSet) map.markUpdated(id, nowMs)
         return Outcome(
-            candidates = candidates(headingDeg, elevationDeg),
+            candidates = candidates(headingDeg, elevationDeg, rollDeg),
             directionsNeedingUpdate = map.directionsNeedingUpdate(),
             coverageFraction = map.coverageFraction(),
         )

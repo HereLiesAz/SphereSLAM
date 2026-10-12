@@ -1,6 +1,7 @@
 package com.hereliesaz.sphereslam.reloc
 
 import android.os.SystemClock
+import com.hereliesaz.sphereslam.AttitudeBasis
 import com.hereliesaz.sphereslam.PhotosphereFingerprintFrame
 import com.hereliesaz.sphereslam.PhotosphereKeyframe
 import com.hereliesaz.sphereslam.SphereSlamPoseMath
@@ -394,6 +395,8 @@ class PhotosphereTrackingSession internal constructor(
     private var mapFromFingerprintValue: FloatArray? = null
     // The map_from_fingerprint this session solved for the current reference, if any.
     private var solvedMapForReference: FloatArray? = null
+    // Whether a confirmed lock has checked the current map_from_fingerprint against the same-frame solve.
+    private var mapCheckedOnLock = false
     private val runtimeAtlasPages = linkedMapOf<Int, AtlasPage>()
     // Highest page number any live / pending matcher holds, so growth never reuses one.
     private var highestMatcherPageNo = 0
@@ -421,8 +424,6 @@ class PhotosphereTrackingSession internal constructor(
     private var lastGoodCanonical: FloatArray? = null
     private var lastAcceptedCameraFromCanonical: FloatArray? = null
 
-    private var photosphereReferenceQuaternion: FloatArray? = null
-    private var photosphereCameraFromDevice: FloatArray? = null
     private var lastKeyframeMs = Long.MIN_VALUE
     private var lastAtlasGrowthMs = Long.MIN_VALUE
     private var lastMetricsMs = Long.MIN_VALUE
@@ -501,6 +502,7 @@ class PhotosphereTrackingSession internal constructor(
         if (referenceChanged || mapChanged) stations?.reset()
         referenceImage = reference
         mapFromFingerprintValue = effectiveMap
+        if (referenceChanged || mapChanged) mapCheckedOnLock = false
         if (pagesChanged) {
             runtimeAtlasPages.clear()
             sortedPages.forEach { runtimeAtlasPages[it.pageNo] = it }
@@ -715,32 +717,45 @@ class PhotosphereTrackingSession internal constructor(
         return FrameResult(bridged, outcome.state, cameraFromMap, false, null, null, failure, projection)
     }
 
+    /**
+     * The base map pose from the absolute attitude: gravity-level and north-referenced (map +X east,
+     * +Y up, −Z north — `AttitudeBasis`, the frame `PhotosphereFingerprintFrame` places fingerprints
+     * in). Not the first frame's camera: a session started looking at a floor would put the map's −Z
+     * straight down, a quarter turn from every provisional placement, and a frame that moved with the
+     * start pose could never agree with a transform persisted from another session.
+     */
     private fun photosphereCameraFromMap(attitude: AttitudeSample?, cameraFromDevice: FloatArray): FloatArray? {
         val qNow = attitude?.quaternion ?: return null
-        val qRef = photosphereReferenceQuaternion
-        val refCameraFromDevice = photosphereCameraFromDevice
-        if (qRef == null || refCameraFromDevice == null) {
-            photosphereReferenceQuaternion = qNow
-            photosphereCameraFromDevice = cameraFromDevice.copyOf()
-            return RigidMath.identity()
-        }
-        return viewFromRotation(baseCameraRotation(refCameraFromDevice, qRef, cameraFromDevice, qNow))
+        return viewFromRotation(absoluteCameraRotation(cameraFromDevice, qNow))
     }
 
-    /** Solve `map_from_fingerprint` on a confirmed lock when no map is known (host-supplied or solved). */
+    /**
+     * Solve `map_from_fingerprint` from the same-frame base and KPM poses on a confirmed lock: when
+     * none is known, and once per reference/map to check a host-supplied one. A host's provisional
+     * placement (`PhotosphereFingerprintFrame.placement`) guesses range and assumes the page faces
+     * the camera; the solve replaces it when the two disagree by more than [MAP_REFINE_DEGREES] or
+     * [MAP_REFINE_FRACTION] of the page distance.
+     */
     private fun maybeEmitMapFromFingerprint(
         cameraFromMap: FloatArray?,
         cameraFromFingerprint: FloatArray,
     ) {
-        if (cameraFromMap == null || mapFromFingerprintValue != null) return
+        if (cameraFromMap == null) return
+        val current = mapFromFingerprintValue
+        if (current != null && mapCheckedOnLock) return
         if (cameraFromMap.any { !it.isFinite() } || cameraFromFingerprint.any { !it.isFinite() }) return
         val solved = solveMapFromFingerprint(cameraFromMap, cameraFromFingerprint) ?: return
+        mapCheckedOnLock = true
+        if (current != null && !mapsDisagree(current, solved)) return
         // Publish locally first so the very next precision pose is rebased even before the host persists it.
         mapFromFingerprintValue = solved.copyOf()
         solvedMapForReference = solved.copyOf()
         publishWall()
         callbacks.onMapFromFingerprintSolved(solved)
-        callbacks.onDiagnostic("SphereSLAM map_from_fingerprint solved from same-frame base+KPM pose")
+        callbacks.onDiagnostic(
+            if (current == null) "SphereSLAM map_from_fingerprint solved from same-frame base+KPM pose"
+            else "SphereSLAM map_from_fingerprint refined from same-frame base+KPM pose",
+        )
     }
 
     /**
@@ -1169,22 +1184,35 @@ class PhotosphereTrackingSession internal constructor(
         }
 
         /**
-         * The base map's camera rotation `camera_now_from_camera_ref = C_now · ΔR · C_refᵀ`, where
-         * `ΔR = R(qNow)ᵀ · R(qRef)` is the body-frame rotation since the reference and `C` the
-         * camera-from-device of each frame (row-major 3×3). Using `C_ref` on both sides would leave
-         * every pose after a display rotation off by the roll between the two camera frames.
+         * The base map's camera rotation `camera_from_map = C · R(q)ᵀ · W`: `C` the frame's
+         * camera-from-device (row-major 3×3), `R(q)` the device→East-North-Up attitude, `W` world from
+         * the gravity-level, north-referenced map (`AttitudeBasis.WORLD_FROM_MAP`).
          */
-        internal fun baseCameraRotation(
-            refCameraFromDevice: FloatArray,
-            qRef: FloatArray,
-            nowCameraFromDevice: FloatArray,
-            qNow: FloatArray,
-        ): FloatArray {
-            val deltaBody = RotationMath.cameraRotationDelta(qRef, qNow)
+        internal fun absoluteCameraRotation(cameraFromDevice: FloatArray, q: FloatArray): FloatArray {
+            val deviceFromWorld = RotationMath.transposeMat3(RotationMath.toRotationMatrix3x3(RotationMath.normalize(q)))
             return RotationMath.multiplyMat3(
-                RotationMath.multiplyMat3(nowCameraFromDevice, deltaBody),
-                RotationMath.transposeMat3(refCameraFromDevice),
+                RotationMath.multiplyMat3(cameraFromDevice, deviceFromWorld),
+                AttitudeBasis.WORLD_FROM_MAP,
             )
+        }
+
+        /** [maybeEmitMapFromFingerprint] replaces a known map past this rotation difference, degrees. */
+        const val MAP_REFINE_DEGREES = 2f
+
+        /** ... or past this translation difference, as a fraction of the page's distance. */
+        const val MAP_REFINE_FRACTION = 0.05f
+
+        internal fun mapsDisagree(a: FloatArray, b: FloatArray): Boolean {
+            val ra = rotationOf(a)
+            val rb = rotationOf(b)
+            // trace(Raᵀ·Rb) = 1 + 2 cos θ
+            var trace = 0.0
+            for (i in 0..2) for (k in 0..2) trace += ra[k * 3 + i] * rb[k * 3 + i]
+            val angle = Math.toDegrees(kotlin.math.acos(((trace - 1.0) / 2.0).coerceIn(-1.0, 1.0)))
+            if (angle > MAP_REFINE_DEGREES) return true
+            val dx = a[12] - b[12]; val dy = a[13] - b[13]; val dz = a[14] - b[14]
+            val dist = kotlin.math.sqrt(b[12] * b[12] + b[13] * b[13] + b[14] * b[14])
+            return kotlin.math.sqrt(dx * dx + dy * dy + dz * dz) > MAP_REFINE_FRACTION * dist
         }
 
         private fun samePages(a: List<AtlasPage>, b: List<AtlasPage>): Boolean {
