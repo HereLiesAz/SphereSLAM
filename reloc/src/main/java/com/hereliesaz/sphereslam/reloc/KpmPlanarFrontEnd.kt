@@ -64,7 +64,22 @@ internal class KpmPlanarFrontEnd(
         pageNo: Int,
         canonicalFromPage: FloatArray,
     ): PhotosphereTrackingSession.RegisteredPage {
-        val r = backend.addReference(luma, width, height, referenceWidthUnits, physicallyMetric, pageNo, canonicalFromPage)
+        // Register a reference far larger than the matched frame from a smaller copy (KPM's scale range;
+        // see KpmMatchSpeedConfig.maxReferenceScale). The copy spans the same page, so the page's
+        // millimetre geometry — from the same referenceWidthUnits — is unchanged.
+        val maxLong = if (config.maxReferenceScale > 0f) {
+            (config.maxReferenceScale * maxOf(matchIntrinsics.width, matchIntrinsics.height)).toInt()
+        } else {
+            0
+        }
+        val (rw, rh) = KpmMatchScale.referenceSize(width, height, maxLong)
+        val refLuma = if (rw == width && rh == height) {
+            luma
+        } else {
+            val bytes = ByteArray(width * height).also { luma.duplicate().get(it) }
+            KpmMatchScale.resampleArea(bytes, width, height, rw, rh)
+        }
+        val r = backend.addReference(refLuma, rw, rh, referenceWidthUnits, physicallyMetric, pageNo, canonicalFromPage)
         pages[pageNo] = KpmPagePriority.PageWindow(
             pageNo, canonicalFromPage[12], canonicalFromPage[13], r.geometry.widthMeters, r.geometry.heightMeters,
         )
@@ -123,6 +138,12 @@ internal class KpmPlanarFrontEnd(
         nowMs: Long,
         predicted: FloatArray?,
     ): PlanarMatchResult? {
+        // Oblique: KPM matches a virtual frontal view rendered from the full frame (no downscale needed).
+        rectificationPlan(predicted)?.let { plan ->
+            val frame = lumaBytes ?: ByteArray(luma.remaining()).also { luma.duplicate().get(it) }
+            val wantCorr = !flowUnavailable && lumaBytes != null && config.maxCorrespondences > 0
+            return rectifiedSolve(plan, frame, lumaBytes, timestampNs, nowMs, predicted!!, wantCorr)
+        }
         val matchLuma = if (small != null) {
             val bytes = lumaBytes ?: ByteArray(luma.remaining()).also { luma.duplicate().get(it) }
             KpmMatchScale.downsample(bytes, intrinsics.width, intrinsics.height, factor, small)
@@ -131,10 +152,6 @@ internal class KpmPlanarFrontEnd(
         }
         val wantCorrespondences = !flowUnavailable && lumaBytes != null && config.maxCorrespondences > 0
         val maxCorr = if (wantCorrespondences) config.maxCorrespondences else 0
-
-        rectificationPlan(predicted)?.let { plan ->
-            return rectifiedSolve(plan, matchLuma, lumaBytes, timestampNs, nowMs, predicted!!, wantCorrespondences)
-        }
 
         val msSinceLock = if (lastLockMs == Long.MIN_VALUE || nowMs == Long.MIN_VALUE) null else nowMs - lastLockMs
         val focus = if (focusMissPending) {
@@ -199,7 +216,7 @@ internal class KpmPlanarFrontEnd(
      */
     private fun rectifiedSolve(
         plan: ObliqueRectifier.Plan,
-        matchLuma: ByteBuffer,
+        frame: ByteArray,
         lumaBytes: ByteArray?,
         timestampNs: Long,
         nowMs: Long,
@@ -208,9 +225,8 @@ internal class KpmPlanarFrontEnd(
     ): PlanarMatchResult? {
         val w = matchIntrinsics.width
         val h = matchIntrinsics.height
-        val src = if (small == null && lumaBytes != null) lumaBytes else ByteArray(w * h).also { matchLuma.duplicate().get(it) }
         val buffer = rectifiedBuffer ?: ByteBuffer.allocateDirect(w * h).also { rectifiedBuffer = it }
-        ObliqueRectifier.warp(src, w, h, plan, buffer)
+        ObliqueRectifier.warp(frame, intrinsics.width, intrinsics.height, factor, w, h, plan, buffer)
         val pageRequest = lastLockedPage?.takeIf { it in pageFrames } ?: PlanarMatchRequest.ALL_PAGES
         val raw = backend.match(buffer.duplicate(), timestampNs, pageRequest, maxOf(config.maxCorrespondences, MIN_RECTIFIED_CORRESPONDENCES))
         val solved = raw?.let { m ->

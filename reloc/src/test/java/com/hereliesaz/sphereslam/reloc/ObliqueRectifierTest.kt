@@ -109,7 +109,7 @@ class ObliqueRectifierTest {
         for (y in -2..2) for (x in -2..2) {
             src[(markReal[1].toInt() + y) * w + markReal[0].toInt() + x] = 255.toByte()
         }
-        val out = ObliqueRectifier.warp(src, w, h, plan, ByteBuffer.allocateDirect(w * h))
+        val out = ObliqueRectifier.warp(src, w, h, 1, w, h, plan, ByteBuffer.allocateDirect(w * h))
         var best = -1
         var bestAt = 0
         for (i in 0 until w * h) {
@@ -120,5 +120,66 @@ class ObliqueRectifierTest {
         assertTrue("peak $best", best > 128)
         assertEquals(expected[0], (bestAt % w).toDouble(), 6.0)
         assertEquals(expected[1], (bestAt / w).toDouble(), 6.0)
+    }
+
+    @Test
+    fun `warping the full frame agrees with warping its downscaled copy`() {
+        // A smooth but busy full-resolution frame (2× the matcher) and its box-downscaled copy: steep
+        // enough that half a frame pixel of misregistration shows (up to ~9 levels per frame px).
+        val fw = w * 2
+        val fh = h * 2
+        val full = ByteArray(fw * fh) { i ->
+            val x = (i % fw).toDouble()
+            val y = (i / fw).toDouble()
+            (128 + 45 * kotlin.math.sin(2 * Math.PI * x / 32) + 45 * kotlin.math.sin(2 * Math.PI * y / 40)).toInt().toByte()
+        }
+        val half = KpmMatchScale.downsample(full, fw, fh, 2, ByteBuffer.allocateDirect(w * h)).let { b ->
+            ByteArray(w * h).also { b.get(it) }
+        }
+        val (r, t) = pose(65.0, target, 1000.0)
+        val plan = ObliqueRectifier.plan(r, t, k, 30f, target)!!
+        val fromFull = ObliqueRectifier.warp(full, fw, fh, 2, w, h, plan, ByteBuffer.allocateDirect(w * h))
+        val fromHalf = ObliqueRectifier.warp(half, w, h, 1, w, h, plan, ByteBuffer.allocateDirect(w * h))
+        var worst = 0
+        var compared = 0
+        for (i in 0 until w * h) {
+            val a = fromFull.get(i).toInt() and 0xff
+            val b = fromHalf.get(i).toInt() and 0xff
+            // Only well inside the real frame: its edge is softened differently by the sub-samples.
+            val real = apply(plan.realFromVirtual, (i % w).toDouble(), (i / w).toDouble())
+            if (real[0] < 3 || real[1] < 3 || real[0] > w - 4 || real[1] > h - 4) continue
+            worst = maxOf(worst, kotlin.math.abs(a - b))
+            compared++
+        }
+        assertTrue("compared $compared", compared > w * h / 4)
+        assertTrue("worst $worst", worst <= 3)
+    }
+
+    @Test
+    fun `detail finer than the matcher survives the full-frame warp`() {
+        // Vertical stripes 1 frame px wide: averaged away by the 2× downscale, kept at full resolution.
+        val fw = w * 2
+        val fh = h * 2
+        val full = ByteArray(fw * fh) { i -> if (i % fw % 2 == 0) 30 else 220.toByte() }
+        val half = KpmMatchScale.downsample(full, fw, fh, 2, ByteBuffer.allocateDirect(w * h)).let { b ->
+            ByteArray(w * h).also { b.get(it) }
+        }
+        // Grazing about the page's y axis: the virtual view stretches the image horizontally.
+        val (r, t) = pose(75.0, target, 1000.0, rollDeg = 0.0)
+        val plan = ObliqueRectifier.plan(r, t, k, 30f, target)!!
+        fun contrast(b: ByteBuffer): Double {
+            var sum = 0.0
+            var n = 0
+            for (y in h / 3 until 2 * h / 3) for (x in w / 3 until 2 * w / 3) {
+                val a = b.get(y * w + x).toInt() and 0xff
+                val c = b.get(y * w + x + 1).toInt() and 0xff
+                sum += kotlin.math.abs(a - c)
+                n++
+            }
+            return sum / n
+        }
+        val fromFull = contrast(ObliqueRectifier.warp(full, fw, fh, 2, w, h, plan, ByteBuffer.allocateDirect(w * h)))
+        val fromHalf = contrast(ObliqueRectifier.warp(half, w, h, 1, w, h, plan, ByteBuffer.allocateDirect(w * h)))
+        assertTrue("full $fromFull vs half $fromHalf", fromFull > 10.0 && fromFull > 4 * fromHalf)
     }
 }

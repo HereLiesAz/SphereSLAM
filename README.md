@@ -378,7 +378,14 @@ result.pose?.let { draw(it.cameraFromMap, it.projection) }
   (same intrinsics, same distance, aimed where the real optical axis meets it), matches that, maps
   the correspondences back to real pixels and solves the real pose from them by RANSAC PnP. The
   result is exact however rough the prediction: the prediction only chooses the warp. Needs a
-  predicted pose (gyro bridge or last lock); 0 disables.
+  predicted pose (gyro bridge or last lock); 0 disables. The virtual view is rendered from the
+  full-resolution frame (2 × 2 sub-samples per pixel), not its downscaled copy, so the
+  foreshortened side of the wall keeps the detail the frame has.
+- **Reference scale** — a reference far larger than the matched frame (a full-resolution camera
+  still against a 320 × 240 match) leaves the wall outside KPM's scale range. A page is registered
+  from an area-downscaled copy whose long side is at most `maxReferenceScale` (3) × the matched
+  image's long side; its millimetre geometry is unchanged. Keep the full-resolution original
+  wherever you persist it; 0 registers references as given.
 
 `TrackedPose.matchMethod` (`VisualMatchMethod.KPM_FULL`, `KPM_FOCUSED`, `FLOW`, `KPM_RECTIFIED`) says which path
 produced a pose. `KpmMatchSpeedConfig.FULL_KPM_EVERY_FRAME` restores a full-resolution all-pages
