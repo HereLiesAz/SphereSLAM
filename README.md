@@ -572,6 +572,21 @@ projection = CameraFillCenter.projection(frameIntrinsics, viewWidth, viewHeight)
 `frameIntrinsics` are those of the tracked (display-upright) frame, e.g.
 `CameraIntrinsicsEstimator.estimate(context, cameraId, w, h)` rotated with `CaptureRotation`.
 
+**Lens distortion.** Every SphereSLAM stage assumes an undistorted pinhole image. Request the
+camera's correction on the analysis stream while tracking (API 28+; it applies to every processed
+stream, YUV included):
+
+~~~kotlin
+val lens = LensDistortion.read(characteristics)
+lens.trackingCorrectionMode?.let { mode ->
+    camera2Options.setCaptureRequestOption(CaptureRequest.DISTORTION_CORRECTION_MODE, mode)
+}
+log(LensDistortion.describe(lens, lens.trackingCorrectionMode, frameIntrinsics))
+~~~
+
+A camera that cannot correct reports `uncorrected residual≤Npx`: the largest gap, in frame pixels,
+between the pinhole model and its lens (`LENS_DISTORTION`, `maxResidualPx`).
+
 **5. Camera analyzer (one worker thread).**
 
 ~~~kotlin
@@ -642,7 +657,7 @@ on the GL thread, `attitude.stop()`, `depth.close()`.
 | --- | --- |
 | `math` | `RotationMath`, `RigidMath` (quaternions, rigid/similarity 4×4, GL ↔ CV flips) |
 | `attitude` | `GameRotationAttitudeSource`, `DeviceCameraRotation`, `AttitudeRotationBridge`, `AttitudeExtrapolator`, `DisplayPosePredictor` |
-| `camera` | `CameraIntrinsicsEstimator`, `CaptureRotation`, `LumaFrameTransform`, `LumaFrameBufferPool`, `ProjectionMatrix`, `ScreenIntrinsics` (`FIT_CENTER`), `CameraFillCenter` (`FILL_CENTER` projection, tap mapping, FOV) |
+| `camera` | `CameraIntrinsicsEstimator`, `LensDistortion` (correction mode, pinhole residual), `CaptureRotation`, `LumaFrameTransform`, `LumaFrameBufferPool`, `ProjectionMatrix`, `ScreenIntrinsics` (`FIT_CENTER`), `CameraFillCenter` (`FILL_CENTER` projection, tap mapping, FOV) |
 | `sidecar` | ARCore + KPM sidecar fusion: `HybridPoseHistory`, `HybridKpmCorrection`, `HybridAnchorFusion`, `MetricPageRectification` |
 | `gyro` | `GyroCompensationMath` (gyro-stabilised screen overlays) |
 

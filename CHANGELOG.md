@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Lens distortion.** New `camera.LensDistortion`: reads `LENS_DISTORTION` and
+  `DISTORTION_CORRECTION_AVAILABLE_MODES` (API 28+), picks the correction mode a tracking stream should
+  request (FAST, else HIGH_QUALITY), and measures how far the zero-distortion pinhole model is off on a
+  camera that cannot correct (`maxResidualPx`, Camera2's κ1–κ5 model). `describe` gives a diagnostic
+  line.
 - **Extreme perspectives.** KPM is not affine-invariant: past ~45° off the wall's normal the page
   stopped matching, where ARCore's tracking kept the artwork warped onto the wall. When the
   predicted view is at least `KpmMatchSpeedConfig.obliqueRectificationDeg` (default 30°, 0 disables)
