@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Build: Maven Central mirror.** JitPack's 0.26.1/0.26.2 builds failed before compiling: Central
+  answered JitPack's shared builders with HTTP 429 and Gradle disabled the repository. Plugin and
+  dependency resolution now try Google's mirror of Central first, Central second.
 - **Lens distortion.** New `camera.LensDistortion`: reads `LENS_DISTORTION` and
   `DISTORTION_CORRECTION_AVAILABLE_MODES` (API 28+), picks the correction mode a tracking stream should
   request (FAST, else HIGH_QUALITY), and measures how far the zero-distortion pinhole model is off on a
