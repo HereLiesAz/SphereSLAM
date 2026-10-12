@@ -1,4 +1,4 @@
-# SphereSLAM
+<p align="center"><img src="docs/branding/sphereslam-banner.jpg" alt="SphereSLAM" width="100%"></p>
 
 [![](https://jitpack.io/v/HereLiesAz/SphereSLAM.svg)](https://jitpack.io/#HereLiesAz/SphereSLAM)
 
