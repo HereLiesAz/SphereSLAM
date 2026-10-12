@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **`SphereSlamTracker` goes through `SphereSlamEngine`.** The ARCore-side tracker had its own private
+  JNI path to `KpmBridge` (session create/destroy, page add/clear, match, direct-buffer handling),
+  duplicating the engine's. It now drives a `KpmSphereSlamEngine` on its worker thread, so native KPM
+  sessions are owned in one place. New `SphereSlamEngine.clearPages()` (empty the atlas, keep the
+  calibrated session); `KpmApi.clear`. No behaviour change: the tracker tests now run against the real
+  engine and pin every native call's arguments and the output mapping.
 - **Build: Maven Central mirror.** JitPack's 0.26.1/0.26.2 builds failed before compiling: Central
   answered JitPack's shared builders with HTTP 429 and Gradle disabled the repository. Plugin and
   dependency resolution now try Google's mirror of Central first, Central second.

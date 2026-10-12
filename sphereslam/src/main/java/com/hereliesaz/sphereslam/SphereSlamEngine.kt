@@ -145,5 +145,11 @@ interface SphereSlamEngine : AutoCloseable {
     /** [match] with a [PlanarMatchRequest]; the default ignores the request and matches all pages. */
     fun match(luma: ByteBuffer, request: PlanarMatchRequest): PlanarMatch? = match(luma)
 
+    /**
+     * Remove every page, keeping the calibrated session, so the next [addPage] starts an empty atlas.
+     * Returns false when the engine cannot (the default) or the native call failed.
+     */
+    fun clearPages(): Boolean = false
+
     override fun close()
 }

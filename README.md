@@ -150,7 +150,8 @@ thread.
 
 ## ARCore sidecar tracking
 
-`SphereSlamTracker` runs KPM asynchronously beside ARCore. It does **not** replace ARCore's primary
+`SphereSlamTracker` runs KPM asynchronously beside ARCore, through the same `SphereSlamEngine` as the
+standalone session (one native owner, one worker thread per session). It does **not** replace ARCore's primary
 view matrix.
 
 ~~~kotlin
