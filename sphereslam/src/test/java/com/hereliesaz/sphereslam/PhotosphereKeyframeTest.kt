@@ -159,13 +159,14 @@ class PhotosphereKeyframeTest {
     }
 
     @Test
-    fun `view prefers the tile's own keyframe and otherwise pairs session intrinsics with the current attitude`() {
+    fun `view takes the tile's own keyframe intrinsics but always the current attitude`() {
         val map = PhotosphereMap(sectorCount = 4, viewableHalfAngleDeg = 180f, elevationBandCount = 3, viewableElevationHalfAngleDeg = 60f)
         val store = PhotosphereKeyframeStore(map)
         assertNull(store.view(0f, 0f))
         store.record(keyframe(10f, 0f, fxv = 3f), nowMs = 1L)
         val own = store.view(15f, 2f)!!
-        assertEquals(10f, own.headingDeg, 0f) // same tile -> its keyframe's attitude
+        assertEquals(15f, own.headingDeg, 0f) // same tile -> still the current attitude
+        assertEquals(2f, own.elevationDeg, 0f)
         val fresh = store.view(190f, 0f, rollDeg = 4f)!!
         assertEquals(190f, fresh.headingDeg, 0f) // fresh tile -> current attitude
         assertEquals(4f, fresh.rollDeg, 0f)
@@ -179,8 +180,9 @@ class PhotosphereKeyframeTest {
         store.record(keyframe(90f, 0f), nowMs = 1L)
         val p = PhotosphereFingerprintFrame.placement(map, store.view(90f, 0f)!!)!!
         val m = p.mapFromFingerprint
-        assertEquals(0f, m[12], 1e-5f)
-        assertEquals(-1f, m[14], 1e-5f) // unit radius toward -Z
+        // Map frame is north-referenced (−Z north, +X east): due east is +X at unit radius.
+        assertEquals(1f, m[12], 1e-5f)
+        assertEquals(0f, m[14], 1e-5f)
         assertFalse(p.physicallyMetric)
         assertEquals(90f, p.direction.azimuthDeg, 1e-3f)
     }

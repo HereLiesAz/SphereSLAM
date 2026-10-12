@@ -1,4 +1,4 @@
-# SphereSLAM
+<p align="center"><img src="docs/branding/sphereslam-banner.jpg" alt="SphereSLAM" width="100%"></p>
 
 [![](https://jitpack.io/v/HereLiesAz/SphereSLAM.svg)](https://jitpack.io/#HereLiesAz/SphereSLAM)
 
@@ -198,7 +198,8 @@ camera axes** (x right, y up, z backward — the camera looks down −z) written
 - `CoverageGlowProjection.worldFromCamera(deviceToWorld, cameraFromDevice)` — from one
   rotation-vector matrix;
 - `CoverageGlowProjection.worldFromCamera(heading, elevation, roll)` — from the
-  `CameraAttitudeProvider` / `PhotosphereMap.directionOfPixel` angles (undefined at the poles).
+  `CameraAttitudeProvider` / `PhotosphereMap.directionOfPixel` angles, straight up and down included,
+  when all three come from one `latestAttitude()` sample.
 
 `cameraFromDevice` is the device-body → GL-camera rotation of the image the glow is drawn over: for a
 display-upright preview, `DeviceCameraRotation.cameraFromDeviceForDisplayFrame(displayRotationDeg)`.
@@ -346,13 +347,15 @@ tracking.displayPosePredictor = predictor
 tracking.updatePrecisionLayer(PhotosphereTrackingSession.ReferenceImage(luma, w, h))
 // per display-upright analysis frame:
 val cameraFromDisplay = DeviceCameraRotation.cameraFromDeviceForDisplayFrame(displayRotationDeg)
+val snapshot = attitude.latestAttitude()
 val result = tracking.onFrame(
     PhotosphereTrackingSession.Frame(
         luma = packedLuma, intrinsics = frameIntrinsics, timestampNs = image.imageInfo.timestamp,
         attitude = attitude.latestSample(),
         cameraFromDevice = cameraFromDisplay,
-        headingDeg = attitude.latestHeadingDegrees(), elevationDeg = attitude.latestElevationDegrees(),
-        rollDeg = attitude.latestDeviceToWorldMatrix()?.let { CameraAttitudeProvider.cameraRollDegrees(it, cameraFromDisplay) },
+        // One snapshot: near a floor or ceiling the angles only mean something together.
+        headingDeg = snapshot?.headingDeg, elevationDeg = snapshot?.elevationDeg,
+        rollDeg = snapshot?.let { CameraAttitudeProvider.cameraRollDegrees(it.deviceToWorld, cameraFromDisplay) },
         convertDurationNs = convertNs,
     ),
 )
@@ -609,11 +612,12 @@ fun analyze(image: ImageProxy) {
     val luma = pool.packAndRotate(y.buffer, image.width, image.height, y.rowStride, y.pixelStride,
         image.imageInfo.rotationDegrees)
     val convertNs = SystemClock.elapsedRealtimeNanos() - t0
+    val a = attitude.latestAttitude() // heading, elevation and roll of ONE sample
     val result = tracking.onFrame(PhotosphereTrackingSession.Frame(luma.bytes, frameIntrinsics,
         image.imageInfo.timestamp, attitude.latestSample(), cameraFromDisplay,
-        attitude.latestHeadingDegrees(), attitude.latestElevationDegrees(),
+        a?.headingDeg, a?.elevationDeg,
         // Roll of the tracked (display-upright) image, not of the device's natural +x axis:
-        attitude.latestDeviceToWorldMatrix()?.let { CameraAttitudeProvider.cameraRollDegrees(it, cameraFromDisplay) },
+        a?.let { CameraAttitudeProvider.cameraRollDegrees(it.deviceToWorld, cameraFromDisplay) },
         convertDurationNs = convertNs))
     image.close()
 }

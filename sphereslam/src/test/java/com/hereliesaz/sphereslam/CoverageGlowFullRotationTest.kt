@@ -80,8 +80,11 @@ class CoverageGlowFullRotationTest {
     fun `looking straight up still projects the polar band around the centre`() {
         // Device face-down: body z points down, so the rear camera (body -z) looks at the zenith.
         val faceDown = floatArrayOf(1f, 0f, 0f, 0f, -1f, 0f, 0f, 0f, -1f)
-        assertNull(CoverageGlowProjection.worldFromCamera(0f, 90f))
         val m = CoverageGlowProjection.worldFromCamera(faceDown)
+        // The (heading, elevation, roll) of the same sample rebuild it, straight up included.
+        val (h, e) = CameraAttitudeProvider.cameraAxisHeadingElevation(faceDown)!!
+        val fromAngles = CoverageGlowProjection.worldFromCamera(h, e, CameraAttitudeProvider.cameraRollDegrees(faceDown)!!)!!
+        for (i in 0..8) assertEquals(m[i], fromAngles[i], 1e-4f)
         val cap = (0 until 12).map { region(it * 30f, it * 30f + 30f, 60f, 90f) }
         val v = CoverageGlowProjection.projectRegions(cap, m, Lens.fromFieldOfView(90f, 90f))
         assertTrue(v.isNotEmpty())

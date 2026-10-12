@@ -32,6 +32,7 @@ Recommended entry points:
 - `PhotosphereMap`
 - `PhotosphereReviewLoop`
 - `CameraAttitudeProvider`
+- `AttitudeBasis`
 - `CoverageGlowProjection`
 - `PhotosphereKeyframe`, `PhotosphereKeyframeStore`, `PhotosphereView`, `PhotosphereFingerprintFrame`
 
@@ -115,15 +116,21 @@ camera-from-plane view in the half-extent units passed to `setReference` (plane 
 `PhotosphereTrackingSession` is the standalone photosphere runtime: feed `onFrame(Frame(luma,
 intrinsics, timestampNs, attitude, cameraFromDevice, headingDeg, elevationDeg, rollDeg,
 convertDurationNs))` from the camera-analysis worker and render `FrameResult.pose?.cameraFromMap` (column-major GL
-camera-from-base-map) with `pose.projection`. The base map is defined by the first attitude sample and
-is rotation-only; the planar KPM pose (camera-from-fingerprint) is rebased through
+camera-from-base-map) with `pose.projection`. The base map is gravity-level and north-referenced
+(+X east, +Y up, −Z north — `AttitudeBasis`, the frame `PhotosphereFingerprintFrame` places
+fingerprints in) and rotation-only, whatever the first frame looked at; the planar KPM pose (camera-from-fingerprint) is rebased through
 `map_from_fingerprint`, solved once per reference on the first confirmed lock
-(`Callbacks.onMapFromFingerprintSolved`) or supplied to `updatePrecisionLayer`. Passing no map with
+(`Callbacks.onMapFromFingerprintSolved`) or supplied to `updatePrecisionLayer`. A supplied map is
+checked against the same-frame solve on the first confirmed lock after it is set, and replaced (and
+re-published) when they differ by more than 2° or 5 % of the page distance — a provisional
+`PhotosphereFingerprintFrame.placement` guesses the range and assumes the page faces the camera. Passing no map with
 the same reference keeps the map the session solved for it; a host map overrides it; a new reference
 re-solves. Any change of reference, effective map, atlas page set (`atlasPages` is the complete set —
 pass `atlasPages` back to keep grown pages), `forceRebuild` or frame intrinsics rebuilds the planar
 layer and resets the tracking state, so the next lock needs `confirmationFrames` again. The base map
-rotation is `C_now · ΔR · C_refᵀ` (each frame's own `cameraFromDevice`). `Config.maxBridgeMs`
+rotation is `C · R(q)ᵀ · W` (each frame's own `cameraFromDevice` `C`, its device→ENU attitude `R(q)`,
+`W = AttitudeBasis.WORLD_FROM_MAP`). The frame is only north-referenced when the attitude is
+(`TYPE_ROTATION_VECTOR`); a game-rotation source's yaw origin is its own. `Config.maxBridgeMs`
 (measured from the last accepted frame) is the only gyro-bridge limit; it overrides
 `trackingState.maxBridgeMs`. After a bridge, the next visual pose is smoothed from the bridged pose
 that was shown. Past the bridge window, `Config.holdOffWall` (default true) keeps the last lock
@@ -279,7 +286,8 @@ of `TYPE_ROTATION_VECTOR`. It equals `deviceToWorld · cameraFromDeviceᵀ`
 (`CoverageGlowProjection.worldFromCamera(deviceToWorld, cameraFromDevice)`); for a display-upright
 preview `cameraFromDevice = DeviceCameraRotation.cameraFromDeviceForDisplayFrame(displayRotationDeg)`.
 `worldFromCamera(heading, elevation, roll)` gives the same matrix from the `CameraAttitudeProvider`
-angles.
+angles, at every elevation including straight up and down — provided all three come from one sample
+(`CameraAttitudeProvider.latestAttitude()`).
 
 Times passed to `RotationSource.worldFromCamera(frameTimeNanos, out)`, `drawEmbedded(frameTimeNanos)`,
 `AttitudeExtrapolator` and `DisplayPosePredictor.predictInto(extrapolator, targetTimeNs, out)` are in
@@ -300,10 +308,26 @@ world frame works, but the frame and current attitude must come from the same se
 ### Pixel directions
 
 `PhotosphereMap.directionOfPixel` rotates a pinhole ray through heading, elevation and roll
-(`CameraAttitudeProvider.cameraRollDegrees(latestDeviceToWorldMatrix(), cameraFromDevice)` for the
+(`CameraAttitudeProvider.cameraRollDegrees(latestAttitude().deviceToWorld, cameraFromDevice)` for the
 image you track; `latestRollDegrees()` is the roll of the device's natural +x axis and equals it only
 at display rotation 0). Do not add `atan` pixel offsets
 to heading/elevation: that ignores roll and is wrong off-axis.
+
+### Poles (floors and ceilings)
+
+Near the zenith/nadir the camera-axis heading is dominated by sensor noise (its error grows as
+`1/cos(elevation)`), but a heading, elevation and roll decoded from ONE rotation still describe it
+exactly: roll is measured from the horizontal right of that same heading (`AttitudeBasis`). So:
+
+- read the three from one `CameraAttitudeProvider.latestAttitude()` snapshot, never one getter each;
+- never key, anchor or orient anything on heading alone. Use the full basis
+  (`AttitudeBasis.basis`) or the pole-stable `AttitudeBasis.facingAzimuthDeg` — the bearing the camera
+  faces: the axis heading at the horizon, the bearing the top of the image points along over a floor.
+
+The library follows this: `PhotosphereMap.recordView` anchors an unanchored map at the facing
+azimuth, `tilesInView` takes the roll, `PhotosphereKeyframeStore.view` always returns the live
+attitude (a polar tile's keyframe may have been taken facing anywhere), and
+`PhotosphereFingerprintFrame.placement` takes the page's +Y from the camera's image-up.
 
 ### Deprecated pose names
 
@@ -423,7 +447,8 @@ nor load OpenCV.
   the GL thread, and `RotationSource.worldFromCamera` is invoked there.
 - `AttitudeExtrapolator` and `DisplayPosePredictor` are thread-safe; their `*Into` / `*At` reads
   allocate nothing.
-- `CameraAttitudeProvider` reads, `start` and `stop` are safe from any thread; its
+- `CameraAttitudeProvider` reads, `start` and `stop` are safe from any thread (`latestAttitude()` is
+  one consistent sample; the single-angle getters may each see a different one); its
   `attitudeExtrapolator` is written on the sensor thread and read from any thread.
 - `LumaFrameBufferPool` is synchronized; use one pool per analysis stream.
 - `GameRotationAttitudeSource` reads and `AttitudeRotationBridge` are thread-safe.
