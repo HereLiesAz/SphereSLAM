@@ -57,7 +57,7 @@ jobs:
       - name: Name the APK after the tested build
         id: apk
         run: |
-          build="$(git describe --tags --always --dirty | tr -c 'A-Za-z0-9._\n-' '_')"
+          build="$(git -c submodule.third_party/artoolkitx.ignore=dirty describe --tags --always --dirty | tr -c 'A-Za-z0-9._\n-' '_')"
           mv testapp/build/outputs/apk/debug/testapp-debug.apk "sphereslam-testapp-$build.apk"
           echo "name=sphereslam-testapp-$build" >> "$GITHUB_OUTPUT"
 

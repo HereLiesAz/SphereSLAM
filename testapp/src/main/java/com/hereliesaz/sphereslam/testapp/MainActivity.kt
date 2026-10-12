@@ -175,7 +175,8 @@ class MainActivity : ComponentActivity() {
         val n = guide.steps.size
         val step = guide.current
         screen.header(
-            stepLabel = if (step == null) "Run complete" else "Step ${guide.index + 1} of $n",
+            // The build is always on screen: which APK is running is the first question about any report.
+            stepLabel = (if (step == null) "Run complete" else "Step ${guide.index + 1} of $n") + " · " + BuildConfig.SPHERESLAM_BUILD,
             statuses = statuses,
             current = guide.index,
             report = reportState,
@@ -396,6 +397,7 @@ class MainActivity : ComponentActivity() {
                 description = LensDistortion.describe(lens, correction, nominal),
             )
         }
+        log("build ${BuildConfig.SPHERESLAM_BUILD} (versionCode ${BuildConfig.VERSION_CODE})")
         log("camera $cameraId realtime=$realtime lens=${synchronized(checklist) { checklist["lens_correction"].evidence }}")
         this.cameraId = cameraId
         realtimeTimestamps = realtime
