@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- **Fix: stale single-page matchers.** Adding a page or view (`KpmBridge.addPlanarPage`,
+  `addPlanarPageView`) or re-indexing dropped only the image-set matchers; a page-restricted
+  `matchPlanarEx` kept matching on the handle built before the new views existed, so they never
+  matched on that path and nothing said so. Both caches are now dropped whenever the atlas changes.
+- **Fix: `addPlanarPage` ignored KPM's 1024-image limit** (`addPlanarPageView` honoured it): past it
+  the page merged and the re-index then failed, leaving an atlas permanently bigger than its index.
+  It now returns −8 first, like the view call.
+- **Fix: a negated homography dropped every feature.** `addPlanarPageView` discarded points with
+  `w <= 0`, so `-H` (the same projective map) returned "no features". The matrix sign is now fixed by
+  the majority of the view's features first.
+- **Fix: `addPlanarPage`/`addPlanarPageView` could unwind a C++ exception through JNI** (session
+  lookup and lock sat outside the `try`); they now return −7 like the other entry points.
+- **Docs: `KpmBridge` batch semantics.** With `reindex = false` the session answers from two atlases
+  until the batch is indexed (`matchPlanar`/`matchPlanarEx` use the old index, `matchPlanarImages`
+  sees the merged previews); the "nothing matches in between" claim was false and is corrected.
+- **`DepthEstimator` no longer reloads a failed model on every call.** After a failed load,
+  `load()` returns false for a cool-down (30 s) instead of repeating the asset check, model hash,
+  runtime open and warm-up inference; `loadFrom` retries immediately.
+- **`PoseStabilizer` KDoc corrected:** at `alpha` 0.5 a constant-velocity camera lags a full frame
+  of motion, not half, and white-noise jitter falls to about 0.58σ, not 0.5σ.
+- **`version.properties` now matches the 0.26.6 tag** (it still read 0.23.3, so published module
+  metadata carried the wrong version).
+
+## 0.26.6
+
 - **Previews are the host's.** SphereSLAM no longer chooses or renders previews; it provides the
   tools. Hosts add `AnticipatedView`s (a rendered view of a page, `pageFromView` back to the host's
   reference pixels, and the camera rotation and zoom it stands for):
@@ -21,7 +46,8 @@
 - **Tiles: the sensors turn the live frame.** Before a tile search the live frame is turned by the
   sensors' rotation into the nearest candidate tile's view (no position needed) and its features
   mapped back (`PhotosphereTileLocalizer.Config.turnLiveFrameDeg`, 5°; 0 never turns).
-- **Previews.** Each reference (and, with `previewAtlasPages`, each grown page) is rendered tilted in
+- **Previews (0.26.5; the library-made previews below were removed in 0.26.6, see
+  "Previews are the host's" above).** Each reference (and, with `previewAtlasPages`, each grown page) is rendered tilted in
   perspective, resized and turned, with OpenCV, and each preview joins KPM as another image of its
   page with its features' millimetres mapped back through the warp
   (`KpmBridge.addPlanarPageView`, `SphereSlamEngine.addPageView`). They live in a second KPM session

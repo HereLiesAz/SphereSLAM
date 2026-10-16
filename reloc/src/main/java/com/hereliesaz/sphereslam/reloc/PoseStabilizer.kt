@@ -15,8 +15,10 @@ package com.hereliesaz.sphereslam.reloc
  *
  * Not thread-safe; drive it from one worker.
  *
- * @property alpha weight toward the newest pose each frame, `(0, 1]`; 0.5 halves per-frame jitter
- *   while keeping the emitted pose within half a frame's motion of the truth.
+ * @property alpha weight toward the newest pose each frame, `(0, 1]`. The filter is
+ *   `out = prev + alpha * (raw - prev)`: under constant per-frame motion `v` the emitted pose settles
+ *   `(1 - alpha) / alpha * v` behind the truth (one full frame at 0.5), and independent per-frame
+ *   noise of std `s` leaves `s * sqrt(alpha / (2 - alpha))` (about 0.58 s at 0.5).
  * @property snapDistance camera-centre move, in the poses' units, that passes through unsmoothed
  *   (`> 0`); [PoseBlend.SNAP_DISTANCE_METERS] for metric poses, [PoseBlend.snapDistanceFor] otherwise.
  */

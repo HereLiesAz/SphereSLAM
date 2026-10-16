@@ -64,7 +64,8 @@ object KpmBridge {
      *
      * luma must be a direct, tightly packed width*height luminance buffer. KPM converts reference
      * pixels to planar millimetres using referenceDpi, so translation scale is only as accurate as
-     * that value.
+     * that value. Returns the features added, or < 0 (−8: the session is at KPM's limit of 1024
+     * reference images; the page is not merged).
      */
     fun addPlanarPage(
         session: Long,
@@ -101,9 +102,10 @@ object KpmBridge {
      * each mapped back through [pageFromView] (row-major 3×3, preview pixel → page reference pixel) to
      * the page's own millimetres ([pageDpi], [pageHeight] px), so a match on the preview solves the
      * page's pose. [reindex] false defers rebuilding the matcher's index to the next call that asks
-     * for it (or [reindex]), so a batch of previews indexes once; nothing may match the session in
-     * between. Returns
-     * the features added, or < 0 (−8: the session is at KPM's limit of 1024 reference images).
+     * for it (or [reindex]), so a batch of previews indexes once. Until then the session answers from
+     * two atlases: [matchPlanar]/[matchPlanarEx] use the old index, while [matchPlanarImages] builds
+     * from the already merged atlas and sees the new previews, so a host that needs one answer must
+     * not match mid-batch. Returns the features added, or < 0 (−8: the session is at KPM's limit of 1024 reference images).
      */
     fun addPlanarPageView(
         session: Long,

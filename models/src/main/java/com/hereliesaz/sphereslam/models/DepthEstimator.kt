@@ -184,12 +184,18 @@ class DepthEstimator internal constructor(
     var lastError: String? = null
         private set
 
+    /** `System.nanoTime()` before which [load] will not retry after a failure; 0 = no cool-down. */
+    private var retryNotBeforeNanos = 0L
+
     /**
      * Extract the bundled asset to filesDir (refreshing a stale copy) and open the model.
      * Idempotent while the asset model is open; replaces a model opened via [loadFrom]. Returns [isLoaded].
      */
     @Synchronized
     fun load(): Boolean {
+        // A failed load is not retried on every call: each retry re-checks the asset, re-hashes the
+        // model, re-opens the runtime and runs a warm-up inference, and callers poll this per tile.
+        if (!isLoaded && System.nanoTime() < retryNotBeforeNanos) return false
         return try {
             val dir = File(appContext.filesDir, MODEL_DIR).apply { mkdirs() }
             val graph = File(dir, assetName)
@@ -213,6 +219,7 @@ class DepthEstimator internal constructor(
      */
     @Synchronized
     fun loadFrom(onnxPath: String): Boolean {
+        retryNotBeforeNanos = 0L
         if (isLoaded && loadedPath == onnxPath) return true
         if (isLoaded) close()
         return try {
@@ -296,6 +303,7 @@ class DepthEstimator internal constructor(
     }
 
     private fun failSoft(t: Throwable) {
+        retryNotBeforeNanos = System.nanoTime() + LOAD_RETRY_COOLDOWN_NANOS
         lastError = "${t.javaClass.simpleName}: ${t.message?.take(160) ?: "no message"}"
         Log.w(TAG, "load failed; depth disabled", t)
         close()
@@ -395,6 +403,9 @@ class DepthEstimator internal constructor(
 
     companion object {
         private const val TAG = "DepthEstimator"
+
+        /** After a failed [load], [load] returns false for this long instead of retrying. */
+        private const val LOAD_RETRY_COOLDOWN_NANOS = 30_000_000_000L
 
         /** MiDaS v2.1 Small 256×256, fp16 weights (isl-org/MiDaS `v2_1` `model_opt.tflite`). */
         const val MODEL_ASSET = "midas_v21_small_256_fp16.tflite"
