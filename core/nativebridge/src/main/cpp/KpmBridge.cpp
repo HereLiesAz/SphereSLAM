@@ -468,10 +468,16 @@ int indexAtlas(KpmSession *session, const char *who);
 
 // Merges `page` into the atlas (consuming it) and, with `reindex`, re-indexes the matcher on the whole
 // atlas. Without it the matcher keeps its old index until the next re-indexing merge: a batch of
-// previews merges unindexed and indexes once, with its last image; nothing matches in between.
+// previews merges unindexed and indexes once, with its last image. In between, the session answers from
+// two atlases: matchPlanar/matchPlanarEx use the old index, matchPlanarImages builds from the already
+// merged atlas and so sees the new previews. Hosts that need one answer must not match mid-batch.
 // Returns 0, or -4 (merge failed) / -6 (matcher rebuild failed).
 int mergeAndIndex(KpmSession *session, KpmRefDataSet **page, const char *who, bool reindex = true) {
+    // The atlas is about to change: image-set matchers AND the cached single-page matchers were built
+    // from the old one, so both go. (A page-restricted matchPlanarEx would otherwise keep matching on a
+    // handle built before the new pages/views existed.)
     deleteImageHandles(session);
+    deletePageHandles(session);
     const int mergeResult = kpmMergeRefDataSet(&session->atlas, page); // consumes `page`
     if (*page) kpmDeleteRefDataSet(page);
     if (mergeResult < 0 || !session->atlas) {
@@ -486,6 +492,7 @@ int mergeAndIndex(KpmSession *session, KpmRefDataSet **page, const char *who, bo
 // (matcher rebuild failed).
 int indexAtlas(KpmSession *session, const char *who) {
     deleteImageHandles(session);
+    deletePageHandles(session);
     if (session->indexed) {
         // kpmSetRefDataSet appends every atlas page to the handle's FREAK database under ids
         // 0..n-1; on a handle that already holds pages that re-adds id 0 and the database throws
@@ -647,14 +654,26 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeAddPlanarPage(
         jint maxFeatures) {
 #ifdef HAVE_ARX_KPM
     // The shared_ptr keeps the session alive for the whole call even if it is destroyed concurrently.
-    std::shared_ptr<KpmSession> session = findSession(sessionValue);
-    if (!session) return -1;
-    std::lock_guard<std::mutex> workLock(session->work);
+    // The lookup and the lock sit in their own try: findSession allocates and mutex::lock can throw
+    // std::system_error, and no C++ exception may unwind through JNI (that aborts the process).
+    std::shared_ptr<KpmSession> session;
+    std::unique_lock<std::mutex> workLock;
+    try {
+        session = findSession(sessionValue);
+        if (!session) return -1;
+        workLock = std::unique_lock<std::mutex>(session->work);
+    } catch (...) {
+        LOGE("nativeAddPlanarPage: session lookup/lock threw");
+        return -7;
+    }
     if (!session->handle || !session->cameraParams) return -1;
     if (width <= 0 || height <= 0 || referenceDpi <= 0.0f ||
         pageNo < 0 || imageNo < 0 || maxFeatures <= 0) {
         return -2;
     }
+    // Same cap as nativeAddPlanarPageView: past it kpmSetRefDataSet fails AFTER the merge, leaving an
+    // atlas permanently bigger than its index (and every clone copying that atlas).
+    if (atlasImageCount(session->atlas) >= kMaxAtlasImages) return -8;
 
     const jlong requiredBytes = static_cast<jlong>(width) * static_cast<jlong>(height);
     ARUint8 *luma = nullptr;
@@ -743,9 +762,16 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeAddPlanarPageView(
         jfloat pageDpi,
         jboolean reindex) {
 #ifdef HAVE_ARX_KPM
-    std::shared_ptr<KpmSession> session = findSession(sessionValue);
-    if (!session) return -1;
-    std::lock_guard<std::mutex> workLock(session->work);
+    std::shared_ptr<KpmSession> session;
+    std::unique_lock<std::mutex> workLock;
+    try {
+        session = findSession(sessionValue);
+        if (!session) return -1;
+        workLock = std::unique_lock<std::mutex>(session->work);
+    } catch (...) {
+        LOGE("nativeAddPlanarPageView: session lookup/lock threw");
+        return -7;
+    }
     if (!session->handle || !session->cameraParams) return -1;
     if (width <= 0 || height <= 0 || pageNo < 0 || imageNo < 0 || maxFeatures <= 0 ||
         pageHeight <= 0 || pageDpi <= 0.0f || !pageFromView || env->GetArrayLength(pageFromView) != 9) {
@@ -776,6 +802,18 @@ Java_com_hereliesaz_sphereslam_nativebridge_KpmBridge_nativeAddPlanarPageView(
         // Each feature's page position: its preview pixel through the warp back to the page image, then
         // to millimetres exactly as kpmGenRefDataSet does for the page itself (KpmProcFullSize).
         const float mmPerPx = 25.4f / pageDpi;
+        // A homography is defined up to scale, sign included: -H is the same map. The guard below
+        // drops points with w <= 0 (behind the projection), which would drop EVERY point of a
+        // negated matrix. Fix the sign so the majority of the features sit at w > 0 first.
+        {
+            int positive = 0, negative = 0;
+            for (int i = 0; i < view->num; ++i) {
+                const KpmRefData &p = view->refPoint[i];
+                const float w = h[6] * p.coord2D.x + h[7] * p.coord2D.y + h[8];
+                if (w > 0.0f) ++positive; else if (w < 0.0f) ++negative;
+            }
+            if (negative > positive) for (float &v : h) v = -v;
+        }
         int kept = 0;
         for (int i = 0; i < view->num; ++i) {
             KpmRefData &p = view->refPoint[i];
