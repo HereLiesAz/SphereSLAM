@@ -127,6 +127,9 @@ class PhotosphereTrackingSession internal constructor(
      * @property maxBridgeMs longest gyro bridge, measured from the last accepted frame, ms. This is
      *   the session's only bridge limit: it overrides [TrackingStateConfig.maxBridgeMs] in
      *   [trackingState]. Within it the tracking state is `IMU_BRIDGE` and a quick return blends.
+     * @property stillHoldDegrees while the phone has turned no more than this since the last lock, the
+     *   last good pose is held past [maxBridgeMs] (still `IMU_BRIDGE`): the matcher missing a few frames
+     *   of a target that hasn't moved in view is no reason to drop it. `0` disables the hold.
      * @property holdOffWall past [maxBridgeMs], keep rendering instead of no pose: the photosphere pose
      *   once a lock has defined it ([PoseSource.PHOTOSPHERE]; it survives atlas-page changes and
      *   `forceRebuild`, not a new reference or map), else the last lock through the gyro rotation
@@ -151,6 +154,7 @@ class PhotosphereTrackingSession internal constructor(
         val trackingState: TrackingStateConfig = TrackingStateConfig(),
         val targetQuality: TargetQualityConfig = TargetQualityConfig(),
         val maxBridgeMs: Long = 400L,
+        val stillHoldDegrees: Float = 3f,
         val holdOffWall: Boolean = true,
         val tileLocalization: Boolean = true,
         val tileFixIntervalMs: Long = 250L,
@@ -162,6 +166,7 @@ class PhotosphereTrackingSession internal constructor(
     ) {
         init {
             require(maxBridgeMs >= 0L && keyframeIntervalMs >= 0L && metricsIntervalMs >= 0L)
+            require(stillHoldDegrees.isFinite() && stillHoldDegrees >= 0f)
             require(tileFixIntervalMs >= 0L)
             require(stationSpawnDistance.isFinite() && stationSpawnDistance > 0f)
         }
@@ -681,6 +686,7 @@ class PhotosphereTrackingSession internal constructor(
             timestampSource = config.timestampSource,
             nowMs = matchEndNs / 1_000_000L,
             bridgeAvailable = canBridge(frame.attitude, matchEndNs / 1_000_000L),
+            holdStill = isStillSinceLock(frame.attitude),
         )
         if (pose != null) active.onVerdict(outcome.accepted)
 
@@ -1015,8 +1021,20 @@ class PhotosphereTrackingSession internal constructor(
     private fun canBridge(attitude: AttitudeSample?, nowMs: Long): Boolean {
         if (lastGood == null || imuBridge == null || imuBridgeReferenceAtMs < 0L) return false
         val elapsed = nowMs - imuBridgeReferenceAtMs
-        if (elapsed < 0L || elapsed > config.maxBridgeMs) return false
+        if (elapsed < 0L) return false
+        if (elapsed > config.maxBridgeMs && !isStillSinceLock(attitude)) return false
         return imuBridge?.cameraRotationDelta(attitude?.quaternion) != null
+    }
+
+    /**
+     * True when the phone has turned no more than [Config.stillHoldDegrees] since the last accepted
+     * pose: the target is still where that pose put it, so a run of missed matches holds it.
+     * Translation isn't sensed, but a hand-held phone that hasn't turned has rarely moved far.
+     */
+    private fun isStillSinceLock(attitude: AttitudeSample?): Boolean {
+        if (config.stillHoldDegrees <= 0f || lastGood == null) return false
+        val delta = imuBridge?.cameraRotationDelta(attitude?.quaternion) ?: return false
+        return RotationMath.rotationAngleDegrees(delta) <= config.stillHoldDegrees
     }
 
     /**

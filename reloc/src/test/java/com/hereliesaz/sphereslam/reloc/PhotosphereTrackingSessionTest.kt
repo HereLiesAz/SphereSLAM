@@ -687,7 +687,7 @@ class PhotosphereTrackingSessionTest {
     @Test
     fun `Config maxBridgeMs is the only bridge limit`() {
         val s = session(
-            PhotosphereTrackingSession.Config(maxBridgeMs = 400L, trackingState = TrackingStateConfig(maxBridgeMs = 50L)),
+            PhotosphereTrackingSession.Config(maxBridgeMs = 400L, stillHoldDegrees = 0f, trackingState = TrackingStateConfig(maxBridgeMs = 50L)),
         )
         s.updatePrecisionLayer(reference)
         s.onFrame(frame())
@@ -1023,7 +1023,7 @@ class PhotosphereTrackingSessionTest {
 
     @Test
     fun `a display pose predictor receives every rendered pose and is cleared without one`() {
-        val s = session()
+        val s = session(PhotosphereTrackingSession.Config(stillHoldDegrees = 0f))
         val predictor = DisplayPosePredictor()
         s.displayPosePredictor = predictor
         s.updatePrecisionLayer(reference)
@@ -1048,7 +1048,7 @@ class PhotosphereTrackingSessionTest {
 
     @Test
     fun `without holding the display pose predictor is cleared past the bridge window`() {
-        val s = session(PhotosphereTrackingSession.Config(holdOffWall = false))
+        val s = session(PhotosphereTrackingSession.Config(holdOffWall = false, stillHoldDegrees = 0f))
         val predictor = DisplayPosePredictor()
         s.displayPosePredictor = predictor
         s.updatePrecisionLayer(reference)
