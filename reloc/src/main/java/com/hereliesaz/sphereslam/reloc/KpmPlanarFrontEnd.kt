@@ -1,6 +1,7 @@
 package com.hereliesaz.sphereslam.reloc
 
 import com.hereliesaz.sphereslam.AnticipatedView
+import com.hereliesaz.sphereslam.Constellation
 import com.hereliesaz.sphereslam.PlanarImage
 import com.hereliesaz.sphereslam.PlanarMatchRequest
 import com.hereliesaz.sphereslam.SphereSlamStandaloneSession
@@ -59,6 +60,11 @@ internal class KpmPlanarFrontEnd(
     // Each page's placement, for re-expressing a predicted canonical pose in page millimetres.
     private class PageFrame(val canonicalFromPage: FloatArray, val centerXmm: Float, val centerYmm: Float)
     private val pageFrames = HashMap<Int, PageFrame>()
+
+    // A page that is a handful of isolated marks: their centres in reference pixels (y down) and in
+    // page millimetres (y up), for the constellation fallback.
+    private class PageMarks(val pixels: List<FloatArray>, val millimetres: List<FloatArray>)
+    private val pageMarks = HashMap<Int, PageMarks>()
     private val matchK = floatArrayOf(matchIntrinsics.fx, matchIntrinsics.fy, matchIntrinsics.cx, matchIntrinsics.cy)
     private var rectifiedBuffer: ByteBuffer? = null
     private var flow: FlowTracker? = null
@@ -114,6 +120,18 @@ internal class KpmPlanarFrontEnd(
             pageNo, canonicalFromPage[12], canonicalFromPage[13], r.geometry.widthMeters, r.geometry.heightMeters,
         )
         pageFrames[pageNo] = PageFrame(canonicalFromPage.copyOf(), r.geometry.centerXmm, r.geometry.centerYmm)
+        if (config.constellationFallback && refLuma.remaining() >= rw * rh) {
+            val bytes = ByteArray(rw * rh).also { refLuma.duplicate().get(it) }
+            val marks = Constellation.extractMarks(bytes, rw, rh)
+            if (marks.isNotEmpty()) {
+                // KPM's page: x_mm = x_px · mm/px, image y flipped so the page is y-up.
+                val mmPerPx = r.geometry.widthMeters * 1000f / rw
+                pageMarks[pageNo] = PageMarks(
+                    marks.map { floatArrayOf(it.x, it.y) },
+                    marks.map { floatArrayOf(it.x * mmPerPx, (rh - it.y) * mmPerPx) },
+                )
+            }
+        }
         return r
     }
 
@@ -151,6 +169,7 @@ internal class KpmPlanarFrontEnd(
         return KpmPlanarFrontEnd(intrinsics, config, flowFactory, backendFactory, forked, previews?.retain(), previewsFactory).also {
             it.pages.putAll(pages)
             it.pageFrames.putAll(pageFrames)
+            it.pageMarks.putAll(pageMarks)
         }
     }
 
@@ -212,6 +231,15 @@ internal class KpmPlanarFrontEnd(
             pose = backend.match(matchLuma.duplicate(), timestampNs, PlanarMatchRequest.ALL_PAGES, maxCorr)
         }
         if (pose == null) {
+            constellationSolve(matchLuma)?.let { hit ->
+                missStreak = 0
+                if (nowMs != Long.MIN_VALUE) {
+                    scheduler.onFullSolve(nowMs, success = true, seeded = false)
+                    lastLockMs = nowMs
+                }
+                lastLockedPage = hit.pageNo
+                return hit
+            }
             missStreak++
             if (nowMs != Long.MIN_VALUE) scheduler.onFullSolve(nowMs, success = false, seeded = false)
             if (!scheduler.isArmed) flow?.reset()
@@ -239,6 +267,40 @@ internal class KpmPlanarFrontEnd(
             inlierCount = pose.inlierCount,
             method = method,
         )
+    }
+
+    /**
+     * The constellation fallback ([KpmMatchSpeedConfig.constellationFallback]): the frame's marks
+     * matched by arrangement to a page that is a handful of isolated marks, posed from their centres.
+     * Pixels and error are the matched image's, as for a KPM solve.
+     */
+    private fun constellationSolve(matchLuma: ByteBuffer): PlanarMatchResult? {
+        if (pageMarks.isEmpty()) return null
+        val w = matchIntrinsics.width
+        val h = matchIntrinsics.height
+        if (matchLuma.remaining() < w * h) return null
+        val bytes = ByteArray(w * h).also { matchLuma.duplicate().get(it) }
+        val marks = Constellation.extractMarks(bytes, w, h)
+        if (marks.isEmpty()) return null
+        val frame = marks.map { floatArrayOf(it.x, it.y) }
+        val pagesInOrder = listOfNotNull(lastLockedPage?.takeIf { it in pageMarks }) + pageMarks.keys.filter { it != lastLockedPage }
+        for (pageNo in pagesInOrder) {
+            val ref = pageMarks.getValue(pageNo)
+            val pairing = Constellation.match(ref.pixels, frame) ?: continue
+            val page = pairing.reference.map { ref.millimetres[it] }
+            val image = pairing.frame.map { frame[it] }
+            val fit = Constellation.pose(page, image, matchK) ?: continue
+            if (fit.meanSquaredErrorPx > CONSTELLATION_MAX_ERROR_PX2) continue
+            val view = backend.cameraFromCanonical(pageNo, fit.cameraFromPage3x4) ?: continue
+            return PlanarMatchResult(
+                pageNo = pageNo,
+                cameraFromCanonical = view,
+                reprojectionError = fit.meanSquaredErrorPx,
+                inlierCount = page.size,
+                method = VisualMatchMethod.CONSTELLATION,
+            )
+        }
+        return null
     }
 
     /**
@@ -569,6 +631,9 @@ internal class KpmPlanarFrontEnd(
     private companion object {
         /** Correspondences requested from a rectified solve (its pose is solved from them). */
         const val MIN_RECTIFIED_CORRESPONDENCES = 120
+
+        /** Largest mean squared reprojection error of a constellation pose, matched-image px² (KPM's gate). */
+        const val CONSTELLATION_MAX_ERROR_PX2 = 10f
     }
 
     override fun close() {

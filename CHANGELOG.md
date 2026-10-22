@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Constellation fallback for sparse marks.** A target of a few isolated marks (five X's and an O on
+  black paper) gives KPM nothing: identical marks are ambiguous to its per-feature matching and smooth
+  ones yield no features. When a direct full solve misses and the page is 4–24 isolated marks,
+  `Constellation` finds each mark as a blob, matches the arrangement of their centres by similarity
+  hypotheses from every point pair (symmetric arrangements refused), and poses the page from the
+  homography of the matched centres (`VisualMatchMethod.CONSTELLATION`,
+  `KpmMatchSpeedConfig.constellationFallback`, on by default). The ARCore sidecar's
+  `SphereSlamTracker` falls back the same way (`SphereSlamTracker.constellationFallback`).
 - **Lookalike marks count.** KPM's matcher dropped every feature whose best match barely beat its
   second-best, so a target of repeated marks (five X's) gave it nothing and never locked. A failed
   ratio test whose best match is still close (Hamming ≤ 160 of 768 bits) now keeps both candidates;
