@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Fix: good KPM matches were dropped as `STALE_OBSERVATION`.** `PhotosphereTrackingSession` judged
+  a frame's age after its own keyframe capture, setup and match, so a 100–450 ms match on a mid-range
+  phone pushed fresh frames past the 250 ms limit. Every attempt matched, most were thrown away, and
+  the session sat in `REACQUIRING` on a rotation-only pose (the overlay swam). Age is now measured
+  when the frame reaches `process`, so only camera/pipeline lag counts.
 - **Fix: stale single-page matchers.** Adding a page or view (`KpmBridge.addPlanarPage`,
   `addPlanarPageView`) or re-indexing dropped only the image-set matchers; a page-restricted
   `matchPlanarEx` kept matching on the handle built before the new views existed, so they never
