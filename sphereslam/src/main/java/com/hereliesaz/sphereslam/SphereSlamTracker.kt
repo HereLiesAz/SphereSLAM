@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicReference
  * other than arm64-v8a/armeabi-v7a) every call is a safe no-op and [isNativeAvailable] is false.
  * Calls racing or following [close] are ignored.
  */
+@OptIn(ExperimentalSphereSlamApi::class)
 class SphereSlamTracker internal constructor(
     private val engines: Engines,
     private val worker: ExecutorService,
@@ -65,7 +66,8 @@ class SphereSlamTracker internal constructor(
     ) {
         init {
             require(width > 0 && height > 0)
-            require(fx > 0f && fy > 0f)
+            require(fx.isFinite() && fy.isFinite() && fx > 0f && fy > 0f)
+            require(cx.isFinite() && cy.isFinite())
         }
 
         internal fun calibration() = SphereSlamCalibration(fx, fy, cx, cy)
@@ -96,10 +98,6 @@ class SphereSlamTracker internal constructor(
         val cameraFromPage3x4: FloatArray
             get() = cameraFromPage3x4Value.copyOf()
 
-        @Deprecated("Use cameraFromPage3x4", ReplaceWith("cameraFromPage3x4"))
-        val pageToCamera3x4: FloatArray
-            get() = cameraFromPage3x4
-
         override fun toString(): String =
             "Observation(timestampNs=$timestampNs, pageNo=$pageNo, error=$error, inliers=$inliers, anticipated=$anticipated)"
 
@@ -122,7 +120,7 @@ class SphereSlamTracker internal constructor(
         }
     }
 
-    private data class PendingFrame(val luma: ByteArray, val timestampNs: Long)
+    private class PendingFrame(val luma: ByteBuffer, val timestampNs: Long)
 
     private val closed = AtomicBoolean(false)
     private val latest = AtomicReference<Observation?>(null)
@@ -130,7 +128,11 @@ class SphereSlamTracker internal constructor(
 
     // A packed-frame array the worker has finished with (or a superseded pending frame's), reused by
     // the next submitFrame: steady state allocates no frame-sized array per frame.
-    private val spareLuma = AtomicReference<ByteArray?>(null)
+    // Frames are packed straight into direct buffers (what KPM reads): one copy per frame, not two.
+    private val spareLuma = AtomicReference<ByteBuffer?>(null)
+    // Worker thread: the frame as bytes for the constellation fallback, filled only on a KPM miss.
+    private var missBytes = ByteArray(0)
+    private val marksWorkspace = Constellation.Workspace()
     private val drainScheduled = AtomicBoolean(false)
 
     @Volatile private var cameraModel: CameraModel? = null
@@ -179,6 +181,14 @@ class SphereSlamTracker internal constructor(
      * arrangement of the marks instead of their look. Read when a reference is set.
      */
     @Volatile var constellationFallback: Boolean = true
+    /** Why the last [setReference] was not accepted (native code or cause), or null after a success. */
+    @Volatile var lastReferenceError: String? = null
+        private set
+
+    /** The last exception a tracker task threw (caught so the host process survives), or null. */
+    @Volatile var lastWorkerError: Throwable? = null
+        private set
+
     @Volatile private var referenceReady: Boolean = false
     @Volatile private var referenceGeometry: SphereSlamPoseMath.PageGeometry? = null
 
@@ -229,21 +239,31 @@ class SphereSlamTracker internal constructor(
             val active = engine
             val model = cameraModel
             if (active == null || model == null) {
+                lastReferenceError = "no engine: configure() first, or KPM is unavailable"
                 referenceReady = false
                 referenceGeometry = null
                 return@submit
             }
             // Replace, never append: drop any earlier page from the native atlas first.
             referenceReady = false
-            val accepted = active.clearPages() && runCatching {
-                active.addPage(directCopy(packed), width, height, PlanarPage(pageNo, imageNo, dpi, maxFeatures)) > 0
-            }.getOrDefault(false)
+            val accepted = if (!active.clearPages()) {
+                lastReferenceError = "clearing the previous reference failed"
+                false
+            } else {
+                runCatching {
+                    active.addPage(directCopy(packed), width, height, PlanarPage(pageNo, imageNo, dpi, maxFeatures)) > 0
+                }.fold(
+                    onSuccess = { ok -> lastReferenceError = if (ok) null else "the reference yielded no features"; ok },
+                    onFailure = { e -> lastReferenceError = e.message ?: e.toString(); false },
+                )
+            }
             referenceReady = accepted
             val marks = if (accepted && constellationFallback) Constellation.extractMarks(packed, width, height) else emptyList()
             val mmPerPx = 25.4f / dpi
             referenceMarkPage = pageNo
             referenceMarkPixels = marks.takeIf { it.isNotEmpty() }?.map { floatArrayOf(it.x, it.y) }
-            referenceMarkMillimetres = marks.takeIf { it.isNotEmpty() }?.map { floatArrayOf(it.x * mmPerPx, (height - it.y) * mmPerPx) }
+            // KPM's own convention (kpmRefDataSet.cpp): pixel centres, image y flipped.
+            referenceMarkMillimetres = marks.takeIf { it.isNotEmpty() }?.map { floatArrayOf((it.x + 0.5f) * mmPerPx, (height - 0.5f - it.y) * mmPerPx) }
             referenceGeometry = if (accepted) {
                 SphereSlamPoseMath.pageGeometry(width, height, dpi)
             } else {
@@ -258,8 +278,9 @@ class SphereSlamTracker internal constructor(
 
     /**
      * Adds views of the reference that the host anticipates the camera may see ([AnticipatedView]:
-     * the reference rendered from an angle, nearer, turned). They are learned off the matching path,
-     * in a second engine, and searched only after [previewSearchAfterMisses] direct misses in a row;
+     * the reference rendered from an angle, nearer, turned). They are learned in a second engine,
+     * [PREVIEW_BATCH] at a time between frames on the tracker worker (no index rebuild: preview
+     * matching builds its own matcher from the learned images), and searched only after [previewSearchAfterMisses] direct misses in a row;
      * a hit is published with [Observation.anticipated]. Which views, how many and when are the
      * host's; views whose id is already held are skipped, and a new [setReference] drops them all
      * (add the new reference's after it). Runs on the tracker worker.
@@ -322,7 +343,6 @@ class SphereSlamTracker internal constructor(
                     added++
                 }
             }
-            if (added > 0) pe.reindex()
         }
     }
 
@@ -332,14 +352,20 @@ class SphereSlamTracker internal constructor(
      * from their centres. Null when the reference is not one or nothing fits within
      * [CONSTELLATION_MAX_ERROR_PX2].
      */
-    private fun matchConstellation(luma: ByteArray): PlanarMatch? {
+    private fun matchConstellation(frame: ByteBuffer): PlanarMatch? {
         val refPx = referenceMarkPixels ?: return null
         val refMm = referenceMarkMillimetres ?: return null
         val model = cameraModel ?: return null
-        val marks = Constellation.extractMarks(luma, model.width, model.height)
+        val size = model.width * model.height
+        if (frame.capacity() < size) return null
+        if (missBytes.size != size) missBytes = ByteArray(size)
+        frame.duplicate().apply { clear() }.get(missBytes, 0, size)
+        val marks = Constellation.extractMarks(missBytes, model.width, model.height, marksWorkspace)
         if (marks.isEmpty()) return null
         val frame = marks.map { floatArrayOf(it.x, it.y) }
         val pairing = Constellation.match(refPx, frame) ?: return null
+        // Four points fit a homography exactly: a fifth is what makes the error a test.
+        if (pairing.reference.size < Constellation.MIN_POSE_POINTS) return null
         val page = pairing.reference.map { refMm[it] }
         val image = pairing.frame.map { frame[it] }
         val fit = Constellation.pose(page, image, floatArrayOf(model.fx, model.fy, model.cx, model.cy)) ?: return null
@@ -348,7 +374,7 @@ class SphereSlamTracker internal constructor(
     }
 
     /** Worker thread: the host's searchable views' best match for [luma], or null. */
-    private fun matchPreviews(luma: ByteArray): PlanarMatch? {
+    private fun matchPreviews(luma: ByteBuffer): PlanarMatch? {
         val pe = previewEngine ?: return null
         val ref = previewReference ?: return null
         if (ref.imageOf.isEmpty()) return null
@@ -356,7 +382,7 @@ class SphereSlamTracker internal constructor(
         val images = (if (ids == null) ref.imageOf.values else ids.mapNotNull { ref.imageOf[it] })
             .map { PlanarImage(ref.pageNo, it) }
         if (images.isEmpty()) return null
-        return runCatching { pe.match(directCopy(luma), PlanarMatchRequest(images = images)) }.getOrNull()
+        return runCatching { pe.match(luma, PlanarMatchRequest(images = images)) }.getOrNull()
     }
 
     private fun closePreviews() {
@@ -403,7 +429,8 @@ class SphereSlamTracker internal constructor(
         val model = cameraModel ?: return
         if (model.width != width || model.height != height) return
         val size = width * height
-        val buffer = spareLuma.getAndSet(null)?.takeIf { it.size == size } ?: ByteArray(size)
+        val buffer = spareLuma.getAndSet(null)?.takeIf { it.capacity() == size }
+            ?: ByteBuffer.allocateDirect(size).order(ByteOrder.nativeOrder())
         packLumaInto(luma, width, height, rowStride, buffer)
         // A superseded frame was never handed to the worker, so its array is free again.
         pendingFrame.getAndSet(PendingFrame(buffer, timestampNs))?.let { spareLuma.set(it.luma) }
@@ -422,8 +449,12 @@ class SphereSlamTracker internal constructor(
                         // anticipated views instead of the reference.
                         val after = previewSearchAfterMisses
                         val viaViews = after > 0 && misses >= after && previewEngine != null && previewTurn++ % 2 == 0
-                        val m = if (viaViews) matchPreviews(frame.luma) else active.match(directCopy(frame.luma))
-                            ?: matchConstellation(frame.luma)
+                        // A views frame searches the views only; the constellation backs up direct matches.
+                        val m = if (viaViews) {
+                            matchPreviews(frame.luma.duplicate())
+                        } else {
+                            active.match(frame.luma.duplicate()) ?: matchConstellation(frame.luma)
+                        }
                         if (m != null) {
                             misses = 0
                             previewTurn = 0
@@ -447,7 +478,16 @@ class SphereSlamTracker internal constructor(
      * [close]); that is treated exactly like calling after close: ignored.
      */
     private fun submit(task: () -> Unit): Boolean = try {
-        worker.execute(task)
+        // An exception escaping a worker task would kill the host process: record it instead.
+        worker.execute {
+            try {
+                task()
+            } catch (t: Throwable) {
+                if (t is VirtualMachineError) throw t
+                lastWorkerError = t
+                runCatching { android.util.Log.w(TAG, "tracker task failed", t) }
+            }
+        }
         true
     } catch (_: RejectedExecutionException) {
         false
@@ -475,6 +515,9 @@ class SphereSlamTracker internal constructor(
 
     private fun destroyHandle() {
         closePreviews()
+        previewSource = null
+        referenceMarkPixels = null
+        referenceMarkMillimetres = null
         val active = engine
         engine = null
         referenceReady = false
@@ -484,7 +527,9 @@ class SphereSlamTracker internal constructor(
 
     /** Worker thread: [luma] in the reused direct buffer KPM requires. */
     private fun directCopy(luma: ByteArray): ByteBuffer {
-        val buffer = direct?.takeIf { it.capacity() >= luma.size }
+        // Reused while it fits, but not kept at a size far beyond what is copied now (a large
+        // reference or view must not pin its native memory for the tracker's life).
+        val buffer = direct?.takeIf { it.capacity() >= luma.size && it.capacity() <= 4 * luma.size }
             ?: ByteBuffer.allocateDirect(luma.size).order(ByteOrder.nativeOrder()).also { direct = it }
         buffer.clear()
         buffer.put(luma)
@@ -493,6 +538,8 @@ class SphereSlamTracker internal constructor(
     }
 
     companion object {
+        private const val TAG = "SphereSlamTracker"
+
         /** Views learned and indexed together. */
         private const val PREVIEW_BATCH = 4
 
@@ -506,6 +553,24 @@ class SphereSlamTracker internal constructor(
             Executors.newSingleThreadExecutor { runnable ->
                 Thread(runnable, "sphereslam-kpm").apply { isDaemon = true }
             }
+
+        /** [packLuma] into the direct buffer [out] (capacity exactly `width * height`), flipped for reading. */
+        internal fun packLumaInto(source: ByteBuffer, width: Int, height: Int, rowStride: Int, out: ByteBuffer): ByteBuffer {
+            require(width > 0 && height > 0)
+            require(rowStride >= width)
+            require(out.capacity() == width * height)
+            val base = source.position()
+            require(base + (height - 1) * rowStride + width <= source.limit())
+            val duplicate = source.duplicate()
+            out.clear()
+            for (row in 0 until height) {
+                duplicate.limit(base + row * rowStride + width)
+                duplicate.position(base + row * rowStride)
+                out.put(duplicate)
+            }
+            out.flip()
+            return out
+        }
 
         internal fun packLuma(source: ByteBuffer, width: Int, height: Int, rowStride: Int): ByteArray =
             packLumaInto(source, width, height, rowStride, ByteArray(width * height))

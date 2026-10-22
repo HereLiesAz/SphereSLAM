@@ -493,17 +493,15 @@ int mergeAndIndex(KpmSession *session, KpmRefDataSet **page, const char *who, bo
 int indexAtlas(KpmSession *session, const char *who) {
     deleteImageHandles(session);
     deletePageHandles(session);
-    if (session->indexed) {
-        // kpmSetRefDataSet appends every atlas page to the handle's FREAK database under ids
-        // 0..n-1; on a handle that already holds pages that re-adds id 0 and the database throws
-        // "ID already exists". Rebuild the matcher so the full atlas loads into an empty database.
-        kpmDeleteHandle(&session->handle);
-        session->indexed = false;
-        session->handle = kpmCreateHandle(session->cameraParams);
-        if (!session->handle) {
-            LOGE("%s: KPM handle re-creation failed", who);
-            return -6;
-        }
+    // kpmSetRefDataSet appends every atlas page to the handle's FREAK database under ids 0..n-1; on a
+    // handle that already holds pages — indexed before, or left part-loaded by a failed set — that
+    // re-adds id 0 and the database throws "ID already exists". Always load into a fresh handle.
+    if (session->handle) kpmDeleteHandle(&session->handle);
+    session->indexed = false;
+    session->handle = kpmCreateHandle(session->cameraParams);
+    if (!session->handle) {
+        LOGE("%s: KPM handle re-creation failed", who);
+        return -6;
     }
     const int setResult = kpmSetRefDataSet(session->handle, session->atlas);
     if (setResult < 0) {

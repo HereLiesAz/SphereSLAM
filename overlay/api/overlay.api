@@ -1,0 +1,98 @@
+public final class com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer implements android.opengl.GLSurfaceView$Renderer {
+  public static final com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$Companion Companion;
+  public static final float DEFAULT_HAZE_ALPHA;
+  public static final float DEFAULT_OUTLINE_ALPHA;
+  public static final float DEFAULT_PROGRESS_ALPHA;
+  public static final int PROGRESS_LEVELS;
+  public static final float DEFAULT_OUTLINE_WIDTH_PX;
+  public static final float MAX_OUTLINE_WIDTH_PX;
+  public com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer(float[], float);
+  public com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer(float[], float, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final float[] getHazeColor();
+  public final void setHazeColor(float[]);
+  public final float getHazeAlpha();
+  public final void setHazeAlpha(float);
+  public final float getOutlineAlpha();
+  public final void setOutlineAlpha(float);
+  public final float getOutlineWidthPx();
+  public final void setOutlineWidthPx(float);
+  public final float getProgressAlpha();
+  public final void setProgressAlpha(float);
+  public final void setHazeColorArgb(int);
+  public final com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$FillMode getFillMode();
+  public final void setFillMode(com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$FillMode);
+  public final com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$RotationSource getRotationSource();
+  public final void setRotationSource(com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$RotationSource);
+  public final int getGlGeneration$overlay();
+  public final void setTriangles(float[]);
+  public final void setRegions(java.util.List<com.hereliesaz.sphereslam.SphereCoverage$TileRegion>, float);
+  public static void setRegions$default(com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer, java.util.List, float, int, java.lang.Object);
+  public final void setRegionProgress(java.util.List<com.hereliesaz.sphereslam.PhotosphereMap$RegionProgress>, float);
+  public static void setRegionProgress$default(com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer, java.util.List, float, int, java.lang.Object);
+  public final void setLens(com.hereliesaz.sphereslam.CoverageGlowProjection$Lens);
+  public final void setWorldFromCamera(float[]);
+  public final int refreshGeometry$overlay(long);
+  public final float[] resolvedGeometry$overlay();
+  public void onSurfaceCreated(javax.microedition.khronos.opengles.GL10, javax.microedition.khronos.egl.EGLConfig);
+  public void onSurfaceChanged(javax.microedition.khronos.opengles.GL10, int, int);
+  public void onDrawFrame(javax.microedition.khronos.opengles.GL10);
+  public final void createGlResources();
+  public final void releaseGlResources();
+  public final void onGlContextLost();
+  public final void drawEmbedded();
+  public final void drawEmbedded(long);
+  public final boolean draw$overlay(long);
+  public final void setRegions(java.util.List<com.hereliesaz.sphereslam.SphereCoverage$TileRegion>);
+  public final void setRegionProgress(java.util.List<com.hereliesaz.sphereslam.PhotosphereMap$RegionProgress>);
+  public com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer();
+}
+
+public final class com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$Companion {
+  public final float[] getHOT_PINK();
+  public final float[] getWHITE();
+  public final java.util.List<kotlin.Pair<java.util.List<com.hereliesaz.sphereslam.SphereCoverage$TileRegion>, java.lang.Float>> progressLevels$overlay(java.util.List<com.hereliesaz.sphereslam.PhotosphereMap$RegionProgress>);
+  public final float progressOverlayAlpha$overlay(com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$FillMode, float, float, float);
+  public final boolean isEs3$overlay(java.lang.String);
+  public final float washAlpha$overlay(float, float);
+  public final float edgeAlpha$overlay(float, float, float, float);
+  public static final boolean access$validColor(com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$Companion, float[]);
+  public com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$FillMode extends java.lang.Enum<com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$FillMode> {
+  public static final com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$FillMode TRIANGLES;
+  public static final com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$FillMode COMPLEMENT;
+  public static final com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$FillMode OUTLINE;
+  public static final com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$FillMode COMPLEMENT_OUTLINED;
+  public static com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$FillMode[] values();
+  public static com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$FillMode valueOf(java.lang.String);
+  public static kotlin.enums.EnumEntries<com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$FillMode> getEntries();
+}
+
+public final class com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$GlState$Companion {
+  public final com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$GlState capture(boolean, java.util.List<java.lang.Integer>);
+  public static final void access$setEnabled(com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$GlState$Companion, int, boolean);
+  public com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$GlState$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.overlay.CoverageGlowView extends android.opengl.GLSurfaceView {
+  public static final com.hereliesaz.sphereslam.overlay.CoverageGlowView$Companion Companion;
+  public com.hereliesaz.sphereslam.overlay.CoverageGlowView(android.content.Context, android.util.AttributeSet);
+  public com.hereliesaz.sphereslam.overlay.CoverageGlowView(android.content.Context, android.util.AttributeSet, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer getRenderer();
+  public final void updateRegions(com.hereliesaz.sphereslam.PhotosphereMap);
+  public final void setFillMode(com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$FillMode, com.hereliesaz.sphereslam.PhotosphereMap);
+  public final void update(com.hereliesaz.sphereslam.PhotosphereMap, float[], com.hereliesaz.sphereslam.CoverageGlowProjection$Lens);
+  public final void trackAtDisplayRate(com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$RotationSource);
+  public final void update(com.hereliesaz.sphereslam.PhotosphereMap, float, float, float, float);
+  public com.hereliesaz.sphereslam.overlay.CoverageGlowView(android.content.Context);
+}
+
+public final class com.hereliesaz.sphereslam.overlay.CoverageGlowView$Companion {
+  public final java.util.List<com.hereliesaz.sphereslam.SphereCoverage$TileRegion> regionsFor(com.hereliesaz.sphereslam.PhotosphereMap, com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$FillMode);
+  public com.hereliesaz.sphereslam.overlay.CoverageGlowView$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public interface com.hereliesaz.sphereslam.overlay.CoverageGlowRenderer$RotationSource {
+  public abstract boolean worldFromCamera(long, float[]);
+}

@@ -132,9 +132,10 @@ class PhotosphereTrackingSession internal constructor(
      *   of a target that hasn't moved in view is no reason to drop it. `0` disables the hold.
      * @property handPivotMeters a hand-held phone turns about the wrist, this far behind the lens: gyro
      *   bridges and holds turn the pose about that pivot, not the lens. Only with a physically metric
-     *   reference (otherwise the turn stays about the lens). `0` turns about the lens.
+     *   reference (otherwise the turn stays about the lens). `0` turns about the lens. The default is a
+     *   tunable estimate of forearm geometry, not a measurement.
      * @property pivotHoldDegrees the still hold's limit when the pivot applies: modelling the wrist
-     *   keeps the held pose right through a larger turn than [stillHoldDegrees].
+     *   keeps the held pose right through a larger turn than [stillHoldDegrees]. Tunable, not measured.
      * @property holdOffWall past [maxBridgeMs], keep rendering instead of no pose: the photosphere pose
      *   once a lock has defined it ([PoseSource.PHOTOSPHERE]; it survives atlas-page changes and
      *   `forceRebuild`, not a new reference or map), else the last lock through the gyro rotation
@@ -1037,8 +1038,8 @@ class PhotosphereTrackingSession internal constructor(
     }
 
     /**
-     * True when the phone has turned no more than [Config.stillHoldDegrees] since the last accepted
-     * pose: the target is still where that pose put it, so a run of missed matches holds it.
+     * True when the phone has turned no more than [Config.stillHoldDegrees] — [Config.pivotHoldDegrees]
+     * when the wrist pivot applies (a metric reference) — since the last accepted pose: the target is still where that pose put it, so a run of missed matches holds it.
      * Translation isn't sensed, but a hand-held phone that hasn't turned has rarely moved far.
      */
     private fun isStillSinceLock(attitude: AttitudeSample?): Boolean {

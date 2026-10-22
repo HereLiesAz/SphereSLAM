@@ -1,0 +1,7 @@
+public final class com.hereliesaz.sphereslam.common.util.NativeLibLoader {
+  public static final com.hereliesaz.sphereslam.common.util.NativeLibLoader INSTANCE;
+  public final synchronized boolean loadAll();
+}
+
+public interface com.hereliesaz.sphereslam.common.InternalSphereSlamApi extends java.lang.annotation.Annotation {
+}

@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **1.0 audit fixes.**
+  - `SphereSlamTracker` never kills the host: non-finite `CameraModel` intrinsics are refused, and a
+    task that throws is caught and kept in `lastWorkerError`. `lastReferenceError` says why a
+    reference was refused (native code, featureless, no engine).
+  - Anticipated views are learned without re-indexing the preview engine on the frame thread.
+  - Frames are packed once, straight into direct buffers; the reused copy buffer no longer pins the
+    largest reference's native memory.
+  - Constellation: a hit no longer switches off armed flow (`KpmMatchScheduler.onUnseededSolve`); it
+    also backs up rectified (oblique and swept) solves; a pose needs 5 matched marks (4 fit any
+    pairing exactly); hypotheses are bounded (nearest neighbours past `FULL_SEARCH_LIMIT`) and refit
+    by homography, so perspective views match; mark millimetres use KPM's pixel-centre convention.
+    `Constellation` is `@ExperimentalSphereSlamApi`.
+  - Native: the lookalike matcher counts features, not candidates, against KPM's minimum;
+    `indexAtlas` always loads a fresh handle; artoolkitX's `arMalloc` throws `std::bad_alloc` (caught
+    at every JNI entry) instead of `exit(1)`.
+  - Public API gate: `apiDump` / `apiCheck` (runs with `check`) over every published module's
+    `api/*.api`. The deprecated `Observation.pageToCamera3x4` is removed.
+  - CI pins Ninja as JitPack does and runs the native instrumented tests on an x86_64 emulator
+    (`-Psphereslam.extraAbis=x86_64`, never published); JitPack runs the JVM tests before publishing.
+  - Unmeasured thresholds are documented as tunable.
 - **Constellation fallback for sparse marks.** A target of a few isolated marks (five X's and an O on
   black paper) gives KPM nothing: identical marks are ambiguous to its per-feature matching and smooth
   ones yield no features. When a direct full solve misses and the page is 4–24 isolated marks,
@@ -12,7 +32,7 @@
   `SphereSlamTracker` falls back the same way (`SphereSlamTracker.constellationFallback`).
 - **Lookalike marks count.** KPM's matcher dropped every feature whose best match barely beat its
   second-best, so a target of repeated marks (five X's) gave it nothing and never locked. A failed
-  ratio test whose best match is still close (Hamming ≤ 160 of 768 bits) now keeps both candidates;
+  ratio test whose best match is still close (Hamming ≤ 160 of 768 bits, a tunable estimate) now keeps both candidates;
   Hough voting and the homography keep the one that agrees with the rest of the target. The patched
   `matchers/feature_matcher-inline.h` shadows artoolkitX's from `core/nativebridge/src/main/cpp/arx_overrides`.
 - **Strong flow covers missed full solves for longer.** When a periodic KPM solve misses, flow kept the

@@ -18,6 +18,10 @@ android {
         // KpmBridge.isAvailable() then reports false instead of crashing.
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            // CI's emulator gate adds x86_64 (-Psphereslam.extraAbis=x86_64) so the instrumented
+            // native tests run there; published artifacts never carry it.
+            providers.gradleProperty("sphereslam.extraAbis").orNull?.split(',')?.map { it.trim() }
+                ?.filter { it.isNotEmpty() }?.let { abiFilters += it }
         }
         externalNativeBuild {
             cmake {

@@ -50,7 +50,21 @@ namespace vision {
      * ratio test is still kept, with its runner-up, as a lookalike. Unrelated FREAK descriptors sit
      * near half the bits (~384); identical marks match far below this.
      */
-    static const unsigned int kLookalikeMaxDistance = 160;
+    static const unsigned int kLookalikeMaxDistance = 160; // tunable estimate, not measured
+
+    /** SphereSLAM: distinct query features among [matches] (lookalikes add two rows for one feature). */
+    static inline size_t countQueries(const std::vector<match_t>& matches) {
+        size_t count = 0;
+        int last = -1;
+        // Rows are appended per query feature in ascending order, so a change of index is a new feature.
+        for (const match_t& m : matches) {
+            if (m.ins != last) {
+                count++;
+                last = m.ins;
+            }
+        }
+        return count;
+    }
 
     /************************************************************************************************************************
      *
@@ -128,7 +142,9 @@ namespace vision {
             }
         }
         ASSERT(mMatches.size() <= 2 * features1->size(), "At most two candidates per feature");
-        return mMatches.size();
+        // SphereSLAM: the caller compares this with its minimum inliers, so count features, not
+        // candidates — a lookalike's two candidates are one piece of evidence.
+        return countQueries(mMatches);
     }
     
     template<int FEATURE_SIZE>
@@ -200,7 +216,9 @@ namespace vision {
             }
         }
         ASSERT(mMatches.size() <= 2 * features1->size(), "At most two candidates per feature");
-        return mMatches.size();
+        // SphereSLAM: the caller compares this with its minimum inliers, so count features, not
+        // candidates — a lookalike's two candidates are one piece of evidence.
+        return countQueries(mMatches);
     }
     
     template<int FEATURE_SIZE>

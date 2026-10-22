@@ -2,6 +2,8 @@ import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.api.plugins.JavaBasePlugin
 import org.gradle.api.plugins.JavaPluginExtension
 import java.util.Properties
+import javax.inject.Inject
+import org.gradle.process.ExecOperations
 
 // SphereSLAM root build. AGP 9 provides built-in Kotlin support, so no kotlin-android plugin is
 // applied; per-module builds set the Kotlin JVM target via the KotlinCompile task.
@@ -33,6 +35,68 @@ allprojects {
  * resources, so each published AAR's classes.jar carries them under a module-unique path (no
  * duplicate-resource clash when a consumer packages several SphereSLAM AARs).
  */
+/**
+ * The public API of a published module, as `javap -public` prints its release classes (sorted, one
+ * class per block). [apiDump] writes it to `<module>/api/<module>.api`; [apiCheck] fails when the
+ * compiled API no longer matches the committed dump — the 1.0 compatibility gate (an API change must
+ * be made on purpose, with a re-dump in the same change). Synthetic and `$WhenMappings`-style
+ * compiler classes are left out.
+ */
+abstract class SphereSlamApiDump : DefaultTask() {
+    @get:InputFiles
+    abstract val classesDirs: ConfigurableFileCollection
+
+    @get:Input
+    abstract val javap: Property<String>
+
+    @get:Internal
+    abstract val dumpFile: RegularFileProperty
+
+    @get:Input
+    abstract val check: Property<Boolean>
+
+    @get:Inject
+    abstract val exec: ExecOperations
+
+    @TaskAction
+    fun run() {
+        val classes = classesDirs.files.filter { it.isDirectory }.flatMap { dir ->
+            dir.walkTopDown().filter { f ->
+                f.isFile && f.extension == "class" && !f.name.contains("\$\$") &&
+                    !f.name.endsWith("\$WhenMappings.class") && !f.name.startsWith("R\$") && f.name != "R.class" &&
+                    f.name != "BuildConfig.class"
+            }.toList()
+        }.sortedBy { it.path }
+        val text = StringBuilder()
+        for (chunk in classes.chunked(200)) {
+            val out = java.io.ByteArrayOutputStream()
+            exec.exec {
+                commandLine(listOf(javap.get(), "-public") + chunk.map { it.path })
+                standardOutput = out
+            }
+            text.append(out.toString(Charsets.UTF_8))
+        }
+        val blocks = text.split(Regex("(?m)^Compiled from \".*\"\\s*$")).map { it.trim() }.filter { it.isNotEmpty() }
+            .filter { it.lineSequence().first().let { head -> head.startsWith("public ") } }
+            .map { block -> block.lines().map { it.trimEnd() }.joinToString("\n") }
+            .sorted()
+        val dump = blocks.joinToString("\n\n") + "\n"
+        val file = dumpFile.get().asFile
+        if (check.get()) {
+            val committed = if (file.exists()) file.readText() else ""
+            if (committed != dump) {
+                throw GradleException(
+                    "Public API of ${file.parentFile.parentFile.name} changed (${file.path}). If intended, run " +
+                        "`./gradlew apiDump` and commit the dump with the change."
+                )
+            }
+        } else {
+            file.parentFile.mkdirs()
+            file.writeText(dump)
+        }
+    }
+}
+
 abstract class SphereSlamLicenseResources : DefaultTask() {
     @get:InputFiles
     @get:PathSensitive(PathSensitivity.RELATIVE)
@@ -84,6 +148,26 @@ subprojects {
                 variant.sources.resources?.addGeneratedSourceDirectory(licenseResources, SphereSlamLicenseResources::outputDir)
             }
         }
+        // Public API gate (see SphereSlamApiDump): apiDump writes api/<module>.api, apiCheck runs with check.
+        // The JDK running Gradle (pinned to libs.versions.jdk by CI and JitPack) supplies javap.
+        val javapPath = providers.systemProperty("java.home").map { "$it/bin/javap" }
+        val releaseClasses = layout.buildDirectory.dir("intermediates/built_in_kotlinc/release/compileReleaseKotlin/classes")
+        val apiFile = layout.projectDirectory.file("api/${project.name}.api")
+        tasks.register<SphereSlamApiDump>("apiDump") {
+            dependsOn("compileReleaseKotlin")
+            classesDirs.from(releaseClasses)
+            javap.set(javapPath)
+            dumpFile.set(apiFile)
+            check.set(false)
+        }
+        val apiCheck = tasks.register<SphereSlamApiDump>("apiCheck") {
+            dependsOn("compileReleaseKotlin")
+            classesDirs.from(releaseClasses)
+            javap.set(javapPath)
+            dumpFile.set(apiFile)
+            check.set(true)
+        }
+        tasks.matching { it.name == "check" }.configureEach { dependsOn(apiCheck) }
         apply(plugin = "maven-publish")
         afterEvaluate {
             extensions.configure<PublishingExtension>("publishing") {
