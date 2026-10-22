@@ -212,8 +212,25 @@ class Reporter(
 
         fun hasPending(dir: File): Boolean = File(dir, PENDING_FILE).exists()
 
-        /** One POST; (2xx, "HTTP <code> <reply>") or (false, the error). */
-        fun post(url: String, auth: String, json: String, timeoutMs: Int = 20_000): Pair<Boolean, String> = runCatching {
+        /**
+         * True under Robolectric. CI's JVM tests launch the activities, and every report they sent was
+         * filed by the Worker as a "Device test" issue whose only failures were the emulator's (no
+         * native library for its ABI, no rotation-vector sensor). A test run is not a device run.
+         */
+        internal val isRobolectric: Boolean by lazy {
+            runCatching { android.os.Build.FINGERPRINT == "robolectric" }.getOrDefault(false)
+        }
+
+        /**
+         * One POST; (2xx, "HTTP <code> <reply>") or (false, the error). Under Robolectric nothing is
+         * sent and the call reports success, so callers neither retry nor keep a pending body.
+         */
+        fun post(url: String, auth: String, json: String, timeoutMs: Int = 20_000): Pair<Boolean, String> {
+            if (isRobolectric) return true to "not sent: Robolectric test run"
+            return postOverNetwork(url, auth, json, timeoutMs)
+        }
+
+        private fun postOverNetwork(url: String, auth: String, json: String, timeoutMs: Int): Pair<Boolean, String> = runCatching {
             val c = URL(url).openConnection() as HttpURLConnection
             try {
                 c.requestMethod = "POST"
