@@ -227,4 +227,37 @@ class CameraIntrinsicsEstimatorTest {
         assertEquals(800f, wide.cx, 1e-3f)
         assertEquals(450f, wide.cy, 1e-3f)
     }
+
+    @Test
+    fun `a calibration with a zero principal point keeps its focal length and is centred`() {
+        // As reported by a device in the field: fx/fy fine, cx = cy = 0. Trusted, a rotated 640x480
+        // frame ended up with its principal point at (480, 0) and no pose could be solved.
+        val result = CameraIntrinsicsEstimator.computeIntrinsics(
+            calibration = floatArrayOf(3137f, 3137f, 0f, 0f, 0f),
+            pixelArrayWidth = 4096,
+            pixelArrayHeight = 3072,
+            focalLengthMm = null,
+            sensorWidthMm = null,
+            sensorHeightMm = null,
+            targetWidth = 640,
+            targetHeight = 480,
+        )
+        assertEquals(CameraIntrinsics(fx = 490.15625f, fy = 490.15625f, cx = 320f, cy = 240f, width = 640, height = 480), result)
+    }
+
+    @Test
+    fun `a slightly decentred calibrated principal point is kept`() {
+        val result = CameraIntrinsicsEstimator.computeIntrinsics(
+            calibration = floatArrayOf(3200f, 3200f, 2100f, 1450f, 0f),
+            pixelArrayWidth = 4032,
+            pixelArrayHeight = 3024,
+            focalLengthMm = null,
+            sensorWidthMm = null,
+            sensorHeightMm = null,
+            targetWidth = 4032,
+            targetHeight = 3024,
+        )
+        assertEquals(2100f, result!!.cx, 1e-3f)
+        assertEquals(1450f, result.cy, 1e-3f)
+    }
 }

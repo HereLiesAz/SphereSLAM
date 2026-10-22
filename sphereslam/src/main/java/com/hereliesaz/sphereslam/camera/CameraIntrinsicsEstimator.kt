@@ -164,6 +164,11 @@ object CameraIntrinsicsEstimator {
         )
     }
 
+    /** True when ([cx], [cy]) lies in the middle half of a [width] × [height] array. */
+    internal fun plausiblePrincipalPoint(cx: Float, cy: Float, width: Int, height: Int): Boolean =
+        cx.isFinite() && cy.isFinite() &&
+            cx in width * 0.25f..width * 0.75f && cy in height * 0.25f..height * 0.75f
+
     /**
      * The pinhole math as a pure function. `pixelArrayWidth`/`Height <= 0` means "not available".
      *
@@ -212,6 +217,14 @@ object CameraIntrinsicsEstimator {
             arrayH = if (known) calibrationArrayHeight else pixelArrayHeight
             originX = if (known) calibrationArrayLeft else 0
             originY = if (known) calibrationArrayTop else 0
+            // Some devices report a usable focal length with a principal point of (0, 0) (or
+            // otherwise far off-centre). Trusted, every pose is solved about the image corner and
+            // nothing matches. A real lens's principal point sits near the array centre; outside the
+            // middle half it is a bad value, so keep the focal lengths and centre it.
+            if (!plausiblePrincipalPoint(raw[2], raw[3], arrayW, arrayH)) {
+                raw[2] = arrayW / 2f
+                raw[3] = arrayH / 2f
+            }
         } else {
             if (focalLengthMm == null || sensorWidthMm == null || sensorHeightMm == null) return null
             if (sensorWidthMm <= 0f || sensorHeightMm <= 0f) return null
