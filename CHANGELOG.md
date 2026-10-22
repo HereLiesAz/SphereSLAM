@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Lookalike marks count.** KPM's matcher dropped every feature whose best match barely beat its
+  second-best, so a target of repeated marks (five X's) gave it nothing and never locked. A failed
+  ratio test whose best match is still close (Hamming ≤ 160 of 768 bits) now keeps both candidates;
+  Hough voting and the homography keep the one that agrees with the rest of the target. The patched
+  `matchers/feature_matcher-inline.h` shadows artoolkitX's from `core/nativebridge/src/main/cpp/arx_overrides`.
 - **Strong flow covers missed full solves for longer.** When a periodic KPM solve misses, flow kept the
   pose for at most `maxFlowOnlyMs` (1.5 s). While flow's last frame kept at least `strongFlowInliers`
   (30) points — a target filling the frame at arm's length — it may now cover misses for
