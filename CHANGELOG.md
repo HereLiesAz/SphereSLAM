@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Dim, flat frames are contrast-stretched for KPM.** A dark canvas in a dim room spans a narrow
+  luma band, so KPM found few corners and `TargetQuality` rejected keyframes as low-contrast though
+  the detail was there. Live frames, keyframes, grown pages and the reference are now stretched
+  (2nd–98th percentile to 0..255) when their span is under 128 levels (`LumaContrast`). The stretch is
+  monotonic, so KPM's pixel-pair descriptors are unchanged; well-exposed frames are untouched.
+- **Station spacing shrinks with small metric targets.** `stationSpawnDistance` was 0.3 m for any
+  physically metric reference; for a canvas board or paper at arm's length that is far more parallax
+  than a station's pure-turn model holds. A metric reference narrower than a metre now spaces stations
+  in reference widths, as non-metric references already did.
 - **Fix: a device-reported principal point of (0, 0) broke every pose solve.**
   `CameraIntrinsicsEstimator` trusted `LENS_INTRINSIC_CALIBRATION` whole; a phone reporting good focal
   lengths with `cx = cy = 0` put the optical centre in the image corner (a rotated 640×480 frame read

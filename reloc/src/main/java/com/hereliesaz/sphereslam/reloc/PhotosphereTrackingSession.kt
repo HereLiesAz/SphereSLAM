@@ -135,7 +135,8 @@ class PhotosphereTrackingSession internal constructor(
      * @property tileFixIntervalMs at most one tile localization attempt per this interval, ms (none
      *   while the wall is locked).
      * @property stationSpawnDistance camera distance from every station at which a new station opens:
-     *   metres for a physically metric reference, reference widths otherwise.
+     *   metres for a physically metric reference, reference widths otherwise. A metric reference
+     *   narrower than a metre is spaced in reference widths too, so a small target gets closer stations.
      * @property keyframeIntervalMs photosphere keyframe cadence, ms.
      * @property atlasGrowth whether accepted poses may grow the KPM atlas.
      * @property metricsIntervalMs cadence of the KPM match-metrics + per-stage timing diagnostic, ms.
@@ -237,7 +238,10 @@ class PhotosphereTrackingSession internal constructor(
 
         /** A fresh copy of the luma. */
         val luma: ByteArray get() = lumaValue.copyOf()
-        internal fun lumaRef(): ByteArray = lumaValue
+
+        // What KPM indexes: a dim, flat reference contrast-stretched like live frames (LumaContrast).
+        private val kpmLuma: ByteArray by lazy { LumaContrast.stretchedOrSame(lumaValue) }
+        internal fun lumaRef(): ByteArray = kpmLuma
     }
 
     /** An additional atlas page (`pageNo > 0`) placed in the canonical wall frame by [canonicalFromPage]. */
@@ -648,7 +652,8 @@ class PhotosphereTrackingSession internal constructor(
             active.setSearchableViews(searchableViewIds)
             anticipationAppliedTo = key
         }
-        val direct = directFrame(frame.luma)
+        // Dim, flat frames are contrast-stretched on their way to KPM (see LumaContrast).
+        val direct = directFrame(frame.luma, LumaContrast.stretchLut(frame.luma))
         val matchStartNs = elapsedRealtimeNanos()
         timing.setup.add(matchStartNs - setupStartNs)
         val pose = active.match(
@@ -843,9 +848,11 @@ class PhotosphereTrackingSession internal constructor(
         // The slot is consumed even when the quality gate rejects the frame.
         lastKeyframeMs = nowMs
         val i = frame.intrinsics
-        if (!TargetQuality.analyze(frame.luma, i.width, i.height, config.targetQuality).acceptable) return
+        // Judged and kept as KPM sees it: a dim, flat keyframe is contrast-stretched (LumaContrast).
+        val keyLuma = LumaContrast.stretchedOrSame(frame.luma)
+        if (!TargetQuality.analyze(keyLuma, i.width, i.height, config.targetQuality).acceptable) return
         // A usable keyframe is also offered as a tile of the current station.
-        if (forTile) stations?.onKeyframe(PhotosphereStationTracker.rotationOfView(mapPose), frame.luma, i, nowMs)
+        if (forTile) stations?.onKeyframe(PhotosphereStationTracker.rotationOfView(mapPose), keyLuma, i, nowMs)
         if (heading == null || elevation == null) return
         callbacks.onKeyframe(
             PhotosphereKeyframe(
@@ -983,7 +990,7 @@ class PhotosphereTrackingSession internal constructor(
         val kept = runtimeAtlasPages.values.toList()
         // Never a number the live matcher (or an earlier build of this session) already holds.
         val pageNo = maxOf(runtimeAtlasPages.keys.maxOrNull() ?: 0, highestMatcherPageNo) + 1
-        val luma = frame.luma.copyOf()
+        val luma = LumaContrast.stretchLut(frame.luma)?.let { LumaContrast.apply(frame.luma, it) } ?: frame.luma.copyOf()
         val attitude = frame.attitude
         val targetQuality = config.targetQuality
         atlasWorker.submitGrowth {
@@ -1189,14 +1196,14 @@ class PhotosphereTrackingSession internal constructor(
 
     private fun nowMs(): Long = elapsedRealtimeNanos() / 1_000_000L
 
-    private fun directFrame(bytes: ByteArray): ByteBuffer {
+    private fun directFrame(bytes: ByteArray, lut: ByteArray? = null): ByteBuffer {
         var buffer = frameBuffer
         if (buffer == null || buffer.capacity() < bytes.size) {
             buffer = ByteBuffer.allocateDirect(bytes.size)
             frameBuffer = buffer
         }
         buffer.clear()
-        buffer.put(bytes)
+        if (lut == null) buffer.put(bytes) else for (b in bytes) buffer.put(lut[b.toInt() and 0xFF])
         buffer.flip()
         return buffer
     }
@@ -1282,10 +1289,17 @@ class PhotosphereTrackingSession internal constructor(
                 a.lumaRef().contentEquals(b.lumaRef())
             )
 
-        /** Station spacing in map units: [Config.stationSpawnDistance] metres, or reference widths. */
-        private fun PhotosphereTrackingSession.spawnUnits(reference: ReferenceImage): Double =
-            if (reference.physicallyMetric) config.stationSpawnDistance.toDouble()
-            else config.stationSpawnDistance.toDouble() * reference.referenceWidthUnits
+        /**
+         * Station spacing in map units: [Config.stationSpawnDistance] metres, or reference widths. A
+         * metric reference narrower than a metre (a canvas board, a sheet of paper) uses reference
+         * widths too: at arm's length, 0.3 m of camera movement is far more parallax than a station's
+         * pure-turn model holds, so the spacing shrinks with the target.
+         */
+        private fun PhotosphereTrackingSession.spawnUnits(reference: ReferenceImage): Double {
+            val inWidths = config.stationSpawnDistance.toDouble() * reference.referenceWidthUnits
+            return if (reference.physicallyMetric) minOf(config.stationSpawnDistance.toDouble(), inWidths)
+            else inWidths
+        }
 
         /** Row-major rotation of a GL column-major view (Double, for the station tracker). */
         internal fun rotationOf(view: FloatArray): DoubleArray = PhotosphereStationTracker.rotationOfView(view)
