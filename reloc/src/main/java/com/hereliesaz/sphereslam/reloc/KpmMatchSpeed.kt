@@ -66,6 +66,10 @@ import kotlin.math.sqrt
  * @property fullSolveIntervalMs full KPM solve at least this often while flow tracking, ms.
  * @property maxFlowOnlyMs when a periodic full solve misses, flow may keep the pose for at most this
  *   long after the last successful full solve, ms.
+ * @property strongFlowOnlyMs the same limit while flow is tracking strongly (its last frame kept at
+ *   least [strongFlowInliers] points), ms. A target filling the frame at arm's length keeps many
+ *   points through a run of blurred or occluded full solves; flow's pose there is measured, not held.
+ * @property strongFlowInliers flow inliers at which tracking counts as strong.
  * @property minFlowInliers fewest surviving flow/PnP inliers for a tracked pose.
  * @property minFlowInlierFraction fewest surviving inliers as a fraction of the seeded points.
  * @property maxFlowRmsErrorPx largest PnP RMS reprojection error of a tracked pose, tracked-frame px.
@@ -98,6 +102,8 @@ data class KpmMatchSpeedConfig(
     val fullSolveEveryFrames: Int = 10,
     val fullSolveIntervalMs: Long = 500L,
     val maxFlowOnlyMs: Long = 1_500L,
+    val strongFlowOnlyMs: Long = 5_000L,
+    val strongFlowInliers: Int = 30,
     val minFlowInliers: Int = 12,
     val minFlowInlierFraction: Float = 0.4f,
     val maxFlowRmsErrorPx: Float = 2.5f,
@@ -118,6 +124,7 @@ data class KpmMatchSpeedConfig(
         require(minMatchShortSidePx >= 1)
         require(fullSolveEveryFrames >= 1)
         require(fullSolveIntervalMs >= 0L && maxFlowOnlyMs >= 0L && focusWindowMs >= 0L)
+        require(strongFlowOnlyMs >= 0L && strongFlowInliers >= 4)
         require(minFlowInliers >= 4)
         require(minFlowInlierFraction in 0f..1f)
         require(maxFlowRmsErrorPx.isFinite() && maxFlowRmsErrorPx > 0f)
@@ -313,6 +320,7 @@ internal class KpmMatchScheduler(private val config: KpmMatchSpeedConfig) {
     private var framesSinceAttempt = 0
     private var lastAttemptMs = Long.MIN_VALUE
     private var lastSuccessMs = Long.MIN_VALUE
+    private var lastTrackStrong = false
 
     /** Whether a flow seed from a recent full solve is live. */
     val isArmed: Boolean get() = armed
@@ -330,6 +338,7 @@ internal class KpmMatchScheduler(private val config: KpmMatchSpeedConfig) {
         framesSinceAttempt = 0
         if (success) {
             lastSuccessMs = nowMs
+            lastTrackStrong = false
             armed = seeded && config.flowTracking
         } else if (!flowMayCoverMiss(nowMs)) {
             armed = false
@@ -337,17 +346,27 @@ internal class KpmMatchScheduler(private val config: KpmMatchSpeedConfig) {
     }
 
     /** After a missed REFRESH: may flow still supply this frame's pose? */
-    fun flowMayCoverMiss(nowMs: Long): Boolean =
-        armed && lastSuccessMs != Long.MIN_VALUE && nowMs - lastSuccessMs <= config.maxFlowOnlyMs
+    fun flowMayCoverMiss(nowMs: Long): Boolean {
+        if (!armed || lastSuccessMs == Long.MIN_VALUE) return false
+        val limit = if (lastTrackStrong) maxOf(config.maxFlowOnlyMs, config.strongFlowOnlyMs) else config.maxFlowOnlyMs
+        return nowMs - lastSuccessMs <= limit
+    }
 
-    /** A flow-tracking attempt finished. */
-    fun onTracked(success: Boolean) {
-        if (success) framesSinceAttempt++ else armed = false
+    /** A flow-tracking attempt finished; [inliers] is how many points the tracked pose kept. */
+    fun onTracked(success: Boolean, inliers: Int = 0) {
+        if (success) {
+            framesSinceAttempt++
+            lastTrackStrong = inliers >= config.strongFlowInliers
+        } else {
+            armed = false
+            lastTrackStrong = false
+        }
     }
 
     /** Drop the flow seed (e.g. the pose gate rejected the pose it produced). */
     fun disarm() {
         armed = false
+        lastTrackStrong = false
     }
 }
 

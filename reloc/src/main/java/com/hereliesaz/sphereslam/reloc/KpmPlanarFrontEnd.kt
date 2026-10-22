@@ -125,7 +125,7 @@ internal class KpmPlanarFrontEnd(
         when (scheduler.decide(now)) {
             KpmMatchScheduler.Decision.TRACK -> {
                 val tracked = trackFlow(input)
-                scheduler.onTracked(tracked != null)
+                scheduler.onTracked(tracked != null, tracked?.inlierCount ?: 0)
                 if (tracked != null) return tracked
                 return fullSolve(input.luma, input.lumaBytes, input.timestampNs, now, input.predictedCameraFromCanonical)
             }
@@ -133,7 +133,7 @@ internal class KpmPlanarFrontEnd(
                 val solved = fullSolve(input.luma, input.lumaBytes, input.timestampNs, now, input.predictedCameraFromCanonical)
                 if (solved != null || !scheduler.flowMayCoverMiss(now)) return solved
                 // A periodic solve can miss on a blurred frame while flow is still healthy.
-                return trackFlow(input).also { scheduler.onTracked(it != null) }
+                return trackFlow(input).also { scheduler.onTracked(it != null, it?.inlierCount ?: 0) }
             }
             KpmMatchScheduler.Decision.ACQUIRE ->
                 return fullSolve(input.luma, input.lumaBytes, input.timestampNs, now, input.predictedCameraFromCanonical)

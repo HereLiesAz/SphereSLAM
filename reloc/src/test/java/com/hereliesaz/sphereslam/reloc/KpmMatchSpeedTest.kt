@@ -243,6 +243,25 @@ class KpmMatchSpeedTest {
     }
 
     @Test
+    fun `strong flow covers missed refreshes for longer`() {
+        val s = KpmMatchScheduler(speed.copy(maxFlowOnlyMs = 1_000L, strongFlowOnlyMs = 5_000L, strongFlowInliers = 30))
+        s.onFullSolve(0, success = true, seeded = true)
+        s.onTracked(success = true, inliers = 80) // a board filling the frame keeps many points
+        s.onFullSolve(1_200, success = false, seeded = false)
+        assertTrue(s.flowMayCoverMiss(1_200))
+        assertTrue(s.flowMayCoverMiss(4_900))
+        assertFalse(s.flowMayCoverMiss(5_100))
+    }
+
+    @Test
+    fun `weak flow keeps the short limit`() {
+        val s = KpmMatchScheduler(speed.copy(maxFlowOnlyMs = 1_000L, strongFlowOnlyMs = 5_000L, strongFlowInliers = 30))
+        s.onFullSolve(0, success = true, seeded = true)
+        s.onTracked(success = true, inliers = 14)
+        assertFalse(s.flowMayCoverMiss(1_200))
+    }
+
+    @Test
     fun `flow disabled means a full solve every frame`() {
         val s = KpmMatchScheduler(KpmMatchSpeedConfig.FULL_KPM_EVERY_FRAME)
         s.onFullSolve(0, success = true, seeded = true)
