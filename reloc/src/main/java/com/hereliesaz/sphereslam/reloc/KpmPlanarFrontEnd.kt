@@ -1,6 +1,7 @@
 package com.hereliesaz.sphereslam.reloc
 
 import com.hereliesaz.sphereslam.AnticipatedView
+import com.hereliesaz.sphereslam.Constellation
 import com.hereliesaz.sphereslam.PlanarImage
 import com.hereliesaz.sphereslam.PlanarMatchRequest
 import com.hereliesaz.sphereslam.SphereSlamStandaloneSession

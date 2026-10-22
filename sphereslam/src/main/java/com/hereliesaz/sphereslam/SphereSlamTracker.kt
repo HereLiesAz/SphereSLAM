@@ -149,6 +149,11 @@ class SphereSlamTracker internal constructor(
 
     private class PreviewSource(val camera: CameraModel, val luma: ByteArray, val width: Int, val height: Int, val page: PlanarPage)
     private var misses = 0
+    // The reference as a handful of isolated marks (Constellation): centres in reference pixels
+    // (y down) and page millimetres (y up); null when it is not one.
+    private var referenceMarkPixels: List<FloatArray>? = null
+    private var referenceMarkMillimetres: List<FloatArray>? = null
+    private var referenceMarkPage = 0
     private var previewTurn = 0
 
     private class PreviewReference(val pageNo: Int, val heightPx: Int, val dpi: Float, val maxFeatures: Int) {
@@ -168,6 +173,12 @@ class SphereSlamTracker internal constructor(
             require(value >= 0)
             field = value
         }
+
+    /**
+     * When KPM misses and the reference is a handful of isolated marks ([Constellation]), match the
+     * arrangement of the marks instead of their look. Read when a reference is set.
+     */
+    @Volatile var constellationFallback: Boolean = true
     @Volatile private var referenceReady: Boolean = false
     @Volatile private var referenceGeometry: SphereSlamPoseMath.PageGeometry? = null
 
@@ -228,6 +239,11 @@ class SphereSlamTracker internal constructor(
                 active.addPage(directCopy(packed), width, height, PlanarPage(pageNo, imageNo, dpi, maxFeatures)) > 0
             }.getOrDefault(false)
             referenceReady = accepted
+            val marks = if (accepted && constellationFallback) Constellation.extractMarks(packed, width, height) else emptyList()
+            val mmPerPx = 25.4f / dpi
+            referenceMarkPage = pageNo
+            referenceMarkPixels = marks.takeIf { it.isNotEmpty() }?.map { floatArrayOf(it.x, it.y) }
+            referenceMarkMillimetres = marks.takeIf { it.isNotEmpty() }?.map { floatArrayOf(it.x * mmPerPx, (height - it.y) * mmPerPx) }
             referenceGeometry = if (accepted) {
                 SphereSlamPoseMath.pageGeometry(width, height, dpi)
             } else {
@@ -310,6 +326,27 @@ class SphereSlamTracker internal constructor(
         }
     }
 
+    /**
+     * Worker thread: the constellation fallback ([constellationFallback]) for a frame KPM missed —
+     * the frame's marks matched by arrangement to a reference of a handful of isolated marks, posed
+     * from their centres. Null when the reference is not one or nothing fits within
+     * [CONSTELLATION_MAX_ERROR_PX2].
+     */
+    private fun matchConstellation(luma: ByteArray): PlanarMatch? {
+        val refPx = referenceMarkPixels ?: return null
+        val refMm = referenceMarkMillimetres ?: return null
+        val model = cameraModel ?: return null
+        val marks = Constellation.extractMarks(luma, model.width, model.height)
+        if (marks.isEmpty()) return null
+        val frame = marks.map { floatArrayOf(it.x, it.y) }
+        val pairing = Constellation.match(refPx, frame) ?: return null
+        val page = pairing.reference.map { refMm[it] }
+        val image = pairing.frame.map { frame[it] }
+        val fit = Constellation.pose(page, image, floatArrayOf(model.fx, model.fy, model.cx, model.cy)) ?: return null
+        if (fit.meanSquaredErrorPx > CONSTELLATION_MAX_ERROR_PX2) return null
+        return PlanarMatch(referenceMarkPage, fit.cameraFromPage3x4, fit.meanSquaredErrorPx, page.size)
+    }
+
     /** Worker thread: the host's searchable views' best match for [luma], or null. */
     private fun matchPreviews(luma: ByteArray): PlanarMatch? {
         val pe = previewEngine ?: return null
@@ -386,6 +423,7 @@ class SphereSlamTracker internal constructor(
                         val after = previewSearchAfterMisses
                         val viaViews = after > 0 && misses >= after && previewEngine != null && previewTurn++ % 2 == 0
                         val m = if (viaViews) matchPreviews(frame.luma) else active.match(directCopy(frame.luma))
+                            ?: matchConstellation(frame.luma)
                         if (m != null) {
                             misses = 0
                             previewTurn = 0
@@ -457,6 +495,9 @@ class SphereSlamTracker internal constructor(
     companion object {
         /** Views learned and indexed together. */
         private const val PREVIEW_BATCH = 4
+
+        /** Largest mean squared reprojection error of a constellation pose, px² (KPM's gate). */
+        private const val CONSTELLATION_MAX_ERROR_PX2 = 10f
 
         /** KPM refused a view: the engine holds its limit of reference images. */
         private const val KPM_IMAGES_FULL = -8

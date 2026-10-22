@@ -1,4 +1,4 @@
-package com.hereliesaz.sphereslam.reloc
+package com.hereliesaz.sphereslam
 
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -16,8 +16,7 @@ import kotlin.math.sqrt
  * from every pair of points and scored by how many other centres it lands on ([match]); the pose comes
  * from the homography of the matched centres ([pose]). Pure Kotlin, no OpenCV.
  */
-@ExperimentalSphereSlamRelocApi
-internal object Constellation {
+object Constellation {
 
     /** One mark: its centre (pixels of the image it was found in) and area (pixels). */
     class Mark(val x: Float, val y: Float, val area: Int)

@@ -1,4 +1,4 @@
-package com.hereliesaz.sphereslam.reloc
+package com.hereliesaz.sphereslam
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -8,7 +8,6 @@ import org.junit.Test
 import kotlin.math.cos
 import kotlin.math.sin
 
-@OptIn(ExperimentalSphereSlamRelocApi::class)
 class ConstellationTest {
 
     private val w = 640
