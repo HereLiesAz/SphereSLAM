@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Strong flow covers missed full solves for longer.** When a periodic KPM solve misses, flow kept the
+  pose for at most `maxFlowOnlyMs` (1.5 s). While flow's last frame kept at least `strongFlowInliers`
+  (30) points — a target filling the frame at arm's length — it may now cover misses for
+  `strongFlowOnlyMs` (5 s). Flow's pose is measured from tracked points, not held.
+- **Bridges turn about the wrist for metric references.** A hand-held phone turns about the wrist, so
+  its lens moves on an arc; gyro bridges and holds turned the pose about the lens. With a physically
+  metric reference they now turn about a pivot `handPivotMeters` (0.15 m) behind the lens
+  (`RotationDeltaMath.rotateAboutPivot`), and the still hold then extends to `pivotHoldDegrees` (12°).
+  Non-metric references keep the lens model and the 3° hold.
 - **A still phone keeps its last good pose.** A run of missed KPM matches dropped the lock once the
   gyro bridge's `maxBridgeMs` (400 ms) ran out, even with the phone held steady over the target. While
   the phone has turned no more than `Config.stillHoldDegrees` (default 3°) since the last lock, the

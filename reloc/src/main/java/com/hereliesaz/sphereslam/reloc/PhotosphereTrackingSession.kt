@@ -130,6 +130,11 @@ class PhotosphereTrackingSession internal constructor(
      * @property stillHoldDegrees while the phone has turned no more than this since the last lock, the
      *   last good pose is held past [maxBridgeMs] (still `IMU_BRIDGE`): the matcher missing a few frames
      *   of a target that hasn't moved in view is no reason to drop it. `0` disables the hold.
+     * @property handPivotMeters a hand-held phone turns about the wrist, this far behind the lens: gyro
+     *   bridges and holds turn the pose about that pivot, not the lens. Only with a physically metric
+     *   reference (otherwise the turn stays about the lens). `0` turns about the lens.
+     * @property pivotHoldDegrees the still hold's limit when the pivot applies: modelling the wrist
+     *   keeps the held pose right through a larger turn than [stillHoldDegrees].
      * @property holdOffWall past [maxBridgeMs], keep rendering instead of no pose: the photosphere pose
      *   once a lock has defined it ([PoseSource.PHOTOSPHERE]; it survives atlas-page changes and
      *   `forceRebuild`, not a new reference or map), else the last lock through the gyro rotation
@@ -155,6 +160,8 @@ class PhotosphereTrackingSession internal constructor(
         val targetQuality: TargetQualityConfig = TargetQualityConfig(),
         val maxBridgeMs: Long = 400L,
         val stillHoldDegrees: Float = 3f,
+        val handPivotMeters: Float = 0.15f,
+        val pivotHoldDegrees: Float = 12f,
         val holdOffWall: Boolean = true,
         val tileLocalization: Boolean = true,
         val tileFixIntervalMs: Long = 250L,
@@ -167,6 +174,8 @@ class PhotosphereTrackingSession internal constructor(
         init {
             require(maxBridgeMs >= 0L && keyframeIntervalMs >= 0L && metricsIntervalMs >= 0L)
             require(stillHoldDegrees.isFinite() && stillHoldDegrees >= 0f)
+            require(handPivotMeters.isFinite() && handPivotMeters >= 0f)
+            require(pivotHoldDegrees.isFinite() && pivotHoldDegrees >= 0f)
             require(tileFixIntervalMs >= 0L)
             require(stationSpawnDistance.isFinite() && stationSpawnDistance > 0f)
         }
@@ -350,9 +359,10 @@ class PhotosphereTrackingSession internal constructor(
             intrinsics: CameraIntrinsics,
             timestampNs: Long,
             source: PoseSource = PoseSource.IMU_BRIDGE,
+            pivotBehind: Float = 0f,
         ) =
             TrackedPose(
-                RotationMath.rotateAboutCameraCentre(view, delta), projection, intrinsics, timestampNs, pageNo,
+                RotationDeltaMath.rotateAboutPivot(view, delta, pivotBehind), projection, intrinsics, timestampNs, pageNo,
                 reprojectionError, inlierCount, unitsPerPixel, observationAgeMs, matchDurationMs, source,
                 matchMethod,
             )
@@ -1015,7 +1025,7 @@ class PhotosphereTrackingSession internal constructor(
         }
         val last = lastAcceptedCameraFromCanonical ?: return null
         val delta = imuBridge?.cameraRotationDelta(attitude?.quaternion) ?: return last
-        return RotationMath.rotateAboutCameraCentre(last, delta)
+        return RotationDeltaMath.rotateAboutPivot(last, delta, handPivotUnits())
     }
 
     private fun canBridge(attitude: AttitudeSample?, nowMs: Long): Boolean {
@@ -1032,10 +1042,18 @@ class PhotosphereTrackingSession internal constructor(
      * Translation isn't sensed, but a hand-held phone that hasn't turned has rarely moved far.
      */
     private fun isStillSinceLock(attitude: AttitudeSample?): Boolean {
-        if (config.stillHoldDegrees <= 0f || lastGood == null) return false
+        val limit = if (handPivotUnits() > 0f) config.pivotHoldDegrees else config.stillHoldDegrees
+        if (limit <= 0f || config.stillHoldDegrees <= 0f || lastGood == null) return false
         val delta = imuBridge?.cameraRotationDelta(attitude?.quaternion) ?: return false
-        return RotationMath.rotationAngleDegrees(delta) <= config.stillHoldDegrees
+        return RotationMath.rotationAngleDegrees(delta) <= limit
     }
+
+    /**
+     * [Config.handPivotMeters] in map units, or 0 when the reference isn't physically metric (its
+     * units are reference widths, so a distance in metres has no meaning there).
+     */
+    private fun handPivotUnits(): Float =
+        if (referenceImage?.physicallyMetric == true) config.handPivotMeters else 0f
 
     /**
      * The last good pose carried through the gyro rotation since it was accepted. The same rotation
@@ -1045,8 +1063,9 @@ class PhotosphereTrackingSession internal constructor(
     private fun bridgeLastGood(frame: Frame, projection: FloatArray, loop: RobustTrackingLoop): TrackedPose? {
         val held = lastGood ?: return null
         val delta = imuBridge?.cameraRotationDelta(frame.attitude?.quaternion) ?: return null
-        lastGoodCanonical?.let { loop.synchronizeRendered(RotationMath.rotateAboutCameraCentre(it, delta)) }
-        return held.bridged(delta, projection, frame.intrinsics, frame.timestampNs)
+        val pivot = handPivotUnits()
+        lastGoodCanonical?.let { loop.synchronizeRendered(RotationDeltaMath.rotateAboutPivot(it, delta, pivot)) }
+        return held.bridged(delta, projection, frame.intrinsics, frame.timestampNs, pivotBehind = pivot)
     }
 
     /**
@@ -1122,7 +1141,7 @@ class PhotosphereTrackingSession internal constructor(
         if (!config.holdOffWall) return null
         val held = lastGood ?: return null
         val delta = imuBridge?.cameraRotationDelta(frame.attitude?.quaternion) ?: return null
-        return held.bridged(delta, projection, frame.intrinsics, frame.timestampNs, PoseSource.HELD)
+        return held.bridged(delta, projection, frame.intrinsics, frame.timestampNs, PoseSource.HELD, handPivotUnits())
     }
 
     private fun commitImuReference(sample: AttitudeSample, cameraFromDevice: FloatArray, atMs: Long) {

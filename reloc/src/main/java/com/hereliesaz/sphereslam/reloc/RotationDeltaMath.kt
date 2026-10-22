@@ -60,4 +60,19 @@ object RotationDeltaMath {
      */
     fun rotateAboutCameraCentre(view: FloatArray, delta: FloatArray): FloatArray =
         RotationMath.rotateAboutCameraCentre(view, delta)
+
+    /**
+     * Like [rotateAboutCameraCentre], but the turn is about a pivot [pivotBehind] map units behind the
+     * camera (camera `+z`; it looks along `−z`): a hand-held phone turns about the wrist, so its lens
+     * moves on an arc. Camera coordinates map as `c' = ΔR·(c − P) + P`, giving
+     * `[ΔR·R | ΔR·t + (I − ΔR)·P]` with `P = (0, 0, pivotBehind)`. `0` is [rotateAboutCameraCentre].
+     */
+    fun rotateAboutPivot(view: FloatArray, delta: FloatArray, pivotBehind: Float): FloatArray {
+        val out = RotationMath.rotateAboutCameraCentre(view, delta)
+        if (pivotBehind == 0f) return out
+        out[12] += -pivotBehind * delta[2]
+        out[13] += -pivotBehind * delta[5]
+        out[14] += pivotBehind * (1f - delta[8])
+        return out
+    }
 }
