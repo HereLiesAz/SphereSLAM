@@ -95,6 +95,8 @@ class RobustTrackingLoop(
      * @param timestampSource the camera's timestamp source.
      * @param nowMs a monotonic millisecond clock for state-machine timing.
      * @param bridgeAvailable whether a gyro bridge can hold a brief miss from a lock.
+     * @param holdStill the phone has barely turned since the last lock: hold the last good pose past
+     *   the bridge limit (see [TrackingStateMachine.onVisualMiss]).
      * @return the [Outcome].
      */
     fun onFrame(
@@ -106,11 +108,12 @@ class RobustTrackingLoop(
         timestampSource: CameraTimestampSource,
         nowMs: Long,
         bridgeAvailable: Boolean = false,
+        holdStill: Boolean = false,
     ): Outcome {
-        if (viewMatrix == null) return miss(bridgeAvailable, nowMs)
+        if (viewMatrix == null) return miss(bridgeAvailable, nowMs, holdStill)
 
         val age = agePolicy.evaluate(frameTimestampNs, nowElapsedRealtimeNs, timestampSource)
-        if (age.stale) return miss(bridgeAvailable, nowMs).copy(stale = true)
+        if (age.stale) return miss(bridgeAvailable, nowMs, holdStill).copy(stale = true)
 
         // A visual return from IMU_BRIDGE is also a reacquisition: the bridge may have legitimately
         // carried the camera beyond the tight per-frame continuity envelope.
@@ -164,8 +167,8 @@ class RobustTrackingLoop(
         return Outcome(renderPose = null, state = state, accepted = false, rejection = rejection)
     }
 
-    private fun miss(bridgeAvailable: Boolean, nowMs: Long): Outcome {
-        val state = stateMachine.onVisualMiss(bridgeAvailable, nowMs)
+    private fun miss(bridgeAvailable: Boolean, nowMs: Long, holdStill: Boolean = false): Outcome {
+        val state = stateMachine.onVisualMiss(bridgeAvailable, nowMs, holdStill)
         // Once LOST (or a never-confirmed acquisition broke its streak), the old pose says nothing about
         // where the camera now is; drop it so relock is not gated by a stale continuity baseline.
         if (state == TrackingState.LOST || state == TrackingState.INITIALIZING) lastAccepted = null

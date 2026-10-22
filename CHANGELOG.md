@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **A still phone keeps its last good pose.** A run of missed KPM matches dropped the lock once the
+  gyro bridge's `maxBridgeMs` (400 ms) ran out, even with the phone held steady over the target. While
+  the phone has turned no more than `Config.stillHoldDegrees` (default 3°) since the last lock, the
+  last good pose is now held (`IMU_BRIDGE`) until a match returns; once it turns further, the bridge
+  ends and the reacquire clock starts then. `stillHoldDegrees = 0` restores the old limit.
 - **Dim, flat frames are contrast-stretched for KPM.** A dark canvas in a dim room spans a narrow
   luma band, so KPM found few corners and `TargetQuality` rejected keyframes as low-contrast though
   the detail was there. Live frames, keyframes, grown pages and the reference are now stretched
