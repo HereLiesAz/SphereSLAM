@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Fix: a device-reported principal point of (0, 0) broke every pose solve.**
+  `CameraIntrinsicsEstimator` trusted `LENS_INTRINSIC_CALIBRATION` whole; a phone reporting good focal
+  lengths with `cx = cy = 0` put the optical centre in the image corner (a rotated 640×480 frame read
+  `cx=480 cy=0`), and standalone KPM matched nothing. A calibrated principal point outside the middle
+  half of its array is now replaced by the array centre; the focal lengths are kept.
 - **Fix: good KPM matches were dropped as `STALE_OBSERVATION`.** `PhotosphereTrackingSession` judged
   a frame's age after its own keyframe capture, setup and match, so a 100–450 ms match on a mid-range
   phone pushed fresh frames past the 250 ms limit. Every attempt matched, most were thrown away, and
