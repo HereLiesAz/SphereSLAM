@@ -1,0 +1,243 @@
+public final class com.hereliesaz.sphereslam.models.CpuConfig {
+  public com.hereliesaz.sphereslam.models.CpuConfig(int, boolean);
+  public final int getThreads();
+  public final boolean getUseXnnpack();
+  public final int component1();
+  public final boolean component2();
+  public final com.hereliesaz.sphereslam.models.CpuConfig copy(int, boolean);
+  public static com.hereliesaz.sphereslam.models.CpuConfig copy$default(com.hereliesaz.sphereslam.models.CpuConfig, int, boolean, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.models.DepthEstimator implements java.lang.AutoCloseable {
+  public static final com.hereliesaz.sphereslam.models.DepthEstimator$Companion Companion;
+  public static final java.lang.String MODEL_ASSET;
+  public static final int DEFAULT_INPUT;
+  public static final int DEFAULT_OUT_MAX_DIM;
+  public com.hereliesaz.sphereslam.models.DepthEstimator(android.content.Context, java.lang.String, int, float[], float[], com.hereliesaz.sphereslam.models.DepthEstimatorOptions, com.hereliesaz.sphereslam.models.DepthRuntime$Factory);
+  public com.hereliesaz.sphereslam.models.DepthEstimator(android.content.Context, java.lang.String, int, float[], float[], com.hereliesaz.sphereslam.models.DepthEstimatorOptions);
+  public com.hereliesaz.sphereslam.models.DepthEstimator(android.content.Context, java.lang.String, int, float[], float[], com.hereliesaz.sphereslam.models.DepthEstimatorOptions, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public com.hereliesaz.sphereslam.models.DepthEstimator(android.content.Context, java.lang.String, int, float[], float[]);
+  public final com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend getActiveBackend();
+  public final boolean isLoaded();
+  public final java.lang.String getLastError();
+  public final synchronized boolean load();
+  public final synchronized boolean loadFrom(java.lang.String);
+  public final synchronized com.hereliesaz.sphereslam.models.DepthMap estimate(android.graphics.Bitmap, int);
+  public static com.hereliesaz.sphereslam.models.DepthMap estimate$default(com.hereliesaz.sphereslam.models.DepthEstimator, android.graphics.Bitmap, int, int, java.lang.Object);
+  public final synchronized com.hereliesaz.sphereslam.models.DepthMap estimateLuma(byte[], int, int, int, int);
+  public static com.hereliesaz.sphereslam.models.DepthMap estimateLuma$default(com.hereliesaz.sphereslam.models.DepthEstimator, byte[], int, int, int, int, int, java.lang.Object);
+  public synchronized void close();
+  public final com.hereliesaz.sphereslam.models.DepthMap estimateLuma(byte[], int, int, int);
+  public final com.hereliesaz.sphereslam.models.DepthMap estimateLuma(byte[], int, int);
+  public static final float[] access$getMEAN$cp();
+  public static final float[] access$getSTD$cp();
+  public static final void access$logFallback(com.hereliesaz.sphereslam.models.DepthEstimator, com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend, java.lang.Throwable);
+}
+
+public final class com.hereliesaz.sphereslam.models.DepthEstimator$Companion {
+  public final float[] getMEAN();
+  public final float[] getSTD();
+  public final com.hereliesaz.sphereslam.models.DepthEstimator$InputLayout layoutOf$models(int[], int);
+  public final kotlin.Pair<java.lang.Integer, java.lang.Integer> outputGrid$models(int[]);
+  public final void lumaToInput$models(byte[], int, int, int, int, float[], float[], com.hereliesaz.sphereslam.models.DepthEstimator$InputLayout, float[]);
+  public final void argbToInput$models(int[], int, float[], float[], com.hereliesaz.sphereslam.models.DepthEstimator$InputLayout, float[]);
+  public final com.hereliesaz.sphereslam.models.DepthMap downsample$models(float[], int, int, int);
+  public final kotlin.Pair<java.lang.Integer, kotlin.Pair<java.lang.Integer, java.lang.Integer>> downscale$models(int, int, int);
+  public final java.lang.String gpuModelToken$models(java.lang.String, long, java.lang.String);
+  public com.hereliesaz.sphereslam.models.DepthEstimator$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.models.DepthEstimator$InputLayout extends java.lang.Enum<com.hereliesaz.sphereslam.models.DepthEstimator$InputLayout> {
+  public static final com.hereliesaz.sphereslam.models.DepthEstimator$InputLayout NHWC;
+  public static final com.hereliesaz.sphereslam.models.DepthEstimator$InputLayout NCHW;
+  public static com.hereliesaz.sphereslam.models.DepthEstimator$InputLayout[] values();
+  public static com.hereliesaz.sphereslam.models.DepthEstimator$InputLayout valueOf(java.lang.String);
+  public static kotlin.enums.EnumEntries<com.hereliesaz.sphereslam.models.DepthEstimator$InputLayout> getEntries();
+}
+
+public final class com.hereliesaz.sphereslam.models.DepthEstimatorOptions {
+  public static final com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Companion Companion;
+  public static final int DEFAULT_CPU_THREADS;
+  public com.hereliesaz.sphereslam.models.DepthEstimatorOptions(com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend, int, boolean, boolean);
+  public com.hereliesaz.sphereslam.models.DepthEstimatorOptions(com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend, int, boolean, boolean, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend getBackend();
+  public final int getCpuThreads();
+  public final boolean getAllowFp16Precision();
+  public final boolean getGpuProgramCache();
+  public final java.util.List<com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend> attempts$models();
+  public final com.hereliesaz.sphereslam.models.GpuDelegateConfig gpuDelegateConfig$models(com.hereliesaz.sphereslam.models.DepthRuntime$GpuCache);
+  public final com.hereliesaz.sphereslam.models.CpuConfig cpuConfig$models();
+  public final com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend component1();
+  public final int component2();
+  public final boolean component3();
+  public final boolean component4();
+  public final com.hereliesaz.sphereslam.models.DepthEstimatorOptions copy(com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend, int, boolean, boolean);
+  public static com.hereliesaz.sphereslam.models.DepthEstimatorOptions copy$default(com.hereliesaz.sphereslam.models.DepthEstimatorOptions, com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend, int, boolean, boolean, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+  public com.hereliesaz.sphereslam.models.DepthEstimatorOptions();
+}
+
+public final class com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend extends java.lang.Enum<com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend> {
+  public static final com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend GPU;
+  public static final com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend CPU;
+  public static com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend[] values();
+  public static com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend valueOf(java.lang.String);
+  public static kotlin.enums.EnumEntries<com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend> getEntries();
+}
+
+public final class com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Companion {
+  public final <S> kotlin.Pair<S, com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend> openWithFallback$models(java.util.List<? extends com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend>, kotlin.jvm.functions.Function1<? super com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend, ? extends S>, kotlin.jvm.functions.Function2<? super com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend, ? super java.lang.Throwable, kotlin.Unit>);
+  public static kotlin.Pair openWithFallback$models$default(com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Companion, java.util.List, kotlin.jvm.functions.Function1, kotlin.jvm.functions.Function2, int, java.lang.Object);
+  public com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.models.DepthMap {
+  public com.hereliesaz.sphereslam.models.DepthMap(int, int, float[]);
+  public final int getWidth();
+  public final int getHeight();
+  public final float[] getData();
+  public final int component1();
+  public final int component2();
+  public final float[] component3();
+  public final com.hereliesaz.sphereslam.models.DepthMap copy(int, int, float[]);
+  public static com.hereliesaz.sphereslam.models.DepthMap copy$default(com.hereliesaz.sphereslam.models.DepthMap, int, int, float[], int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.models.DepthRuntime$GpuCache {
+  public com.hereliesaz.sphereslam.models.DepthRuntime$GpuCache(java.io.File, java.lang.String);
+  public final java.io.File getDirectory();
+  public final java.lang.String getModelToken();
+  public final java.io.File component1();
+  public final java.lang.String component2();
+  public final com.hereliesaz.sphereslam.models.DepthRuntime$GpuCache copy(java.io.File, java.lang.String);
+  public static com.hereliesaz.sphereslam.models.DepthRuntime$GpuCache copy$default(com.hereliesaz.sphereslam.models.DepthRuntime$GpuCache, java.io.File, java.lang.String, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.models.DepthThread {
+  public com.hereliesaz.sphereslam.models.DepthThread(java.lang.String);
+  public com.hereliesaz.sphereslam.models.DepthThread(java.lang.String, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final boolean isCurrent();
+  public final <T> T call(kotlin.jvm.functions.Function0<? extends T>);
+  public final synchronized void shutdown();
+  public com.hereliesaz.sphereslam.models.DepthThread();
+}
+
+public final class com.hereliesaz.sphereslam.models.GpuDelegateConfig {
+  public com.hereliesaz.sphereslam.models.GpuDelegateConfig(boolean, boolean, java.lang.String, java.lang.String);
+  public final boolean getPrecisionLossAllowed();
+  public final boolean getSustainedSpeed();
+  public final java.lang.String getSerializationDir();
+  public final java.lang.String getModelToken();
+  public final boolean component1();
+  public final boolean component2();
+  public final java.lang.String component3();
+  public final java.lang.String component4();
+  public final com.hereliesaz.sphereslam.models.GpuDelegateConfig copy(boolean, boolean, java.lang.String, java.lang.String);
+  public static com.hereliesaz.sphereslam.models.GpuDelegateConfig copy$default(com.hereliesaz.sphereslam.models.GpuDelegateConfig, boolean, boolean, java.lang.String, java.lang.String, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.models.LiteRtDepthRuntime implements com.hereliesaz.sphereslam.models.DepthRuntime {
+  public com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend getBackend();
+  public int[] getInputShape();
+  public int[] getOutputShape();
+  public void run(float[], float[]);
+  public void close();
+  public com.hereliesaz.sphereslam.models.LiteRtDepthRuntime(org.tensorflow.lite.Interpreter, org.tensorflow.lite.gpu.GpuDelegate, com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend, kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.models.LiteRtDepthRuntime$Factory implements com.hereliesaz.sphereslam.models.DepthRuntime$Factory {
+  public static final com.hereliesaz.sphereslam.models.LiteRtDepthRuntime$Factory INSTANCE;
+  public com.hereliesaz.sphereslam.models.DepthRuntime open(java.io.File, com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend, com.hereliesaz.sphereslam.models.DepthEstimatorOptions, com.hereliesaz.sphereslam.models.DepthRuntime$GpuCache);
+}
+
+public final class com.hereliesaz.sphereslam.models.LowLightEnhancer implements java.lang.AutoCloseable {
+  public static final com.hereliesaz.sphereslam.models.LowLightEnhancer$Companion Companion;
+  public static final java.lang.String MODEL_ASSET;
+  public static final int DEFAULT_INPUT;
+  public static final java.lang.String PREFERRED_OUTPUT;
+  public com.hereliesaz.sphereslam.models.LowLightEnhancer(android.content.Context, java.lang.String, int);
+  public com.hereliesaz.sphereslam.models.LowLightEnhancer(android.content.Context, java.lang.String, int, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final boolean isLoaded();
+  public final boolean getLastEnhanceFailed();
+  public final synchronized boolean load();
+  public final synchronized android.graphics.Bitmap enhance(android.graphics.Bitmap);
+  public final synchronized android.graphics.Bitmap enhanceOrNull(android.graphics.Bitmap);
+  public synchronized void close();
+}
+
+public final class com.hereliesaz.sphereslam.models.LowLightEnhancer$Companion {
+  public final kotlin.Pair<java.lang.Integer, java.lang.Integer> networkInputSize$models(long[], int);
+  public final int selectImageOutput$models(java.util.List<java.lang.String>, java.util.List<long[]>, int, int);
+  public com.hereliesaz.sphereslam.models.LowLightEnhancer$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.models.ModelAssets {
+  public static final com.hereliesaz.sphereslam.models.ModelAssets INSTANCE;
+  public final boolean copyAssetIfNeeded(android.content.Context, java.lang.String, java.io.File, java.lang.String);
+  public final java.io.File stampFile(java.io.File);
+  public final boolean isUpToDate(boolean, long, java.lang.String, java.lang.String);
+  public final java.lang.String sha256Hex(java.io.InputStream);
+  public final java.lang.String sha256Hex(java.io.File);
+}
+
+public final class com.hereliesaz.sphereslam.models.SuperPointDetector implements java.lang.AutoCloseable {
+  public static final com.hereliesaz.sphereslam.models.SuperPointDetector$Companion Companion;
+  public static final java.lang.String MODEL_ASSET;
+  public static final int DEFAULT_INPUT;
+  public com.hereliesaz.sphereslam.models.SuperPointDetector(android.content.Context, java.lang.String, int);
+  public com.hereliesaz.sphereslam.models.SuperPointDetector(android.content.Context, java.lang.String, int, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final boolean isLoaded();
+  public final java.util.List<java.lang.String> getOutputNames();
+  public final synchronized boolean load();
+  public final synchronized com.hereliesaz.sphereslam.models.SuperPointOutput detect(android.graphics.Bitmap);
+  public synchronized void close();
+}
+
+public final class com.hereliesaz.sphereslam.models.SuperPointDetector$Companion {
+  public com.hereliesaz.sphereslam.models.SuperPointDetector$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.models.SuperPointOutput {
+  public com.hereliesaz.sphereslam.models.SuperPointOutput(float[], long[], float[], long[]);
+  public final float[] getScores();
+  public final long[] getScoresShape();
+  public final float[] getDescriptors();
+  public final long[] getDescriptorsShape();
+  public final float[] component1();
+  public final long[] component2();
+  public final float[] component3();
+  public final long[] component4();
+  public final com.hereliesaz.sphereslam.models.SuperPointOutput copy(float[], long[], float[], long[]);
+  public static com.hereliesaz.sphereslam.models.SuperPointOutput copy$default(com.hereliesaz.sphereslam.models.SuperPointOutput, float[], long[], float[], long[], int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public interface com.hereliesaz.sphereslam.models.DepthRuntime extends java.lang.AutoCloseable {
+  public abstract com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend getBackend();
+  public abstract int[] getInputShape();
+  public abstract int[] getOutputShape();
+  public abstract void run(float[], float[]);
+}
+
+public interface com.hereliesaz.sphereslam.models.DepthRuntime$Factory {
+  public abstract com.hereliesaz.sphereslam.models.DepthRuntime open(java.io.File, com.hereliesaz.sphereslam.models.DepthEstimatorOptions$Backend, com.hereliesaz.sphereslam.models.DepthEstimatorOptions, com.hereliesaz.sphereslam.models.DepthRuntime$GpuCache);
+}
+
+public interface com.hereliesaz.sphereslam.models.ExperimentalSphereSlamModelsApi extends java.lang.annotation.Annotation {
+}

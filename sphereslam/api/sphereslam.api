@@ -1,0 +1,1587 @@
+public abstract class com.hereliesaz.sphereslam.gyro.GyroCompensationMath$Result {
+  public com.hereliesaz.sphereslam.gyro.GyroCompensationMath$Result(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.AnchoredStandaloneSession implements java.lang.AutoCloseable {
+  public com.hereliesaz.sphereslam.AnchoredStandaloneSession(com.hereliesaz.sphereslam.SphereSlamStandaloneSession);
+  public final com.hereliesaz.sphereslam.SphereSlamStandaloneSession getBase();
+  public final boolean getHasPlacement();
+  public final com.hereliesaz.sphereslam.MetricAnchor getPlacement();
+  public final void place(com.hereliesaz.sphereslam.MetricAnchor);
+  public final void clearPlacement();
+  public final com.hereliesaz.sphereslam.AnchoredStandaloneSession$AnchoredPose match(java.nio.ByteBuffer, long);
+  public void close();
+}
+
+public final class com.hereliesaz.sphereslam.AnchoredStandaloneSession$AnchoredPose {
+  public com.hereliesaz.sphereslam.AnchoredStandaloneSession$AnchoredPose(com.hereliesaz.sphereslam.SphereSlamStandaloneSession$Pose, float[], float, float);
+  public final com.hereliesaz.sphereslam.SphereSlamStandaloneSession$Pose getPose();
+  public final float getHalfWidthMeters();
+  public final float getHalfHeightMeters();
+  public final float[] getCameraFromContent();
+  public final float[] getViewFromContent();
+  public static void getViewFromContent$annotations();
+}
+
+public final class com.hereliesaz.sphereslam.AnticipatedView {
+  public static final com.hereliesaz.sphereslam.AnticipatedView$Companion Companion;
+  public com.hereliesaz.sphereslam.AnticipatedView(java.lang.String, byte[], int, int, float[], float[], float);
+  public final java.lang.String getId();
+  public final int getWidth();
+  public final int getHeight();
+  public final float getScale();
+  public final byte[] getLuma();
+  public final float[] getPageFromView();
+  public final float[] getCameraFromPage();
+}
+
+public final class com.hereliesaz.sphereslam.AnticipatedView$Companion {
+  public final float[] getSQUARE_ON();
+  public com.hereliesaz.sphereslam.AnticipatedView$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.AttitudeBasis {
+  public static final com.hereliesaz.sphereslam.AttitudeBasis INSTANCE;
+  public final com.hereliesaz.sphereslam.AttitudeBasis$Basis basis(float, float, float);
+  public static com.hereliesaz.sphereslam.AttitudeBasis$Basis basis$default(com.hereliesaz.sphereslam.AttitudeBasis, float, float, float, int, java.lang.Object);
+  public final java.lang.Float facingAzimuthDeg(float, float, float);
+  public static java.lang.Float facingAzimuthDeg$default(com.hereliesaz.sphereslam.AttitudeBasis, float, float, float, int, java.lang.Object);
+  public final double[] enuToMap(double[]);
+  public final float[] getWORLD_FROM_MAP();
+  public final com.hereliesaz.sphereslam.SphereCoverage$Direction direction(double[]);
+  public final double[] cross$sphereslam(double[], double[]);
+  public final double dot$sphereslam(double[], double[]);
+  public final double[] normalized$sphereslam(double[]);
+}
+
+public final class com.hereliesaz.sphereslam.AttitudeBasis$Basis {
+  public com.hereliesaz.sphereslam.AttitudeBasis$Basis(double[], double[], double[]);
+  public final double[] getForward();
+  public final double[] getRight();
+  public final double[] getUp();
+}
+
+public final class com.hereliesaz.sphereslam.CameraAttitudeProvider implements android.hardware.SensorEventListener {
+  public static final com.hereliesaz.sphereslam.CameraAttitudeProvider$Companion Companion;
+  public com.hereliesaz.sphereslam.CameraAttitudeProvider(android.content.Context);
+  public final boolean isAvailable();
+  public final com.hereliesaz.sphereslam.attitude.AttitudeExtrapolator getAttitudeExtrapolator();
+  public final java.lang.Float latestHeadingDegrees();
+  public final com.hereliesaz.sphereslam.CameraAttitudeProvider$Attitude latestAttitude();
+  public final java.lang.Float latestElevationDegrees();
+  public final java.lang.Float latestRollDegrees();
+  public final float[] latestDeviceToWorldMatrix();
+  public final com.hereliesaz.sphereslam.attitude.AttitudeSample latestSample();
+  public final boolean isReliable();
+  public final void start(int);
+  public static void start$default(com.hereliesaz.sphereslam.CameraAttitudeProvider, int, int, java.lang.Object);
+  public final void stop();
+  public void onSensorChanged(android.hardware.SensorEvent);
+  public final void onRotationVector$sphereslam(float[], long);
+  public void onAccuracyChanged(android.hardware.Sensor, int);
+  public final void onRotationAccuracy$sphereslam(int);
+  public final void start();
+}
+
+public final class com.hereliesaz.sphereslam.CameraAttitudeProvider$Attitude {
+  public com.hereliesaz.sphereslam.CameraAttitudeProvider$Attitude(float, float, float, float[]);
+  public final float getHeadingDeg();
+  public final float getElevationDeg();
+  public final float getRollDeg();
+  public final float[] getDeviceToWorld();
+  public final float[] matrixRef$sphereslam();
+  public final java.lang.Float getFacingAzimuthDeg();
+}
+
+public final class com.hereliesaz.sphereslam.CameraAttitudeProvider$Companion {
+  public final android.hardware.SensorManager applicationSensorManager$sphereslam(android.content.Context);
+  public final kotlin.Pair<java.lang.Float, java.lang.Float> cameraAxisHeadingElevation$sphereslam(float[]);
+  public final java.lang.Float cameraRollDegrees(float[], float[]);
+  public static java.lang.Float cameraRollDegrees$default(com.hereliesaz.sphereslam.CameraAttitudeProvider$Companion, float[], float[], int, java.lang.Object);
+  public com.hereliesaz.sphereslam.CameraAttitudeProvider$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.Constellation {
+  public static final com.hereliesaz.sphereslam.Constellation INSTANCE;
+  public static final int MIN_MARKS;
+  public static final int MIN_POSE_POINTS;
+  public static final float MATCH_TOLERANCE;
+  public static final float MIN_MATCHED_FRACTION;
+  public static final int NEIGHBOURS;
+  public static final int REFINE_ROUNDS;
+  public static final int FULL_SEARCH_LIMIT;
+  public static final int MAX_MARKS;
+  public static final int WORK_LONG_SIDE;
+  public static final int MIN_CONTRAST;
+  public static final float MAD_FACTOR;
+  public static final float MIN_AREA_FRACTION;
+  public static final float MAX_AREA_FRACTION;
+  public final java.util.List<com.hereliesaz.sphereslam.Constellation$Mark> extractMarks(byte[], int, int, com.hereliesaz.sphereslam.Constellation$Workspace);
+  public static java.util.List extractMarks$default(com.hereliesaz.sphereslam.Constellation, byte[], int, int, com.hereliesaz.sphereslam.Constellation$Workspace, int, java.lang.Object);
+  public final com.hereliesaz.sphereslam.Constellation$Pairing match(java.util.List<float[]>, java.util.List<float[]>, float, float);
+  public static com.hereliesaz.sphereslam.Constellation$Pairing match$default(com.hereliesaz.sphereslam.Constellation, java.util.List, java.util.List, float, float, int, java.lang.Object);
+  public final com.hereliesaz.sphereslam.Constellation$Pose pose(java.util.List<float[]>, java.util.List<float[]>, float[]);
+  public final double[] homography$sphereslam(java.util.List<float[]>, java.util.List<float[]>);
+}
+
+public final class com.hereliesaz.sphereslam.Constellation$Mark {
+  public com.hereliesaz.sphereslam.Constellation$Mark(float, float, int);
+  public final float getX();
+  public final float getY();
+  public final int getArea();
+}
+
+public final class com.hereliesaz.sphereslam.Constellation$Pairing {
+  public com.hereliesaz.sphereslam.Constellation$Pairing(int[], int[]);
+  public final int[] getReference();
+  public final int[] getFrame();
+}
+
+public final class com.hereliesaz.sphereslam.Constellation$Pose {
+  public com.hereliesaz.sphereslam.Constellation$Pose(float[], float);
+  public final float[] getCameraFromPage3x4();
+  public final float getMeanSquaredErrorPx();
+}
+
+public final class com.hereliesaz.sphereslam.Constellation$Workspace {
+  public com.hereliesaz.sphereslam.Constellation$Workspace();
+  public final int[] getImg$sphereslam();
+  public final void setImg$sphereslam(int[]);
+  public final int[] getDev$sphereslam();
+  public final void setDev$sphereslam(int[]);
+  public final boolean[] getMark$sphereslam();
+  public final void setMark$sphereslam(boolean[]);
+  public final boolean[] getSeen$sphereslam();
+  public final void setSeen$sphereslam(boolean[]);
+  public final int[] getStack$sphereslam();
+  public final void setStack$sphereslam(int[]);
+  public final void ensure$sphereslam(int);
+}
+
+public final class com.hereliesaz.sphereslam.CoverageGlowProjection {
+  public static final com.hereliesaz.sphereslam.CoverageGlowProjection INSTANCE;
+  public static final int FLOATS_PER_REGION_VERTEX;
+  public static final float DEFAULT_MAX_SEGMENT_DEG;
+  public static final int MAX_SEGMENTS_PER_SIDE;
+  public final java.util.List<com.hereliesaz.sphereslam.CoverageGlowProjection$GlowMark> project(java.util.List<com.hereliesaz.sphereslam.SphereCoverage$Direction>, float, float, float, float);
+  public final float[] projectRegions(java.util.List<com.hereliesaz.sphereslam.SphereCoverage$TileRegion>, float, float, float, float, int);
+  public static float[] projectRegions$default(com.hereliesaz.sphereslam.CoverageGlowProjection, java.util.List, float, float, float, float, int, int, java.lang.Object);
+  public final float[] worldFromCamera(float, float, float);
+  public static float[] worldFromCamera$default(com.hereliesaz.sphereslam.CoverageGlowProjection, float, float, float, int, java.lang.Object);
+  public final float[] worldFromCamera(float[], float[]);
+  public static float[] worldFromCamera$default(com.hereliesaz.sphereslam.CoverageGlowProjection, float[], float[], int, java.lang.Object);
+  public final java.util.List<com.hereliesaz.sphereslam.CoverageGlowProjection$GlowMark> project(java.util.List<com.hereliesaz.sphereslam.SphereCoverage$Direction>, float[], com.hereliesaz.sphereslam.CoverageGlowProjection$Lens);
+  public final com.hereliesaz.sphereslam.CoverageGlowProjection$PreparedRegions prepareRegions(java.util.List<com.hereliesaz.sphereslam.SphereCoverage$TileRegion>, float);
+  public static com.hereliesaz.sphereslam.CoverageGlowProjection$PreparedRegions prepareRegions$default(com.hereliesaz.sphereslam.CoverageGlowProjection, java.util.List, float, int, java.lang.Object);
+  public final float[] projectRegions(java.util.List<com.hereliesaz.sphereslam.SphereCoverage$TileRegion>, float[], com.hereliesaz.sphereslam.CoverageGlowProjection$Lens, float);
+  public static float[] projectRegions$default(com.hereliesaz.sphereslam.CoverageGlowProjection, java.util.List, float[], com.hereliesaz.sphereslam.CoverageGlowProjection$Lens, float, int, java.lang.Object);
+  public final float[] worldFromCamera(float[]);
+  public final com.hereliesaz.sphereslam.CoverageGlowProjection$PreparedRegions prepareRegions(java.util.List<com.hereliesaz.sphereslam.SphereCoverage$TileRegion>);
+  public final float[] projectRegions(java.util.List<com.hereliesaz.sphereslam.SphereCoverage$TileRegion>, float[], com.hereliesaz.sphereslam.CoverageGlowProjection$Lens);
+  public static final void access$requireFov(com.hereliesaz.sphereslam.CoverageGlowProjection, float, float);
+}
+
+public final class com.hereliesaz.sphereslam.CoverageGlowProjection$GlowMark {
+  public com.hereliesaz.sphereslam.CoverageGlowProjection$GlowMark(com.hereliesaz.sphereslam.SphereCoverage$Direction, float, float, boolean);
+  public final com.hereliesaz.sphereslam.SphereCoverage$Direction getDirection();
+  public final float getNdcX();
+  public final float getNdcY();
+  public final boolean getOnScreen();
+  public final com.hereliesaz.sphereslam.SphereCoverage$Direction component1();
+  public final float component2();
+  public final float component3();
+  public final boolean component4();
+  public final com.hereliesaz.sphereslam.CoverageGlowProjection$GlowMark copy(com.hereliesaz.sphereslam.SphereCoverage$Direction, float, float, boolean);
+  public static com.hereliesaz.sphereslam.CoverageGlowProjection$GlowMark copy$default(com.hereliesaz.sphereslam.CoverageGlowProjection$GlowMark, com.hereliesaz.sphereslam.SphereCoverage$Direction, float, float, boolean, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.CoverageGlowProjection$Lens {
+  public static final com.hereliesaz.sphereslam.CoverageGlowProjection$Lens$Companion Companion;
+  public com.hereliesaz.sphereslam.CoverageGlowProjection$Lens(float, float, float, float);
+  public com.hereliesaz.sphereslam.CoverageGlowProjection$Lens(float, float, float, float, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final float getScaleX();
+  public final float getScaleY();
+  public final float getOffsetX();
+  public final float getOffsetY();
+  public final float component1();
+  public final float component2();
+  public final float component3();
+  public final float component4();
+  public final com.hereliesaz.sphereslam.CoverageGlowProjection$Lens copy(float, float, float, float);
+  public static com.hereliesaz.sphereslam.CoverageGlowProjection$Lens copy$default(com.hereliesaz.sphereslam.CoverageGlowProjection$Lens, float, float, float, float, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.CoverageGlowProjection$Lens$Companion {
+  public final com.hereliesaz.sphereslam.CoverageGlowProjection$Lens fromFieldOfView(float, float);
+  public final com.hereliesaz.sphereslam.CoverageGlowProjection$Lens fromIntrinsics(float, float, float, float, int, int);
+  public final com.hereliesaz.sphereslam.CoverageGlowProjection$Lens fromIntrinsics(com.hereliesaz.sphereslam.camera.CameraIntrinsics);
+  public com.hereliesaz.sphereslam.CoverageGlowProjection$Lens$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.CoverageGlowProjection$PreparedRegions {
+  public static final com.hereliesaz.sphereslam.CoverageGlowProjection$PreparedRegions$Companion Companion;
+  public static final com.hereliesaz.sphereslam.CoverageGlowProjection$PreparedRegions EMPTY;
+  public com.hereliesaz.sphereslam.CoverageGlowProjection$PreparedRegions(int, float[], int[], int[]);
+  public final int getRegionCount();
+  public final int getMaxVertexFloats();
+  public final int projectInto(float[], com.hereliesaz.sphereslam.CoverageGlowProjection$Lens, float[]);
+}
+
+public final class com.hereliesaz.sphereslam.CoverageGlowProjection$PreparedRegions$Companion {
+  public com.hereliesaz.sphereslam.CoverageGlowProjection$PreparedRegions$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.KpmApi$DefaultImpls {
+  public static int reindex(com.hereliesaz.sphereslam.KpmApi, long);
+  public static int addPageView(com.hereliesaz.sphereslam.KpmApi, long, java.nio.ByteBuffer, int, int, com.hereliesaz.sphereslam.PlanarPageView);
+  public static int matchEx(com.hereliesaz.sphereslam.KpmApi, long, java.nio.ByteBuffer, int, float[], float[]);
+  public static int matchImages(com.hereliesaz.sphereslam.KpmApi, long, java.nio.ByteBuffer, int[], int[], float[], float[]);
+  public static boolean clear(com.hereliesaz.sphereslam.KpmApi, long);
+  public static long clone(com.hereliesaz.sphereslam.KpmApi, long);
+}
+
+public final class com.hereliesaz.sphereslam.KpmSphereSlamEngine implements com.hereliesaz.sphereslam.SphereSlamEngine {
+  public int getFrameWidth();
+  public int getFrameHeight();
+  public com.hereliesaz.sphereslam.SphereSlamCalibration getCalibration();
+  public com.hereliesaz.sphereslam.KpmSphereSlamEngine(int, int, com.hereliesaz.sphereslam.SphereSlamCalibration, com.hereliesaz.sphereslam.KpmApi);
+  public boolean isReady();
+  public int addPage(java.nio.ByteBuffer, int, int, com.hereliesaz.sphereslam.PlanarPage);
+  public int reindex();
+  public int addPageView(java.nio.ByteBuffer, int, int, com.hereliesaz.sphereslam.PlanarPageView);
+  public com.hereliesaz.sphereslam.PlanarMatch match(java.nio.ByteBuffer);
+  public final com.hereliesaz.sphereslam.KpmSphereSlamEngine fork();
+  public com.hereliesaz.sphereslam.PlanarMatch match(java.nio.ByteBuffer, com.hereliesaz.sphereslam.PlanarMatchRequest);
+  public boolean clearPages();
+  public void close();
+}
+
+public final class com.hereliesaz.sphereslam.MetricAnchor {
+  public com.hereliesaz.sphereslam.MetricAnchor(float[], float, float);
+  public final float getHalfWidthMeters();
+  public final float getHalfHeightMeters();
+  public final float[] getCanonicalFromContent();
+  public boolean equals(java.lang.Object);
+  public int hashCode();
+}
+
+public final class com.hereliesaz.sphereslam.NativeKpmApi implements com.hereliesaz.sphereslam.KpmApi {
+  public static final com.hereliesaz.sphereslam.NativeKpmApi INSTANCE;
+  public long create(int, int, com.hereliesaz.sphereslam.SphereSlamCalibration);
+  public int addPage(long, java.nio.ByteBuffer, int, int, float, int, int, int);
+  public int match(long, java.nio.ByteBuffer, float[]);
+  public int reindex(long);
+  public int addPageView(long, java.nio.ByteBuffer, int, int, com.hereliesaz.sphereslam.PlanarPageView);
+  public int matchEx(long, java.nio.ByteBuffer, int, float[], float[]);
+  public int matchImages(long, java.nio.ByteBuffer, int[], int[], float[], float[]);
+  public void destroy(long);
+  public boolean clear(long);
+  public long clone(long);
+}
+
+public final class com.hereliesaz.sphereslam.OverlayPlacement {
+  public static final com.hereliesaz.sphereslam.OverlayPlacement INSTANCE;
+  public final com.hereliesaz.sphereslam.MetricAnchor anchor(float, float, float, float, float);
+  public final com.hereliesaz.sphereslam.MetricAnchor fromCanonicalTransform(float[], float, float);
+  public final float[] cameraFromContent(com.hereliesaz.sphereslam.SphereSlamStandaloneSession$Pose, com.hereliesaz.sphereslam.MetricAnchor);
+  public final float[] viewFromContent(com.hereliesaz.sphereslam.SphereSlamStandaloneSession$Pose, com.hereliesaz.sphereslam.MetricAnchor);
+  public final float[] multiplyColumnMajor$sphereslam(float[], float[]);
+}
+
+public final class com.hereliesaz.sphereslam.PanoramaTile {
+  public com.hereliesaz.sphereslam.PanoramaTile(com.hereliesaz.sphereslam.TileId, com.hereliesaz.sphereslam.SphereCoverage$Direction, boolean, long, float[], java.lang.Float);
+  public final com.hereliesaz.sphereslam.TileId getId();
+  public final com.hereliesaz.sphereslam.SphereCoverage$Direction getCenter();
+  public final boolean getNeedsUpdate();
+  public final long getLastUpdatedMs();
+  public final java.lang.Float getRangeMeters();
+  public final float[] getRepresentativeOrientation();
+  public boolean equals(java.lang.Object);
+  public int hashCode();
+}
+
+public final class com.hereliesaz.sphereslam.PhotosphereFingerprintFrame {
+  public static final com.hereliesaz.sphereslam.PhotosphereFingerprintFrame INSTANCE;
+  public final com.hereliesaz.sphereslam.PhotosphereFingerprintFrame$Point3 referencePixelToWall(float, float, int, int, com.hereliesaz.sphereslam.SphereSlamPoseMath$PageGeometry);
+  public final com.hereliesaz.sphereslam.PhotosphereFingerprintFrame$Point3 kpmPageMillimetersToWall(float, float, com.hereliesaz.sphereslam.SphereSlamPoseMath$PageGeometry);
+  public final float[] mapFromFingerprint(double[], double[], float);
+  public final float[] mapFromFingerprint(float, float, float);
+  public final float[] cameraFromMap(float[], float[]);
+  public final com.hereliesaz.sphereslam.PhotosphereFingerprintFrame$Placement placement(com.hereliesaz.sphereslam.PhotosphereMap, com.hereliesaz.sphereslam.PhotosphereView, float, float);
+  public static com.hereliesaz.sphereslam.PhotosphereFingerprintFrame$Placement placement$default(com.hereliesaz.sphereslam.PhotosphereFingerprintFrame, com.hereliesaz.sphereslam.PhotosphereMap, com.hereliesaz.sphereslam.PhotosphereView, float, float, int, java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.PhotosphereFingerprintFrame$Placement {
+  public com.hereliesaz.sphereslam.PhotosphereFingerprintFrame$Placement(float[], float, boolean, com.hereliesaz.sphereslam.TileId, com.hereliesaz.sphereslam.SphereCoverage$Direction);
+  public final float getReferenceWidthUnits();
+  public final boolean getPhysicallyMetric();
+  public final com.hereliesaz.sphereslam.TileId getTileId();
+  public final com.hereliesaz.sphereslam.SphereCoverage$Direction getDirection();
+  public final float[] getMapFromFingerprint();
+}
+
+public final class com.hereliesaz.sphereslam.PhotosphereFingerprintFrame$Point3 {
+  public com.hereliesaz.sphereslam.PhotosphereFingerprintFrame$Point3(float, float, float);
+  public com.hereliesaz.sphereslam.PhotosphereFingerprintFrame$Point3(float, float, float, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final float getX();
+  public final float getY();
+  public final float getZ();
+  public final float[] toFloatArray();
+  public final float component1();
+  public final float component2();
+  public final float component3();
+  public final com.hereliesaz.sphereslam.PhotosphereFingerprintFrame$Point3 copy(float, float, float);
+  public static com.hereliesaz.sphereslam.PhotosphereFingerprintFrame$Point3 copy$default(com.hereliesaz.sphereslam.PhotosphereFingerprintFrame$Point3, float, float, float, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.PhotosphereKeyframe {
+  public com.hereliesaz.sphereslam.PhotosphereKeyframe(long, byte[], int, int, float[], float, float, float[], float[], float);
+  public com.hereliesaz.sphereslam.PhotosphereKeyframe(long, byte[], int, int, float[], float, float, float[], float[], float, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final long getTimestampNs();
+  public final int getWidth();
+  public final int getHeight();
+  public final float getHeadingDeg();
+  public final float getElevationDeg();
+  public final float getRollDeg();
+  public final byte[] getLuma();
+  public final float[] getIntrinsics();
+  public final float[] getOrientationQuaternion();
+  public final float[] getCameraFromMap();
+  public java.lang.String toString();
+}
+
+public final class com.hereliesaz.sphereslam.PhotosphereKeyframeStore {
+  public com.hereliesaz.sphereslam.PhotosphereKeyframeStore(com.hereliesaz.sphereslam.PhotosphereMap);
+  public final com.hereliesaz.sphereslam.PhotosphereMap getMap();
+  public final com.hereliesaz.sphereslam.PhotosphereKeyframe getLatest();
+  public final com.hereliesaz.sphereslam.PhotosphereKeyframeStore$Recorded record(com.hereliesaz.sphereslam.PhotosphereKeyframe, long);
+  public final com.hereliesaz.sphereslam.PhotosphereKeyframe keyframe(com.hereliesaz.sphereslam.TileId);
+  public final java.util.Map<com.hereliesaz.sphereslam.TileId, com.hereliesaz.sphereslam.PhotosphereKeyframe> keyframes();
+  public final void clear();
+  public final com.hereliesaz.sphereslam.PhotosphereView view(float, float, float);
+  public static com.hereliesaz.sphereslam.PhotosphereView view$default(com.hereliesaz.sphereslam.PhotosphereKeyframeStore, float, float, float, int, java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.PhotosphereKeyframeStore$Recorded {
+  public com.hereliesaz.sphereslam.PhotosphereKeyframeStore$Recorded(com.hereliesaz.sphereslam.TileId, boolean, java.util.List<com.hereliesaz.sphereslam.TileId>, java.util.List<com.hereliesaz.sphereslam.TileId>, java.util.List<com.hereliesaz.sphereslam.TileId>);
+  public com.hereliesaz.sphereslam.PhotosphereKeyframeStore$Recorded(com.hereliesaz.sphereslam.TileId, boolean, java.util.List, java.util.List, java.util.List, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final com.hereliesaz.sphereslam.TileId getTile();
+  public final boolean getFirstCaptureForTile();
+  public final java.util.List<com.hereliesaz.sphereslam.TileId> getCoveredTiles();
+  public final java.util.List<com.hereliesaz.sphereslam.TileId> getFirstCoveredTiles();
+  public final java.util.List<com.hereliesaz.sphereslam.TileId> getProgressedTiles();
+  public final com.hereliesaz.sphereslam.TileId component1();
+  public final boolean component2();
+  public final java.util.List<com.hereliesaz.sphereslam.TileId> component3();
+  public final java.util.List<com.hereliesaz.sphereslam.TileId> component4();
+  public final java.util.List<com.hereliesaz.sphereslam.TileId> component5();
+  public final com.hereliesaz.sphereslam.PhotosphereKeyframeStore$Recorded copy(com.hereliesaz.sphereslam.TileId, boolean, java.util.List<com.hereliesaz.sphereslam.TileId>, java.util.List<com.hereliesaz.sphereslam.TileId>, java.util.List<com.hereliesaz.sphereslam.TileId>);
+  public static com.hereliesaz.sphereslam.PhotosphereKeyframeStore$Recorded copy$default(com.hereliesaz.sphereslam.PhotosphereKeyframeStore$Recorded, com.hereliesaz.sphereslam.TileId, boolean, java.util.List, java.util.List, java.util.List, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.PhotosphereMap {
+  public static final com.hereliesaz.sphereslam.PhotosphereMap$Companion Companion;
+  public static final float DEFAULT_MIN_COVERED_FRACTION;
+  public static final float DEFAULT_COMPLETE_FRACTION;
+  public static final float DEFAULT_COVERAGE_SAMPLE_STEP_DEG;
+  public com.hereliesaz.sphereslam.PhotosphereMap(int, float, int, float);
+  public com.hereliesaz.sphereslam.PhotosphereMap(int, float, int, float, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final int getTileCount();
+  public final boolean hasWallHeading();
+  public final void setWallHeading(float);
+  public final com.hereliesaz.sphereslam.PhotosphereMap$ScanUpdate recordView(float, float, float, com.hereliesaz.sphereslam.CoverageGlowProjection$Lens, long, float[], float, float);
+  public static com.hereliesaz.sphereslam.PhotosphereMap$ScanUpdate recordView$default(com.hereliesaz.sphereslam.PhotosphereMap, float, float, float, com.hereliesaz.sphereslam.CoverageGlowProjection$Lens, long, float[], float, float, int, java.lang.Object);
+  public final float scanProgress(com.hereliesaz.sphereslam.TileId);
+  public final java.util.List<com.hereliesaz.sphereslam.PhotosphereMap$RegionProgress> regionsInProgress();
+  public final com.hereliesaz.sphereslam.TileId tileAt(float, float);
+  public static com.hereliesaz.sphereslam.TileId tileAt$default(com.hereliesaz.sphereslam.PhotosphereMap, float, float, int, java.lang.Object);
+  public final com.hereliesaz.sphereslam.TileId markUpdated(float, float, long, float[], java.lang.Float);
+  public static com.hereliesaz.sphereslam.TileId markUpdated$default(com.hereliesaz.sphereslam.PhotosphereMap, float, float, long, float[], java.lang.Float, int, java.lang.Object);
+  public final void markUpdated(com.hereliesaz.sphereslam.TileId, long, float[], java.lang.Float);
+  public static void markUpdated$default(com.hereliesaz.sphereslam.PhotosphereMap, com.hereliesaz.sphereslam.TileId, long, float[], java.lang.Float, int, java.lang.Object);
+  public final void markNeedsUpdate(com.hereliesaz.sphereslam.TileId);
+  public final void recordStale(com.hereliesaz.sphereslam.TileId);
+  public final boolean needsUpdate(com.hereliesaz.sphereslam.TileId);
+  public final boolean hasBeenScanned(com.hereliesaz.sphereslam.TileId);
+  public final int expireOlderThan(long);
+  public final float coverageFraction();
+  public final java.util.List<com.hereliesaz.sphereslam.TileId> tilesNeedingUpdate();
+  public final java.util.List<com.hereliesaz.sphereslam.SphereCoverage$Direction> directionsNeedingUpdate();
+  public final java.util.List<com.hereliesaz.sphereslam.SphereCoverage$TileRegion> regionsNeedingUpdate();
+  public final java.util.List<com.hereliesaz.sphereslam.TileId> currentTiles();
+  public final java.util.List<com.hereliesaz.sphereslam.SphereCoverage$TileRegion> currentRegions();
+  public final java.util.List<com.hereliesaz.sphereslam.TileId> tilesInView(float, float, float, float, float);
+  public static java.util.List tilesInView$default(com.hereliesaz.sphereslam.PhotosphereMap, float, float, float, float, float, int, java.lang.Object);
+  public final java.util.List<com.hereliesaz.sphereslam.TileId> tilesCovered(float, float, float, com.hereliesaz.sphereslam.CoverageGlowProjection$Lens, float, float);
+  public static java.util.List tilesCovered$default(com.hereliesaz.sphereslam.PhotosphereMap, float, float, float, com.hereliesaz.sphereslam.CoverageGlowProjection$Lens, float, float, int, java.lang.Object);
+  public final java.util.List<com.hereliesaz.sphereslam.TileId> relockSeeds(int);
+  public final com.hereliesaz.sphereslam.PanoramaTile tile(com.hereliesaz.sphereslam.TileId);
+  public final void reset();
+  public final com.hereliesaz.sphereslam.PhotosphereMapSnapshot snapshot();
+  public com.hereliesaz.sphereslam.PhotosphereMap();
+  public static final com.hereliesaz.sphereslam.SphereGrid access$getGrid$p(com.hereliesaz.sphereslam.PhotosphereMap);
+  public static final boolean[] access$getNeedsUpdateFlags$p(com.hereliesaz.sphereslam.PhotosphereMap);
+  public static final long[] access$getLastUpdatedMs$p(com.hereliesaz.sphereslam.PhotosphereMap);
+  public static final boolean[] access$getScannedFlags$p(com.hereliesaz.sphereslam.PhotosphereMap);
+  public static final float[] access$getRangeMeters$p(com.hereliesaz.sphereslam.PhotosphereMap);
+  public static final float[][] access$getOrientation$p(com.hereliesaz.sphereslam.PhotosphereMap);
+  public static final void access$setWallHeadingDeg$p(com.hereliesaz.sphereslam.PhotosphereMap, java.lang.Float);
+}
+
+public final class com.hereliesaz.sphereslam.PhotosphereMap$Companion {
+  public final com.hereliesaz.sphereslam.SphereCoverage$Direction directionOfPixel(float, float, float, float, float, float, float, float, float);
+  public static com.hereliesaz.sphereslam.SphereCoverage$Direction directionOfPixel$default(com.hereliesaz.sphereslam.PhotosphereMap$Companion, float, float, float, float, float, float, float, float, float, int, java.lang.Object);
+  public final double[] rayOfPixel$sphereslam(float, float, float, float, float, float, float, float, float);
+  public final com.hereliesaz.sphereslam.PhotosphereMap fromSnapshot(com.hereliesaz.sphereslam.PhotosphereMapSnapshot);
+  public com.hereliesaz.sphereslam.PhotosphereMap$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.PhotosphereMap$RegionProgress {
+  public com.hereliesaz.sphereslam.PhotosphereMap$RegionProgress(com.hereliesaz.sphereslam.SphereCoverage$TileRegion, float);
+  public final com.hereliesaz.sphereslam.SphereCoverage$TileRegion getRegion();
+  public final float getProgress();
+  public final com.hereliesaz.sphereslam.SphereCoverage$TileRegion component1();
+  public final float component2();
+  public final com.hereliesaz.sphereslam.PhotosphereMap$RegionProgress copy(com.hereliesaz.sphereslam.SphereCoverage$TileRegion, float);
+  public static com.hereliesaz.sphereslam.PhotosphereMap$RegionProgress copy$default(com.hereliesaz.sphereslam.PhotosphereMap$RegionProgress, com.hereliesaz.sphereslam.SphereCoverage$TileRegion, float, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.PhotosphereMap$ScanUpdate {
+  public com.hereliesaz.sphereslam.PhotosphereMap$ScanUpdate(java.util.List<com.hereliesaz.sphereslam.TileId>, java.util.List<com.hereliesaz.sphereslam.TileId>, java.util.List<com.hereliesaz.sphereslam.TileId>);
+  public final java.util.List<com.hereliesaz.sphereslam.TileId> getProgressed();
+  public final java.util.List<com.hereliesaz.sphereslam.TileId> getCompleted();
+  public final java.util.List<com.hereliesaz.sphereslam.TileId> getFirstCompleted();
+  public final java.util.List<com.hereliesaz.sphereslam.TileId> component1();
+  public final java.util.List<com.hereliesaz.sphereslam.TileId> component2();
+  public final java.util.List<com.hereliesaz.sphereslam.TileId> component3();
+  public final com.hereliesaz.sphereslam.PhotosphereMap$ScanUpdate copy(java.util.List<com.hereliesaz.sphereslam.TileId>, java.util.List<com.hereliesaz.sphereslam.TileId>, java.util.List<com.hereliesaz.sphereslam.TileId>);
+  public static com.hereliesaz.sphereslam.PhotosphereMap$ScanUpdate copy$default(com.hereliesaz.sphereslam.PhotosphereMap$ScanUpdate, java.util.List, java.util.List, java.util.List, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.PhotosphereMapKt {
+  public static final boolean[] access$inferScanned(boolean[], long[], float[][], float[]);
+}
+
+public final class com.hereliesaz.sphereslam.PhotosphereMapSnapshot {
+  public com.hereliesaz.sphereslam.PhotosphereMapSnapshot(int, float, int, float, java.lang.Float, boolean[], long[], float[][], float[], boolean[], boolean[]);
+  public com.hereliesaz.sphereslam.PhotosphereMapSnapshot(int, float, int, float, java.lang.Float, boolean[], long[], float[][], float[], boolean[], boolean[], int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final int getSectorCount();
+  public final float getViewableHalfAngleDeg();
+  public final int getElevationBandCount();
+  public final float getViewableElevationHalfAngleDeg();
+  public final java.lang.Float getWallHeadingDeg();
+  public final boolean[] getNeedsUpdate();
+  public final long[] getLastUpdatedMs();
+  public final float[][] getOrientations();
+  public final float[] getRangeMeters();
+  public final boolean[] getScanned();
+  public final boolean[] getRangePresent();
+  public final com.hereliesaz.sphereslam.PhotosphereMapSnapshot copy(int, float, int, float, java.lang.Float, boolean[], long[], float[][], float[], boolean[], boolean[]);
+  public static com.hereliesaz.sphereslam.PhotosphereMapSnapshot copy$default(com.hereliesaz.sphereslam.PhotosphereMapSnapshot, int, float, int, float, java.lang.Float, boolean[], long[], float[][], float[], boolean[], boolean[], int, java.lang.Object);
+  public boolean equals(java.lang.Object);
+  public int hashCode();
+}
+
+public final class com.hereliesaz.sphereslam.PhotosphereReviewLoop {
+  public com.hereliesaz.sphereslam.PhotosphereReviewLoop(com.hereliesaz.sphereslam.PhotosphereMap, com.hereliesaz.sphereslam.PhotosphereReviewLoop$ReviewConfig);
+  public com.hereliesaz.sphereslam.PhotosphereReviewLoop(com.hereliesaz.sphereslam.PhotosphereMap, com.hereliesaz.sphereslam.PhotosphereReviewLoop$ReviewConfig, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final java.util.List<com.hereliesaz.sphereslam.TileId> candidates(float, float, float);
+  public static java.util.List candidates$default(com.hereliesaz.sphereslam.PhotosphereReviewLoop, float, float, float, int, java.lang.Object);
+  public final com.hereliesaz.sphereslam.PhotosphereReviewLoop$Outcome onFrame(float, float, long, java.util.Collection<com.hereliesaz.sphereslam.TileId>, java.util.Collection<com.hereliesaz.sphereslam.TileId>, float);
+  public static com.hereliesaz.sphereslam.PhotosphereReviewLoop$Outcome onFrame$default(com.hereliesaz.sphereslam.PhotosphereReviewLoop, float, float, long, java.util.Collection, java.util.Collection, float, int, java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.PhotosphereReviewLoop$Outcome {
+  public com.hereliesaz.sphereslam.PhotosphereReviewLoop$Outcome(java.util.List<com.hereliesaz.sphereslam.TileId>, java.util.List<com.hereliesaz.sphereslam.SphereCoverage$Direction>, float);
+  public final java.util.List<com.hereliesaz.sphereslam.TileId> getCandidates();
+  public final java.util.List<com.hereliesaz.sphereslam.SphereCoverage$Direction> getDirectionsNeedingUpdate();
+  public final float getCoverageFraction();
+  public final java.util.List<com.hereliesaz.sphereslam.TileId> component1();
+  public final java.util.List<com.hereliesaz.sphereslam.SphereCoverage$Direction> component2();
+  public final float component3();
+  public final com.hereliesaz.sphereslam.PhotosphereReviewLoop$Outcome copy(java.util.List<com.hereliesaz.sphereslam.TileId>, java.util.List<com.hereliesaz.sphereslam.SphereCoverage$Direction>, float);
+  public static com.hereliesaz.sphereslam.PhotosphereReviewLoop$Outcome copy$default(com.hereliesaz.sphereslam.PhotosphereReviewLoop$Outcome, java.util.List, java.util.List, float, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.PhotosphereReviewLoop$ReviewConfig {
+  public com.hereliesaz.sphereslam.PhotosphereReviewLoop$ReviewConfig(float, float, long);
+  public com.hereliesaz.sphereslam.PhotosphereReviewLoop$ReviewConfig(float, float, long, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final float getHFovDeg();
+  public final float getVFovDeg();
+  public final long getTtlMs();
+  public final float component1();
+  public final float component2();
+  public final long component3();
+  public final com.hereliesaz.sphereslam.PhotosphereReviewLoop$ReviewConfig copy(float, float, long);
+  public static com.hereliesaz.sphereslam.PhotosphereReviewLoop$ReviewConfig copy$default(com.hereliesaz.sphereslam.PhotosphereReviewLoop$ReviewConfig, float, float, long, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+  public com.hereliesaz.sphereslam.PhotosphereReviewLoop$ReviewConfig();
+}
+
+public final class com.hereliesaz.sphereslam.PhotosphereView {
+  public com.hereliesaz.sphereslam.PhotosphereView(float, float, float, int, int, float, float, float, float);
+  public final float getHeadingDeg();
+  public final float getElevationDeg();
+  public final float getRollDeg();
+  public final int getWidth();
+  public final int getHeight();
+  public final float getFx();
+  public final float getFy();
+  public final float getCx();
+  public final float getCy();
+  public final float component1();
+  public final float component2();
+  public final float component3();
+  public final int component4();
+  public final int component5();
+  public final float component6();
+  public final float component7();
+  public final float component8();
+  public final float component9();
+  public final com.hereliesaz.sphereslam.PhotosphereView copy(float, float, float, int, int, float, float, float, float);
+  public static com.hereliesaz.sphereslam.PhotosphereView copy$default(com.hereliesaz.sphereslam.PhotosphereView, float, float, float, int, int, float, float, float, float, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.PlanarImage {
+  public com.hereliesaz.sphereslam.PlanarImage(int, int);
+  public final int getPageNo();
+  public final int getImageNo();
+  public final int component1();
+  public final int component2();
+  public final com.hereliesaz.sphereslam.PlanarImage copy(int, int);
+  public static com.hereliesaz.sphereslam.PlanarImage copy$default(com.hereliesaz.sphereslam.PlanarImage, int, int, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.PlanarMatch {
+  public com.hereliesaz.sphereslam.PlanarMatch(int, float[], float, int, float[]);
+  public final int getPageNo();
+  public final float getReprojectionError();
+  public final int getInlierCount();
+  public com.hereliesaz.sphereslam.PlanarMatch(int, float[], float, int);
+  public final float[] getCorrespondences();
+  public final int getCorrespondenceCount();
+  public final float[] getCameraFromPage3x4();
+  public boolean equals(java.lang.Object);
+  public int hashCode();
+}
+
+public final class com.hereliesaz.sphereslam.PlanarMatchRequest {
+  public static final com.hereliesaz.sphereslam.PlanarMatchRequest$Companion Companion;
+  public static final int ALL_PAGES;
+  public com.hereliesaz.sphereslam.PlanarMatchRequest(int, int, java.util.List<com.hereliesaz.sphereslam.PlanarImage>);
+  public com.hereliesaz.sphereslam.PlanarMatchRequest(int, int, java.util.List, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final int getPageNo();
+  public final int getMaxCorrespondences();
+  public final java.util.List<com.hereliesaz.sphereslam.PlanarImage> getImages();
+  public final int component1();
+  public final int component2();
+  public final java.util.List<com.hereliesaz.sphereslam.PlanarImage> component3();
+  public final com.hereliesaz.sphereslam.PlanarMatchRequest copy(int, int, java.util.List<com.hereliesaz.sphereslam.PlanarImage>);
+  public static com.hereliesaz.sphereslam.PlanarMatchRequest copy$default(com.hereliesaz.sphereslam.PlanarMatchRequest, int, int, java.util.List, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+  public com.hereliesaz.sphereslam.PlanarMatchRequest();
+}
+
+public final class com.hereliesaz.sphereslam.PlanarMatchRequest$Companion {
+  public com.hereliesaz.sphereslam.PlanarMatchRequest$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.PlanarPage {
+  public com.hereliesaz.sphereslam.PlanarPage(int, int, float, int);
+  public com.hereliesaz.sphereslam.PlanarPage(int, int, float, int, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final int getPageNo();
+  public final int getImageNo();
+  public final float getReferenceDpi();
+  public final int getMaxFeatures();
+  public final int component1();
+  public final int component2();
+  public final float component3();
+  public final int component4();
+  public final com.hereliesaz.sphereslam.PlanarPage copy(int, int, float, int);
+  public static com.hereliesaz.sphereslam.PlanarPage copy$default(com.hereliesaz.sphereslam.PlanarPage, int, int, float, int, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.PlanarPageView {
+  public com.hereliesaz.sphereslam.PlanarPageView(int, int, int, float[], int, float, boolean);
+  public com.hereliesaz.sphereslam.PlanarPageView(int, int, int, float[], int, float, boolean, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final int getPageNo();
+  public final int getImageNo();
+  public final int getMaxFeatures();
+  public final int getPageHeightPixels();
+  public final float getReferenceDpi();
+  public final boolean getReindex();
+  public final float[] getPageFromView();
+}
+
+public final class com.hereliesaz.sphereslam.SphereCoverage {
+  public static final com.hereliesaz.sphereslam.SphereCoverage$Companion Companion;
+  public static final int DEFAULT_SECTORS;
+  public static final float DEFAULT_VIEWABLE_HALF_ANGLE_DEG;
+  public static final int DEFAULT_ELEVATION_BANDS;
+  public static final float DEFAULT_VIEWABLE_ELEVATION_HALF_ANGLE_DEG;
+  public com.hereliesaz.sphereslam.SphereCoverage(int, float, int, float);
+  public com.hereliesaz.sphereslam.SphereCoverage(int, float, int, float, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final int getObservationCount();
+  public final void setWallHeading(float);
+  public final boolean hasWallHeading();
+  public final boolean observe(float, float);
+  public static boolean observe$default(com.hereliesaz.sphereslam.SphereCoverage, float, float, int, java.lang.Object);
+  public final float coverageFraction();
+  public final float[] thinHeadingsDegrees();
+  public final java.util.List<com.hereliesaz.sphereslam.SphereCoverage$Direction> thinDirections();
+  public final void reset();
+  public com.hereliesaz.sphereslam.SphereCoverage();
+}
+
+public final class com.hereliesaz.sphereslam.SphereCoverage$Companion {
+  public final float norm360$sphereslam(float);
+  public final com.hereliesaz.sphereslam.SphereCoverage fromHeadingLog(float[], java.lang.Float, int, float, float[], int, float);
+  public static com.hereliesaz.sphereslam.SphereCoverage fromHeadingLog$default(com.hereliesaz.sphereslam.SphereCoverage$Companion, float[], java.lang.Float, int, float, float[], int, float, int, java.lang.Object);
+  public com.hereliesaz.sphereslam.SphereCoverage$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.SphereCoverage$Direction {
+  public com.hereliesaz.sphereslam.SphereCoverage$Direction(float, float);
+  public final float getAzimuthDeg();
+  public final float getElevationDeg();
+  public final float component1();
+  public final float component2();
+  public final com.hereliesaz.sphereslam.SphereCoverage$Direction copy(float, float);
+  public static com.hereliesaz.sphereslam.SphereCoverage$Direction copy$default(com.hereliesaz.sphereslam.SphereCoverage$Direction, float, float, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.SphereCoverage$TileRegion {
+  public com.hereliesaz.sphereslam.SphereCoverage$TileRegion(float, float, float, float);
+  public final float getAzimuthStartDeg();
+  public final float getAzimuthEndDeg();
+  public final float getElevationBottomDeg();
+  public final float getElevationTopDeg();
+  public final float component1();
+  public final float component2();
+  public final float component3();
+  public final float component4();
+  public final com.hereliesaz.sphereslam.SphereCoverage$TileRegion copy(float, float, float, float);
+  public static com.hereliesaz.sphereslam.SphereCoverage$TileRegion copy$default(com.hereliesaz.sphereslam.SphereCoverage$TileRegion, float, float, float, float, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.SphereGrid {
+  public static final com.hereliesaz.sphereslam.SphereGrid$Companion Companion;
+  public com.hereliesaz.sphereslam.SphereGrid(int, float, int, float);
+  public final int getSectorCount();
+  public final float getViewableHalfAngleDeg();
+  public final int getElevationBandCount();
+  public final float getViewableElevationHalfAngleDeg();
+  public final int getTileCount();
+  public final boolean getAzimuthWraps();
+  public final int index(int, int);
+  public final float getSectorStepDeg();
+  public final float getBandStepDeg();
+  public final float sectorCenterDelta(int);
+  public final float bandCenterElevation(int);
+  public final com.hereliesaz.sphereslam.SphereCoverage$TileRegion regionOf(int, int, float);
+  public final java.lang.Integer sectorOf(float, float);
+  public final java.lang.Integer bandOf(float);
+  public final java.util.List<kotlin.Pair<java.lang.Integer, java.lang.Integer>> neighbors(int, int);
+}
+
+public final class com.hereliesaz.sphereslam.SphereGrid$Companion {
+  public final float norm360(float);
+  public final float signedDelta(float, float);
+  public com.hereliesaz.sphereslam.SphereGrid$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.SphereSlam {
+  public static final com.hereliesaz.sphereslam.SphereSlam INSTANCE;
+  public static final int PROBE_WIDTH;
+  public static final int PROBE_HEIGHT;
+  public final boolean isAvailable();
+  public final boolean isOperational(int, int);
+  public static boolean isOperational$default(com.hereliesaz.sphereslam.SphereSlam, int, int, int, java.lang.Object);
+  public final boolean probe$sphereslam(int, int, kotlin.jvm.functions.Function0<java.lang.Boolean>, kotlin.jvm.functions.Function3<? super java.lang.Integer, ? super java.lang.Integer, ? super com.hereliesaz.sphereslam.SphereSlamCalibration, ? extends com.hereliesaz.sphereslam.SphereSlamEngine>);
+  public final com.hereliesaz.sphereslam.SphereSlamEngine create(int, int, com.hereliesaz.sphereslam.SphereSlamCalibration);
+}
+
+public final class com.hereliesaz.sphereslam.SphereSlamCalibration {
+  public com.hereliesaz.sphereslam.SphereSlamCalibration(float, float, float, float);
+  public final float getFx();
+  public final float getFy();
+  public final float getCx();
+  public final float getCy();
+  public final float component1();
+  public final float component2();
+  public final float component3();
+  public final float component4();
+  public final com.hereliesaz.sphereslam.SphereSlamCalibration copy(float, float, float, float);
+  public static com.hereliesaz.sphereslam.SphereSlamCalibration copy$default(com.hereliesaz.sphereslam.SphereSlamCalibration, float, float, float, float, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.SphereSlamEngine$DefaultImpls {
+  public static int addPageView(com.hereliesaz.sphereslam.SphereSlamEngine, java.nio.ByteBuffer, int, int, com.hereliesaz.sphereslam.PlanarPageView);
+  public static int reindex(com.hereliesaz.sphereslam.SphereSlamEngine);
+  public static com.hereliesaz.sphereslam.PlanarMatch match(com.hereliesaz.sphereslam.SphereSlamEngine, java.nio.ByteBuffer, com.hereliesaz.sphereslam.PlanarMatchRequest);
+  public static boolean clearPages(com.hereliesaz.sphereslam.SphereSlamEngine);
+}
+
+public final class com.hereliesaz.sphereslam.SphereSlamPoseMath {
+  public static final com.hereliesaz.sphereslam.SphereSlamPoseMath INSTANCE;
+  public static final float MILLIMETERS_TO_METERS;
+  public final float dpiForReferenceWidth(int, float);
+  public final com.hereliesaz.sphereslam.SphereSlamPoseMath$PageGeometry pageGeometry(int, int, float);
+  public final float[] pageToOpenGlViewMeters(float[], float, float);
+  public static float[] pageToOpenGlViewMeters$default(com.hereliesaz.sphereslam.SphereSlamPoseMath, float[], float, float, int, java.lang.Object);
+  public final float[] pageViewToCanonicalView(float[], float[]);
+  public final float[] identity4();
+  public final void requireRigid4$sphereslam(float[], java.lang.String, boolean);
+  public static void requireRigid4$sphereslam$default(com.hereliesaz.sphereslam.SphereSlamPoseMath, float[], java.lang.String, boolean, int, java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.SphereSlamPoseMath$PageGeometry {
+  public com.hereliesaz.sphereslam.SphereSlamPoseMath$PageGeometry(float, float, float, float, float);
+  public final float getWidthMeters();
+  public final float getHeightMeters();
+  public final float getCenterXmm();
+  public final float getCenterYmm();
+  public final float getReferenceDpi();
+  public final float component1();
+  public final float component2();
+  public final float component3();
+  public final float component4();
+  public final float component5();
+  public final com.hereliesaz.sphereslam.SphereSlamPoseMath$PageGeometry copy(float, float, float, float, float);
+  public static com.hereliesaz.sphereslam.SphereSlamPoseMath$PageGeometry copy$default(com.hereliesaz.sphereslam.SphereSlamPoseMath$PageGeometry, float, float, float, float, float, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.SphereSlamStandaloneSession implements java.lang.AutoCloseable {
+  public com.hereliesaz.sphereslam.SphereSlamStandaloneSession(int, int, com.hereliesaz.sphereslam.SphereSlamCalibration, com.hereliesaz.sphereslam.SphereSlamStandaloneSession$EngineFactory);
+  public final int getFrameWidth();
+  public final int getFrameHeight();
+  public final com.hereliesaz.sphereslam.SphereSlamCalibration getCalibration();
+  public com.hereliesaz.sphereslam.SphereSlamStandaloneSession(int, int, com.hereliesaz.sphereslam.SphereSlamCalibration);
+  public final boolean isReady();
+  public final boolean getHasReference();
+  public final com.hereliesaz.sphereslam.SphereSlamStandaloneSession$Reference addReference(java.nio.ByteBuffer, int, int, float, boolean, int, int, int, float[]);
+  public static com.hereliesaz.sphereslam.SphereSlamStandaloneSession$Reference addReference$default(com.hereliesaz.sphereslam.SphereSlamStandaloneSession, java.nio.ByteBuffer, int, int, float, boolean, int, int, int, float[], int, java.lang.Object);
+  public final int addReferenceView(java.nio.ByteBuffer, int, int, int, int, float[], int, boolean);
+  public static int addReferenceView$default(com.hereliesaz.sphereslam.SphereSlamStandaloneSession, java.nio.ByteBuffer, int, int, int, int, float[], int, boolean, int, java.lang.Object);
+  public final int reindexReferences();
+  public final com.hereliesaz.sphereslam.SphereSlamStandaloneSession$Pose match(java.nio.ByteBuffer, long);
+  public final com.hereliesaz.sphereslam.SphereSlamStandaloneSession$Pose match(java.nio.ByteBuffer, long, com.hereliesaz.sphereslam.PlanarMatchRequest);
+  public final com.hereliesaz.sphereslam.SphereSlamStandaloneSession fork();
+  public final float[] cameraFromCanonical(int, float[]);
+  public final void reset();
+  public void close();
+}
+
+public final class com.hereliesaz.sphereslam.SphereSlamStandaloneSession$Pose {
+  public com.hereliesaz.sphereslam.SphereSlamStandaloneSession$Pose(long, int, float[], float, int, com.hereliesaz.sphereslam.SphereSlamStandaloneSession$Reference, float[], float[]);
+  public com.hereliesaz.sphereslam.SphereSlamStandaloneSession$Pose(long, int, float[], float, int, com.hereliesaz.sphereslam.SphereSlamStandaloneSession$Reference, float[], float[], int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final long getTimestampNs();
+  public final int getPageNo();
+  public final float getReprojectionError();
+  public final int getInlierCount();
+  public final com.hereliesaz.sphereslam.SphereSlamStandaloneSession$Reference getReference();
+  public final float[] getCameraFromPage3x4();
+  public final float[] getCorrespondences();
+  public final float[] getCameraFromCanonical();
+  public final float[] getViewMatrix();
+  public static void getViewMatrix$annotations();
+  public final boolean getPhysicallyMetric();
+}
+
+public final class com.hereliesaz.sphereslam.SphereSlamStandaloneSession$Reference {
+  public com.hereliesaz.sphereslam.SphereSlamStandaloneSession$Reference(int, int, com.hereliesaz.sphereslam.SphereSlamPoseMath$PageGeometry, float[], int, boolean);
+  public final int getPageNo();
+  public final int getImageNo();
+  public final com.hereliesaz.sphereslam.SphereSlamPoseMath$PageGeometry getGeometry();
+  public final int getFeatureCount();
+  public final boolean getPhysicallyMetric();
+  public final float[] getCanonicalFromPage();
+}
+
+public final class com.hereliesaz.sphereslam.SphereSlamTracker implements java.lang.AutoCloseable {
+  public static final com.hereliesaz.sphereslam.SphereSlamTracker$Companion Companion;
+  public com.hereliesaz.sphereslam.SphereSlamTracker(com.hereliesaz.sphereslam.SphereSlamTracker$Engines, java.util.concurrent.ExecutorService);
+  public com.hereliesaz.sphereslam.SphereSlamTracker();
+  public com.hereliesaz.sphereslam.SphereSlamTracker(com.hereliesaz.sphereslam.SphereSlamTracker$Engines);
+  public final int getPreviewSearchAfterMisses();
+  public final void setPreviewSearchAfterMisses(int);
+  public final boolean getConstellationFallback();
+  public final void setConstellationFallback(boolean);
+  public final java.lang.String getLastReferenceError();
+  public final java.lang.Throwable getLastWorkerError();
+  public final boolean isNativeAvailable();
+  public final boolean isReferenceReady();
+  public final com.hereliesaz.sphereslam.SphereSlamTracker$Observation latestObservation();
+  public final com.hereliesaz.sphereslam.SphereSlamPoseMath$PageGeometry currentReferenceGeometry();
+  public final void configure(com.hereliesaz.sphereslam.SphereSlamTracker$CameraModel);
+  public final void reset(com.hereliesaz.sphereslam.SphereSlamTracker$CameraModel);
+  public final void setReference(java.nio.ByteBuffer, int, int, int, float, int, int, int);
+  public static void setReference$default(com.hereliesaz.sphereslam.SphereSlamTracker, java.nio.ByteBuffer, int, int, int, float, int, int, int, int, java.lang.Object);
+  public final void addAnticipatedViews(java.util.List<com.hereliesaz.sphereslam.AnticipatedView>);
+  public final void setSearchableAnticipatedViews(java.util.Set<java.lang.String>);
+  public final void clearReference();
+  public final void submitFrame(java.nio.ByteBuffer, int, int, int, long);
+  public void close();
+}
+
+public final class com.hereliesaz.sphereslam.SphereSlamTracker$CameraModel {
+  public com.hereliesaz.sphereslam.SphereSlamTracker$CameraModel(int, int, float, float, float, float);
+  public final int getWidth();
+  public final int getHeight();
+  public final float getFx();
+  public final float getFy();
+  public final float getCx();
+  public final float getCy();
+  public final com.hereliesaz.sphereslam.SphereSlamCalibration calibration$sphereslam();
+  public final int component1();
+  public final int component2();
+  public final float component3();
+  public final float component4();
+  public final float component5();
+  public final float component6();
+  public final com.hereliesaz.sphereslam.SphereSlamTracker$CameraModel copy(int, int, float, float, float, float);
+  public static com.hereliesaz.sphereslam.SphereSlamTracker$CameraModel copy$default(com.hereliesaz.sphereslam.SphereSlamTracker$CameraModel, int, int, float, float, float, float, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.SphereSlamTracker$Companion {
+  public final java.nio.ByteBuffer packLumaInto$sphereslam(java.nio.ByteBuffer, int, int, int, java.nio.ByteBuffer);
+  public final byte[] packLuma$sphereslam(java.nio.ByteBuffer, int, int, int);
+  public final byte[] packLumaInto$sphereslam(java.nio.ByteBuffer, int, int, int, byte[]);
+  public static final java.util.concurrent.ExecutorService access$newWorker(com.hereliesaz.sphereslam.SphereSlamTracker$Companion);
+  public com.hereliesaz.sphereslam.SphereSlamTracker$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.SphereSlamTracker$Engines {
+  public static final com.hereliesaz.sphereslam.SphereSlamTracker$Engines$Companion Companion;
+  public com.hereliesaz.sphereslam.SphereSlamTracker$Engines(kotlin.jvm.functions.Function0<java.lang.Boolean>, kotlin.jvm.functions.Function1<? super com.hereliesaz.sphereslam.SphereSlamTracker$CameraModel, ? extends com.hereliesaz.sphereslam.SphereSlamEngine>);
+  public final kotlin.jvm.functions.Function0<java.lang.Boolean> getAvailable();
+  public final kotlin.jvm.functions.Function1<com.hereliesaz.sphereslam.SphereSlamTracker$CameraModel, com.hereliesaz.sphereslam.SphereSlamEngine> getCreate();
+}
+
+public final class com.hereliesaz.sphereslam.SphereSlamTracker$Engines$Companion {
+  public final com.hereliesaz.sphereslam.SphereSlamTracker$Engines kpm(com.hereliesaz.sphereslam.KpmApi, kotlin.jvm.functions.Function0<java.lang.Boolean>);
+  public final com.hereliesaz.sphereslam.SphereSlamTracker$Engines native();
+  public com.hereliesaz.sphereslam.SphereSlamTracker$Engines$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.SphereSlamTracker$Observation {
+  public static final com.hereliesaz.sphereslam.SphereSlamTracker$Observation$Companion Companion;
+  public com.hereliesaz.sphereslam.SphereSlamTracker$Observation(long, int, float, int, float[], boolean);
+  public com.hereliesaz.sphereslam.SphereSlamTracker$Observation(long, int, float, int, float[], boolean, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final long getTimestampNs();
+  public final int getPageNo();
+  public final float getError();
+  public final int getInliers();
+  public final boolean getAnticipated();
+  public final float[] getCameraFromPage3x4();
+  public java.lang.String toString();
+}
+
+public final class com.hereliesaz.sphereslam.SphereSlamTracker$Observation$Companion {
+  public final com.hereliesaz.sphereslam.SphereSlamTracker$Observation forTesting(long, int, float, int, float[]);
+  public static com.hereliesaz.sphereslam.SphereSlamTracker$Observation forTesting$default(com.hereliesaz.sphereslam.SphereSlamTracker$Observation$Companion, long, int, float, int, float[], int, java.lang.Object);
+  public com.hereliesaz.sphereslam.SphereSlamTracker$Observation$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.TileId {
+  public com.hereliesaz.sphereslam.TileId(int, int);
+  public final int getSector();
+  public final int getBand();
+  public final int component1();
+  public final int component2();
+  public final com.hereliesaz.sphereslam.TileId copy(int, int);
+  public static com.hereliesaz.sphereslam.TileId copy$default(com.hereliesaz.sphereslam.TileId, int, int, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.attitude.AttitudeExtrapolator {
+  public static final com.hereliesaz.sphereslam.attitude.AttitudeExtrapolator$Companion Companion;
+  public static final int DEFAULT_CAPACITY;
+  public static final long DEFAULT_MAX_EXTRAPOLATION_NS;
+  public static final long DEFAULT_MAX_SAMPLE_GAP_NS;
+  public com.hereliesaz.sphereslam.attitude.AttitudeExtrapolator(int, long, long);
+  public com.hereliesaz.sphereslam.attitude.AttitudeExtrapolator(int, long, long, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final int getCapacity();
+  public final long getMaxExtrapolationNs();
+  public final long getMaxSampleGapNs();
+  public final int getSize();
+  public final java.lang.Long getNewestTimestampNs();
+  public final void clear();
+  public final void push(com.hereliesaz.sphereslam.attitude.AttitudeSample);
+  public final void push(float[], long);
+  public final boolean quaternionAt(long, float[]);
+  public final boolean deviceToWorldAt(long, float[]);
+  public final boolean worldFromCameraAt(long, float[], float[]);
+  public com.hereliesaz.sphereslam.attitude.AttitudeExtrapolator(int, long);
+  public com.hereliesaz.sphereslam.attitude.AttitudeExtrapolator(int);
+  public com.hereliesaz.sphereslam.attitude.AttitudeExtrapolator();
+}
+
+public final class com.hereliesaz.sphereslam.attitude.AttitudeExtrapolator$Companion {
+  public static final void access$quatToMat(com.hereliesaz.sphereslam.attitude.AttitudeExtrapolator$Companion, float, float, float, float, float[]);
+  public com.hereliesaz.sphereslam.attitude.AttitudeExtrapolator$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.attitude.AttitudeRotationBridge {
+  public com.hereliesaz.sphereslam.attitude.AttitudeRotationBridge(float[]);
+  public com.hereliesaz.sphereslam.attitude.AttitudeRotationBridge(float[], int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final boolean getHasReference();
+  public final void markReference(float[]);
+  public final void markReference(com.hereliesaz.sphereslam.attitude.AttitudeSample);
+  public final void clear();
+  public final float[] cameraRotationDelta(float[]);
+  public final float[] advance(float[], float[]);
+  public final kotlin.jvm.functions.Function1<float[], float[]> bridgeFunction(kotlin.jvm.functions.Function0<com.hereliesaz.sphereslam.attitude.AttitudeSample>);
+  public com.hereliesaz.sphereslam.attitude.AttitudeRotationBridge();
+}
+
+public final class com.hereliesaz.sphereslam.attitude.AttitudeSample {
+  public static final com.hereliesaz.sphereslam.attitude.AttitudeSample$Companion Companion;
+  public static final int ACCURACY_UNKNOWN;
+  public com.hereliesaz.sphereslam.attitude.AttitudeSample(float[], long, int);
+  public com.hereliesaz.sphereslam.attitude.AttitudeSample(float[], long, int, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final long getTimestampNs();
+  public final int getAccuracy();
+  public final float[] getQuaternion();
+  public final long ageNs(long);
+  public java.lang.String toString();
+}
+
+public final class com.hereliesaz.sphereslam.attitude.AttitudeSample$Companion {
+  public com.hereliesaz.sphereslam.attitude.AttitudeSample$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.attitude.AttitudeSampleBuffer {
+  public com.hereliesaz.sphereslam.attitude.AttitudeSampleBuffer();
+  public final int getAccuracy();
+  public final void setAccuracy(int);
+  public final com.hereliesaz.sphereslam.attitude.AttitudeSample latest();
+  public final void clear();
+  public final void ingestRotationVector(float[], long);
+}
+
+public final class com.hereliesaz.sphereslam.attitude.DeviceCameraRotation {
+  public static final com.hereliesaz.sphereslam.attitude.DeviceCameraRotation INSTANCE;
+  public final int surfaceRotationToDegrees(int);
+  public final int rearImageRotationDegrees(int, int);
+  public final float[] bodyToDisplay(int);
+  public final float[] cameraFromDevice(int, int);
+  public static float[] cameraFromDevice$default(com.hereliesaz.sphereslam.attitude.DeviceCameraRotation, int, int, int, java.lang.Object);
+  public final float[] cameraFromDeviceForDisplayFrame(int);
+  public final float[] toOpenCv(float[]);
+  public final float[] cameraDelta(float[], float[]);
+}
+
+public final class com.hereliesaz.sphereslam.attitude.DisplayPosePredictor {
+  public com.hereliesaz.sphereslam.attitude.DisplayPosePredictor();
+  public final boolean getHasPose();
+  public final java.lang.Long getPoseTimestampNs();
+  public final void update(float[], float[], float[], long);
+  public static void update$default(com.hereliesaz.sphereslam.attitude.DisplayPosePredictor, float[], float[], float[], long, int, java.lang.Object);
+  public final void update(float[], com.hereliesaz.sphereslam.attitude.AttitudeSample, float[], long);
+  public static void update$default(com.hereliesaz.sphereslam.attitude.DisplayPosePredictor, float[], com.hereliesaz.sphereslam.attitude.AttitudeSample, float[], long, int, java.lang.Object);
+  public final void clear();
+  public final boolean predictInto(float[], float[]);
+  public final boolean predictInto(com.hereliesaz.sphereslam.attitude.AttitudeExtrapolator, long, float[]);
+  public final float[] predict(float[]);
+  public final float[] cameraRotationDelta(float[]);
+  public final void update(float[], float[], float[]);
+  public final void update(float[], com.hereliesaz.sphereslam.attitude.AttitudeSample, float[]);
+}
+
+public final class com.hereliesaz.sphereslam.attitude.GameRotationAttitudeSource implements android.hardware.SensorEventListener {
+  public com.hereliesaz.sphereslam.attitude.GameRotationAttitudeSource(android.content.Context);
+  public final boolean isAvailable();
+  public final boolean isRunning();
+  public final com.hereliesaz.sphereslam.attitude.AttitudeSample latestSample();
+  public final int getAccuracy();
+  public final boolean start(int);
+  public static boolean start$default(com.hereliesaz.sphereslam.attitude.GameRotationAttitudeSource, int, int, java.lang.Object);
+  public final void stop();
+  public void onSensorChanged(android.hardware.SensorEvent);
+  public void onAccuracyChanged(android.hardware.Sensor, int);
+}
+
+public final class com.hereliesaz.sphereslam.camera.CameraFillCenter {
+  public static final com.hereliesaz.sphereslam.camera.CameraFillCenter INSTANCE;
+  public final java.lang.Float scale(int, int, int, int);
+  public final com.hereliesaz.sphereslam.camera.CameraIntrinsics intrinsics(com.hereliesaz.sphereslam.camera.CameraIntrinsics, int, int);
+  public final float[] projection(com.hereliesaz.sphereslam.camera.CameraIntrinsics, int, int, float, float);
+  public static float[] projection$default(com.hereliesaz.sphereslam.camera.CameraFillCenter, com.hereliesaz.sphereslam.camera.CameraIntrinsics, int, int, float, float, int, java.lang.Object);
+  public final float[] viewToFrameNormalized(float, float, int, int, int, int);
+  public final float[] frameToViewNormalized(float, float, int, int, int, int);
+  public final float[] fieldOfViewDegrees(com.hereliesaz.sphereslam.camera.CameraIntrinsics, int, int);
+  public final float[] screenIntrinsics(float, float, int, int, int, int);
+  public final float[] screenIntrinsics(com.hereliesaz.sphereslam.camera.CameraIntrinsics, int, int);
+  public final float[] screenIntrinsicsFallback(int, int);
+}
+
+public final class com.hereliesaz.sphereslam.camera.CameraIntrinsics {
+  public static final com.hereliesaz.sphereslam.camera.CameraIntrinsics$Companion Companion;
+  public com.hereliesaz.sphereslam.camera.CameraIntrinsics(float, float, float, float, int, int);
+  public final float getFx();
+  public final float getFy();
+  public final float getCx();
+  public final float getCy();
+  public final int getWidth();
+  public final int getHeight();
+  public final boolean isValid();
+  public final com.hereliesaz.sphereslam.SphereSlamCalibration toCalibration();
+  public final float component1();
+  public final float component2();
+  public final float component3();
+  public final float component4();
+  public final int component5();
+  public final int component6();
+  public final com.hereliesaz.sphereslam.camera.CameraIntrinsics copy(float, float, float, float, int, int);
+  public static com.hereliesaz.sphereslam.camera.CameraIntrinsics copy$default(com.hereliesaz.sphereslam.camera.CameraIntrinsics, float, float, float, float, int, int, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+  public static final com.hereliesaz.sphereslam.camera.CameraIntrinsics access$getUNKNOWN$cp();
+}
+
+public final class com.hereliesaz.sphereslam.camera.CameraIntrinsics$Companion {
+  public final com.hereliesaz.sphereslam.camera.CameraIntrinsics getUNKNOWN();
+  public com.hereliesaz.sphereslam.camera.CameraIntrinsics$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.camera.CameraIntrinsicsEstimator {
+  public static final com.hereliesaz.sphereslam.camera.CameraIntrinsicsEstimator INSTANCE;
+  public final com.hereliesaz.sphereslam.camera.CameraIntrinsics estimate(android.content.Context, java.lang.String, int, int);
+  public final com.hereliesaz.sphereslam.camera.CameraIntrinsicsEstimator$RawCalibration rawCalibration(android.content.Context, java.lang.String);
+  public final void clearCache();
+  public final com.hereliesaz.sphereslam.camera.CameraIntrinsicsEstimator$RawCalibration readRaw(android.hardware.camera2.CameraCharacteristics);
+  public final boolean plausiblePrincipalPoint$sphereslam(float, float, int, int);
+  public final com.hereliesaz.sphereslam.camera.CameraIntrinsics computeIntrinsics(float[], int, int, java.lang.Float, java.lang.Float, java.lang.Float, int, int, int, int, int, int, int, int, int, int);
+  public static com.hereliesaz.sphereslam.camera.CameraIntrinsics computeIntrinsics$default(com.hereliesaz.sphereslam.camera.CameraIntrinsicsEstimator, float[], int, int, java.lang.Float, java.lang.Float, java.lang.Float, int, int, int, int, int, int, int, int, int, int, int, java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.camera.CameraIntrinsicsEstimator$RawCalibration {
+  public com.hereliesaz.sphereslam.camera.CameraIntrinsicsEstimator$RawCalibration(float[], int, int, java.lang.Float, java.lang.Float, java.lang.Float, int, int, int, int, int, int, int, int);
+  public com.hereliesaz.sphereslam.camera.CameraIntrinsicsEstimator$RawCalibration(float[], int, int, java.lang.Float, java.lang.Float, java.lang.Float, int, int, int, int, int, int, int, int, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final float[] getCalibration();
+  public final int getPixelArrayWidth();
+  public final int getPixelArrayHeight();
+  public final java.lang.Float getFocalLengthMm();
+  public final java.lang.Float getSensorWidthMm();
+  public final java.lang.Float getSensorHeightMm();
+  public final int getCalibrationArrayWidth();
+  public final int getCalibrationArrayHeight();
+  public final int getCalibrationArrayLeft();
+  public final int getCalibrationArrayTop();
+  public final int getActiveArrayLeft();
+  public final int getActiveArrayTop();
+  public final int getActiveArrayWidth();
+  public final int getActiveArrayHeight();
+  public boolean equals(java.lang.Object);
+  public int hashCode();
+  public final com.hereliesaz.sphereslam.camera.CameraIntrinsics intrinsicsFor(int, int);
+  public final float[] component1();
+  public final int component2();
+  public final int component3();
+  public final java.lang.Float component4();
+  public final java.lang.Float component5();
+  public final java.lang.Float component6();
+  public final int component7();
+  public final int component8();
+  public final int component9();
+  public final int component10();
+  public final int component11();
+  public final int component12();
+  public final int component13();
+  public final int component14();
+  public final com.hereliesaz.sphereslam.camera.CameraIntrinsicsEstimator$RawCalibration copy(float[], int, int, java.lang.Float, java.lang.Float, java.lang.Float, int, int, int, int, int, int, int, int);
+  public static com.hereliesaz.sphereslam.camera.CameraIntrinsicsEstimator$RawCalibration copy$default(com.hereliesaz.sphereslam.camera.CameraIntrinsicsEstimator$RawCalibration, float[], int, int, java.lang.Float, java.lang.Float, java.lang.Float, int, int, int, int, int, int, int, int, int, java.lang.Object);
+  public java.lang.String toString();
+}
+
+public final class com.hereliesaz.sphereslam.camera.CameraIntrinsicsTransforms {
+  public static final com.hereliesaz.sphereslam.camera.CameraIntrinsicsTransforms INSTANCE;
+  public final com.hereliesaz.sphereslam.camera.CameraIntrinsics crop(com.hereliesaz.sphereslam.camera.CameraIntrinsics, int, int, int, int);
+  public final com.hereliesaz.sphereslam.camera.CameraIntrinsics rescale(com.hereliesaz.sphereslam.camera.CameraIntrinsics, int, int);
+  public final com.hereliesaz.sphereslam.camera.CameraIntrinsics rotate(com.hereliesaz.sphereslam.camera.CameraIntrinsics, int);
+}
+
+public final class com.hereliesaz.sphereslam.camera.CaptureRotation {
+  public static final com.hereliesaz.sphereslam.camera.CaptureRotation INSTANCE;
+  public final float[] rotateIntrinsics(float, float, float, float, float, float, int);
+  public final float[] unrotateIntrinsics(float, float, float, float, float, float, int);
+  public final float[] rotatePixel(float, float, float, float, int);
+  public final int normalize(int);
+}
+
+public final class com.hereliesaz.sphereslam.camera.LensDistortion {
+  public static final com.hereliesaz.sphereslam.camera.LensDistortion INSTANCE;
+  public final com.hereliesaz.sphereslam.camera.LensDistortion$Profile read(android.hardware.camera2.CameraCharacteristics);
+  public final java.lang.Integer chooseCorrectionMode(int[]);
+  public final double[] distort(float[], double, double);
+  public final float maxResidualPx(float[], com.hereliesaz.sphereslam.camera.CameraIntrinsics, int);
+  public static float maxResidualPx$default(com.hereliesaz.sphereslam.camera.LensDistortion, float[], com.hereliesaz.sphereslam.camera.CameraIntrinsics, int, int, java.lang.Object);
+  public final java.lang.String describe(com.hereliesaz.sphereslam.camera.LensDistortion$Profile, java.lang.Integer, com.hereliesaz.sphereslam.camera.CameraIntrinsics);
+}
+
+public final class com.hereliesaz.sphereslam.camera.LensDistortion$Profile {
+  public com.hereliesaz.sphereslam.camera.LensDistortion$Profile(float[], int[]);
+  public final float[] getCoefficients();
+  public final int[] getCorrectionModes();
+  public final java.lang.Integer getTrackingCorrectionMode();
+}
+
+public final class com.hereliesaz.sphereslam.camera.LumaFrameBufferPool {
+  public com.hereliesaz.sphereslam.camera.LumaFrameBufferPool(int);
+  public com.hereliesaz.sphereslam.camera.LumaFrameBufferPool(int, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final int getSlots();
+  public final synchronized com.hereliesaz.sphereslam.camera.RotatedLuma packCropAndRotate(java.nio.ByteBuffer, int, int, int, int, int, int, int, int, int);
+  public final com.hereliesaz.sphereslam.camera.RotatedLuma packAndRotate(java.nio.ByteBuffer, int, int, int, int, int);
+  public com.hereliesaz.sphereslam.camera.LumaFrameBufferPool();
+}
+
+public final class com.hereliesaz.sphereslam.camera.LumaFrameTransform {
+  public static final com.hereliesaz.sphereslam.camera.LumaFrameTransform INSTANCE;
+  public static final int BAND_ROWS;
+  public final com.hereliesaz.sphereslam.camera.RotatedLuma packAndRotate(java.nio.ByteBuffer, int, int, int, int, int);
+  public final com.hereliesaz.sphereslam.camera.RotatedLuma packCropAndRotate(java.nio.ByteBuffer, int, int, int, int, int, int, int, int, int);
+  public final com.hereliesaz.sphereslam.camera.RotatedLuma transform$sphereslam(java.nio.ByteBuffer, int, int, int, int, int, int, int, int, int, byte[], com.hereliesaz.sphereslam.camera.LumaFrameTransform$Scratch);
+  public final com.hereliesaz.sphereslam.camera.RotatedLuma packCropAndRotateInto(java.nio.ByteBuffer, int, int, int, int, int, int, int, int, int, byte[]);
+  public final com.hereliesaz.sphereslam.camera.RotatedLuma packAndRotateInto(java.nio.ByteBuffer, int, int, int, int, int, byte[]);
+  public final com.hereliesaz.sphereslam.camera.LumaFrameTransform$Scratch threadScratchForTest$sphereslam();
+}
+
+public final class com.hereliesaz.sphereslam.camera.LumaFrameTransform$Scratch {
+  public com.hereliesaz.sphereslam.camera.LumaFrameTransform$Scratch();
+  public final byte[] getBand();
+  public final void setBand(byte[]);
+  public final byte[] getRowSpan();
+  public final void setRowSpan(byte[]);
+}
+
+public final class com.hereliesaz.sphereslam.camera.ProjectionMatrix {
+  public static final com.hereliesaz.sphereslam.camera.ProjectionMatrix INSTANCE;
+  public final float[] buildFrom(com.hereliesaz.sphereslam.camera.CameraIntrinsics, float, float);
+  public static float[] buildFrom$default(com.hereliesaz.sphereslam.camera.ProjectionMatrix, com.hereliesaz.sphereslam.camera.CameraIntrinsics, float, float, int, java.lang.Object);
+  public final java.lang.Float horizontalFovDegrees(float[]);
+  public final java.lang.Float verticalFovDegrees(float[]);
+}
+
+public final class com.hereliesaz.sphereslam.camera.RotatedLuma {
+  public com.hereliesaz.sphereslam.camera.RotatedLuma(byte[], int, int);
+  public final byte[] getBytes();
+  public final int getWidth();
+  public final int getHeight();
+  public java.lang.String toString();
+}
+
+public final class com.hereliesaz.sphereslam.camera.ScreenIntrinsics {
+  public static final com.hereliesaz.sphereslam.camera.ScreenIntrinsics INSTANCE;
+  public static final float FALLBACK_LONG_SIDE_FOV_DEGREES;
+  public final float[] fitCenter(float, float, int, int, int, int);
+  public final float[] fitCenter(com.hereliesaz.sphereslam.camera.CameraIntrinsics, int, int);
+  public final float[] fallback(int, int);
+  public final float[] fillCenter(float, float, int, int, int, int);
+  public final float[] fillCenter(com.hereliesaz.sphereslam.camera.CameraIntrinsics, int, int);
+  public final float[] fillCenterFallback(int, int);
+}
+
+public final class com.hereliesaz.sphereslam.gyro.GyroCompensationMath {
+  public static final com.hereliesaz.sphereslam.gyro.GyroCompensationMath INSTANCE;
+  public static final float DEFAULT_RELEASE_DEGREES;
+  public static final float FALLBACK_LONG_SIDE_FOV_DEGREES;
+  public final float[] bodyToDisplay(int);
+  public final float[] displayDelta(float[], int);
+  public final float rotationAngleDegrees(float[]);
+  public final float[] screenIntrinsics(float, float, int, int, int, int);
+  public final float[] fallbackScreenIntrinsics(int, int);
+  public final float[] homography(float[], float, float, float, float, float[]);
+  public static float[] homography$default(com.hereliesaz.sphereslam.gyro.GyroCompensationMath, float[], float, float, float, float, float[], int, java.lang.Object);
+  public final com.hereliesaz.sphereslam.gyro.GyroCompensationMath$Result compensate(float[], int, float[], float, float[]);
+  public static com.hereliesaz.sphereslam.gyro.GyroCompensationMath$Result compensate$default(com.hereliesaz.sphereslam.gyro.GyroCompensationMath, float[], int, float[], float, float[], int, java.lang.Object);
+  public final java.lang.Float relativeInverseDepthAt(float[], int, int, float, float, int);
+  public static java.lang.Float relativeInverseDepthAt$default(com.hereliesaz.sphereslam.gyro.GyroCompensationMath, float[], int, int, float, float, int, int, java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.gyro.GyroCompensationMath$Result$Exceeded extends com.hereliesaz.sphereslam.gyro.GyroCompensationMath$Result {
+  public com.hereliesaz.sphereslam.gyro.GyroCompensationMath$Result$Exceeded(float);
+  public final float getAngleDegrees();
+}
+
+public final class com.hereliesaz.sphereslam.gyro.GyroCompensationMath$Result$Within extends com.hereliesaz.sphereslam.gyro.GyroCompensationMath$Result {
+  public com.hereliesaz.sphereslam.gyro.GyroCompensationMath$Result$Within(float[], float);
+  public final float getAngleDegrees();
+  public final float[] getHomography();
+}
+
+public final class com.hereliesaz.sphereslam.math.RigidMath {
+  public static final com.hereliesaz.sphereslam.math.RigidMath INSTANCE;
+  public final float[] identity();
+  public final float[] multiply(float[], float[]);
+  public final float[] rigidInverse(float[]);
+  public final float scaleOf(float[]);
+  public final float[] similarityInverse(float[]);
+  public final float[] translationOf(float[]);
+  public final float translationNorm(float[]);
+  public final float[] cameraCentre(float[]);
+  public final float rotationAngleDeg(float[]);
+  public final float rotationDeltaDeg(float[], float[]);
+  public final float[] matrixToQuaternion(float[]);
+  public final float[] normalizeQuat(float[]);
+  public final float[] fromQuaternionTranslation(float[], float[]);
+  public final float[] nlerpQuat(float[], float[], float);
+  public final float[] lerp(float[], float[], float);
+  public final float[] glViewToCv(float[]);
+  public final float[] cvViewToGl(float[]);
+  public final float[] rowMajorToColumnMajor(float[]);
+  public final float[] columnMajorToRowMajor(float[]);
+  public final float[] cvRowMajorToGlColumnMajor(float[]);
+}
+
+public final class com.hereliesaz.sphereslam.math.RotationMath {
+  public static final com.hereliesaz.sphereslam.math.RotationMath INSTANCE;
+  public final float[] getIDENTITY_QUATERNION();
+  public final float[] getIDENTITY_3X3();
+  public final float[] multiplyQuaternions(float[], float[]);
+  public final float[] conjugate(float[]);
+  public final float[] normalize(float[]);
+  public final float[] toRotationMatrix3x3(float[]);
+  public final float[] rotationAboutZ(int);
+  public final float[] multiplyMat3(float[], float[]);
+  public final float[] transposeMat3(float[]);
+  public final float[] multiplyMat3Vec3(float[], float[]);
+  public final float[] conjugateMat3(float[], float[]);
+  public final float[] cameraRotationDelta(float[], float[]);
+  public final float[] rotateAboutCameraCentre(float[], float[]);
+  public final float rotationAngleDegrees(float[]);
+}
+
+public final class com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion {
+  public static final com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$Companion Companion;
+  public static final float MIN_CONFIDENCE;
+  public static final float MIN_INLIER_RATIO;
+  public static final float BASE_ALPHA;
+  public static final float CONF_FLOOR;
+  public static final float COLD_SNAP_MIN_CONFIDENCE;
+  public static final float COLD_SNAP_INLIER_RATIO;
+  public static final float COLD_SNAP_MIN_INLIERS;
+  public static final float COLD_SNAP_DIST_M;
+  public static final float COLD_SNAP_ANGLE_DEG;
+  public static final int HYBRID_REQUIRED_AGREEMENT;
+  public static final float HYBRID_AGREEMENT_DIST_M;
+  public static final float HYBRID_AGREEMENT_ANGLE_DEG;
+  public static final long HYBRID_AGREEMENT_WINDOW_NS;
+  public com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion();
+  public final float[] getLocalCorrection();
+  public final void setLocalCorrection(float[]);
+  public final void markRelocalizing();
+  public final void reset();
+  public final float[] currentAnchor(float[], com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Accepted);
+  public final float[] currentAnchor(float[], float[], float[], long, float, int);
+  public final float[] holdCurrentAnchor(float[]);
+  public final int agreementCount();
+  public final boolean isAwaitingAgreement();
+  public final com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$Diagnostics diagnostics();
+}
+
+public final class com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$Companion {
+  public static void getMIN_INLIER_RATIO$annotations();
+  public static void getCOLD_SNAP_INLIER_RATIO$annotations();
+  public final boolean agrees(float[], float[]);
+  public final float[] blend(float[], float[], float);
+  public final boolean diverged(float[], float[]);
+  public com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$Companion(kotlin.jvm.internal.DefaultConstructorMarker);
+}
+
+public final class com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$Diagnostics {
+  public com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$Diagnostics(com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$State, float, float, float, float, int, int, int, int);
+  public final com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$State getState();
+  public final float getLastAlpha();
+  public final float getLastQuality();
+  public final float getCorrectionMm();
+  public final float getCorrectionDeg();
+  public final int getAccepted();
+  public final int getRejected();
+  public final int getAgreeingObservations();
+  public final int getRequiredAgreement();
+  public final com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$State component1();
+  public final float component2();
+  public final float component3();
+  public final float component4();
+  public final float component5();
+  public final int component6();
+  public final int component7();
+  public final int component8();
+  public final int component9();
+  public final com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$Diagnostics copy(com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$State, float, float, float, float, int, int, int, int);
+  public static com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$Diagnostics copy$default(com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$Diagnostics, com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$State, float, float, float, float, int, int, int, int, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+}
+
+public final class com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$State extends java.lang.Enum<com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$State> {
+  public static final com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$State WAITING_FOR_LOCK;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$State COLD_SNAP;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$State BLENDING;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$State HOLDING;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$State RELOCK_REFUSED;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$State AWAITING_AGREEMENT;
+  public static com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$State[] values();
+  public static com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$State valueOf(java.lang.String);
+  public static kotlin.enums.EnumEntries<com.hereliesaz.sphereslam.sidecar.HybridAnchorFusion$State> getEntries();
+}
+
+public final class com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection {
+  public static final com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection INSTANCE;
+  public static final int MIN_INLIERS;
+  public static final float MAX_REPROJECTION_ERROR_PX;
+  public static final long MAX_OBSERVATION_AGE_NS;
+  public static final long MAX_POSE_PAIR_DELTA_NS;
+  public static final float MAX_CORRECTION_M;
+  public static final float MAX_CORRECTION_DEG;
+  public static final int CONFIDENCE_SATURATION_INLIERS;
+  public static final float MIN_CONFIDENCE;
+  public final float confidence(int, float);
+  public final com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Decision solve(com.hereliesaz.sphereslam.SphereSlamTracker$Observation, com.hereliesaz.sphereslam.SphereSlamPoseMath$PageGeometry, boolean, float[], com.hereliesaz.sphereslam.sidecar.HybridPoseHistory, long);
+  public final com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Decision solveRaw(long, int, float, float[], com.hereliesaz.sphereslam.SphereSlamPoseMath$PageGeometry, boolean, float[], com.hereliesaz.sphereslam.sidecar.HybridPoseHistory, long);
+}
+
+public final class com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Accepted {
+  public com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Accepted(long, float[], float[], float, int);
+  public final long getTimestampNs();
+  public final float getConfidence();
+  public final int getInliers();
+  public final float[] getCorrectedAnchorWorld();
+  public final float[] getBackboneAtObservation();
+}
+
+public final class com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Decision {
+  public com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Decision(com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Accepted, com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Reject, com.hereliesaz.sphereslam.sidecar.HybridKpmDiagnostics);
+  public com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Decision(com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Accepted, com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Reject, com.hereliesaz.sphereslam.sidecar.HybridKpmDiagnostics, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Accepted getAccepted();
+  public final com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Reject getReject();
+  public final com.hereliesaz.sphereslam.sidecar.HybridKpmDiagnostics getDiagnostics();
+  public final com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Accepted component1();
+  public final com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Reject component2();
+  public final com.hereliesaz.sphereslam.sidecar.HybridKpmDiagnostics component3();
+  public final com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Decision copy(com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Accepted, com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Reject, com.hereliesaz.sphereslam.sidecar.HybridKpmDiagnostics);
+  public static com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Decision copy$default(com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Decision, com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Accepted, com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Reject, com.hereliesaz.sphereslam.sidecar.HybridKpmDiagnostics, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+  public com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Decision();
+}
+
+public final class com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Reject extends java.lang.Enum<com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Reject> {
+  public static final com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Reject NON_METRIC;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Reject STALE;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Reject TOO_FEW_INLIERS;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Reject BAD_REPROJECTION;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Reject LOW_CONFIDENCE;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Reject NON_FINITE;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Reject NO_POSE_PAIR;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Reject CORRECTION_TOO_LARGE;
+  public final com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome getOutcome();
+  public static com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Reject[] values();
+  public static com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Reject valueOf(java.lang.String);
+  public static kotlin.enums.EnumEntries<com.hereliesaz.sphereslam.sidecar.HybridKpmCorrection$Reject> getEntries();
+}
+
+public final class com.hereliesaz.sphereslam.sidecar.HybridKpmDiagnostics {
+  public com.hereliesaz.sphereslam.sidecar.HybridKpmDiagnostics(com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome, long, float, int, float, float, float, int, int);
+  public com.hereliesaz.sphereslam.sidecar.HybridKpmDiagnostics(com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome, long, float, int, float, float, float, int, int, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome getOutcome();
+  public final long getObservationTimestampNs();
+  public final float getAgeMs();
+  public final int getInliers();
+  public final float getReprojectionPx();
+  public final float getCorrectionMm();
+  public final float getCorrectionDeg();
+  public final int getAgreeingObservations();
+  public final int getRequiredAgreement();
+  public final java.lang.String summary();
+  public final com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome component1();
+  public final long component2();
+  public final float component3();
+  public final int component4();
+  public final float component5();
+  public final float component6();
+  public final float component7();
+  public final int component8();
+  public final int component9();
+  public final com.hereliesaz.sphereslam.sidecar.HybridKpmDiagnostics copy(com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome, long, float, int, float, float, float, int, int);
+  public static com.hereliesaz.sphereslam.sidecar.HybridKpmDiagnostics copy$default(com.hereliesaz.sphereslam.sidecar.HybridKpmDiagnostics, com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome, long, float, int, float, float, float, int, int, int, java.lang.Object);
+  public java.lang.String toString();
+  public int hashCode();
+  public boolean equals(java.lang.Object);
+  public com.hereliesaz.sphereslam.sidecar.HybridKpmDiagnostics();
+}
+
+public final class com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome extends java.lang.Enum<com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome> {
+  public static final com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome NOT_SAMPLED;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome NON_METRIC;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome STALE;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome TOO_FEW_INLIERS;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome BAD_REPROJECTION;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome LOW_CONFIDENCE;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome NON_FINITE;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome NO_POSE_PAIR;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome CORRECTION_TOO_LARGE;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome AWAITING_AGREEMENT;
+  public static final com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome ACCEPTED;
+  public static com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome[] values();
+  public static com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome valueOf(java.lang.String);
+  public static kotlin.enums.EnumEntries<com.hereliesaz.sphereslam.sidecar.HybridKpmOutcome> getEntries();
+}
+
+public final class com.hereliesaz.sphereslam.sidecar.HybridPageFrame {
+  public static final com.hereliesaz.sphereslam.sidecar.HybridPageFrame INSTANCE;
+  public final float[] worldFromPage(float[], float[]);
+  public final float[] pageFromArtwork(float[], float[]);
+}
+
+public final class com.hereliesaz.sphereslam.sidecar.HybridPoseHistory {
+  public com.hereliesaz.sphereslam.sidecar.HybridPoseHistory(int);
+  public com.hereliesaz.sphereslam.sidecar.HybridPoseHistory(int, int, kotlin.jvm.internal.DefaultConstructorMarker);
+  public final int getSize();
+  public final void clear();
+  public final void add(long, float[], float[]);
+  public final com.hereliesaz.sphereslam.sidecar.HybridPoseHistory$Sample nearest(long, long);
+  public com.hereliesaz.sphereslam.sidecar.HybridPoseHistory();
+}
+
+public final class com.hereliesaz.sphereslam.sidecar.HybridPoseHistory$Sample {
+  public com.hereliesaz.sphereslam.sidecar.HybridPoseHistory$Sample(long, float[], float[]);
+  public final long getTimestampNs();
+  public final float[] getViewMatrix();
+  public final float[] getBackboneMatrix();
+}
+
+public final class com.hereliesaz.sphereslam.sidecar.MetricPageRectification {
+  public static final com.hereliesaz.sphereslam.sidecar.MetricPageRectification INSTANCE;
+  public static final int MAX_REFERENCE_DIM;
+  public static final int MIN_REFERENCE_DIM;
+  public static final float MIN_SIDE_M;
+  public final com.hereliesaz.sphereslam.sidecar.MetricPageRectification$Geometry deriveGeometry(int, int, float, float, float, float, float[], float[]);
+  public final com.hereliesaz.sphereslam.sidecar.MetricPageRectification$Reference rectify(byte[], int, int, int, com.hereliesaz.sphereslam.sidecar.MetricPageRectification$Geometry);
+  public static com.hereliesaz.sphereslam.sidecar.MetricPageRectification$Reference rectify$default(com.hereliesaz.sphereslam.sidecar.MetricPageRectification, byte[], int, int, int, com.hereliesaz.sphereslam.sidecar.MetricPageRectification$Geometry, int, java.lang.Object);
+  public final byte[] lumaFromArgb(int[]);
+  public final byte[] warpQuadToRect(byte[], int, int, int, float[], int, int);
+  public final double[] homography$sphereslam(double[], double[]);
+}
+
+public final class com.hereliesaz.sphereslam.sidecar.MetricPageRectification$Geometry {
+  public com.hereliesaz.sphereslam.sidecar.MetricPageRectification$Geometry(float[], float, float, int, int, float, com.hereliesaz.sphereslam.SphereSlamPoseMath$PageGeometry, float[]);
+  public final float getWidthMeters();
+  public final float getHeightMeters();
+  public final int getOutputWidth();
+  public final int getOutputHeight();
+  public final float getReferenceDpi();
+  public final com.hereliesaz.sphereslam.SphereSlamPoseMath$PageGeometry getPageGeometry();
+  public final float[] getSourceCorners();
+  public final float[] getCameraFromPageGl();
+}
+
+public final class com.hereliesaz.sphereslam.sidecar.MetricPageRectification$Reference {
+  public com.hereliesaz.sphereslam.sidecar.MetricPageRectification$Reference(byte[], int, int, float, float, float, com.hereliesaz.sphereslam.SphereSlamPoseMath$PageGeometry);
+  public final byte[] getLuma();
+  public final int getWidth();
+  public final int getHeight();
+  public final float getWidthMeters();
+  public final float getHeightMeters();
+  public final float getReferenceDpi();
+  public final com.hereliesaz.sphereslam.SphereSlamPoseMath$PageGeometry getPageGeometry();
+}
+
+public interface com.hereliesaz.sphereslam.ExperimentalSphereSlamApi extends java.lang.annotation.Annotation {
+}
+
+public interface com.hereliesaz.sphereslam.KpmApi {
+  public abstract long create(int, int, com.hereliesaz.sphereslam.SphereSlamCalibration);
+  public abstract int addPage(long, java.nio.ByteBuffer, int, int, float, int, int, int);
+  public abstract int match(long, java.nio.ByteBuffer, float[]);
+  public default int reindex(long);
+  public default int addPageView(long, java.nio.ByteBuffer, int, int, com.hereliesaz.sphereslam.PlanarPageView);
+  public default int matchEx(long, java.nio.ByteBuffer, int, float[], float[]);
+  public default int matchImages(long, java.nio.ByteBuffer, int[], int[], float[], float[]);
+  public abstract void destroy(long);
+  public default boolean clear(long);
+  public default long clone(long);
+  public static int access$reindex$jd(com.hereliesaz.sphereslam.KpmApi, long);
+  public static int access$addPageView$jd(com.hereliesaz.sphereslam.KpmApi, long, java.nio.ByteBuffer, int, int, com.hereliesaz.sphereslam.PlanarPageView);
+  public static int access$matchEx$jd(com.hereliesaz.sphereslam.KpmApi, long, java.nio.ByteBuffer, int, float[], float[]);
+  public static int access$matchImages$jd(com.hereliesaz.sphereslam.KpmApi, long, java.nio.ByteBuffer, int[], int[], float[], float[]);
+  public static boolean access$clear$jd(com.hereliesaz.sphereslam.KpmApi, long);
+  public static long access$clone$jd(com.hereliesaz.sphereslam.KpmApi, long);
+}
+
+public interface com.hereliesaz.sphereslam.SphereSlamEngine extends java.lang.AutoCloseable {
+  public abstract int getFrameWidth();
+  public abstract int getFrameHeight();
+  public abstract com.hereliesaz.sphereslam.SphereSlamCalibration getCalibration();
+  public abstract boolean isReady();
+  public abstract int addPage(java.nio.ByteBuffer, int, int, com.hereliesaz.sphereslam.PlanarPage);
+  public default int addPageView(java.nio.ByteBuffer, int, int, com.hereliesaz.sphereslam.PlanarPageView);
+  public default int reindex();
+  public abstract com.hereliesaz.sphereslam.PlanarMatch match(java.nio.ByteBuffer);
+  public default com.hereliesaz.sphereslam.PlanarMatch match(java.nio.ByteBuffer, com.hereliesaz.sphereslam.PlanarMatchRequest);
+  public default boolean clearPages();
+  public abstract void close();
+  public static int access$addPageView$jd(com.hereliesaz.sphereslam.SphereSlamEngine, java.nio.ByteBuffer, int, int, com.hereliesaz.sphereslam.PlanarPageView);
+  public static int access$reindex$jd(com.hereliesaz.sphereslam.SphereSlamEngine);
+  public static com.hereliesaz.sphereslam.PlanarMatch access$match$jd(com.hereliesaz.sphereslam.SphereSlamEngine, java.nio.ByteBuffer, com.hereliesaz.sphereslam.PlanarMatchRequest);
+  public static boolean access$clearPages$jd(com.hereliesaz.sphereslam.SphereSlamEngine);
+}
+
+public interface com.hereliesaz.sphereslam.SphereSlamStandaloneSession$EngineFactory {
+  public abstract com.hereliesaz.sphereslam.SphereSlamEngine create(int, int, com.hereliesaz.sphereslam.SphereSlamCalibration);
+}

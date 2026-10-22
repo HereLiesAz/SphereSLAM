@@ -62,7 +62,11 @@ class KpmPlanarFrontEndTest {
             return answer(images.first().pageNo)
         }
 
-        override fun cameraFromCanonical(pageNo: Int, cameraFromPage3x4: FloatArray): FloatArray = view.copyOf()
+        var lastCameraFromPage: FloatArray? = null
+        override fun cameraFromCanonical(pageNo: Int, cameraFromPage3x4: FloatArray): FloatArray {
+            lastCameraFromPage = cameraFromPage3x4.copyOf()
+            return view.copyOf()
+        }
         override fun fork(): KpmMatcherBackend? = null
         override fun close() {
             closed = true
@@ -572,5 +576,63 @@ class KpmPlanarFrontEndTest {
         fe.close()
         assertTrue(backend!!.closed)
         assertFalse(fe.isFlowUnavailable)
+    }
+
+    // Five X's and an O, bright on black paper: KPM finds nothing it trusts in them.
+    private val markCentres = listOf(200 to 140, 330 to 170, 250 to 260, 420 to 300, 180 to 340, 380 to 110)
+
+    private fun paper(): ByteArray {
+        val img = ByteArray(640 * 480) { 12 }
+        fun dot(x: Int, y: Int) { if (x in 0 until 640 && y in 0 until 480) img[y * 640 + x] = 240.toByte() }
+        for ((cx, cy) in markCentres) for (t in -12..12) for (d in -1..1) {
+            dot(cx + t, cy + t + d)
+            dot(cx + t, cy - t + d)
+        }
+        return img
+    }
+
+    private fun paperInput(nowMs: Long): PlanarFrameInput {
+        val bytes = paper()
+        val buf = ByteBuffer.allocateDirect(bytes.size).apply { put(bytes); flip() }
+        return PlanarFrameInput(buf, bytes, nowMs * 1_000_000L, nowMs, null)
+    }
+
+    @Test
+    fun `a page of isolated marks KPM misses locks by constellation, posed in KPM's page millimetres`() {
+        val fe = frontEnd()
+        val bytes = paper()
+        fe.addPage(ByteBuffer.wrap(bytes), 640, 480, 1f, false, 1, RigidMath.identity())
+        backend!!.answer = { null }
+        val r = fe.match(paperInput(0))
+        assertNotNull(r)
+        assertEquals(VisualMatchMethod.CONSTELLATION, r!!.method)
+        assertEquals(markCentres.size, r.inlierCount)
+        // The pose maps each mark's page millimetres (KPM: pixel centres, y up) onto the half-size frame.
+        val p = backend!!.lastCameraFromPage!!
+        val mm = 1000f / 640f
+        val mk = backend!!.intrinsics
+        for ((cx, cy) in markCentres) {
+            val x = (cx + 0.5f) * mm
+            val y = (480 - 0.5f - cy) * mm
+            val xc = p[0] * x + p[1] * y + p[3]
+            val yc = p[4] * x + p[5] * y + p[7]
+            val zc = p[8] * x + p[9] * y + p[11]
+            assertEquals((cx + 0.5f) / 2f - 0.5f, mk.fx * xc / zc + mk.cx, 1f)
+            assertEquals((cy + 0.5f) / 2f - 0.5f, mk.fy * yc / zc + mk.cy, 1f)
+        }
+    }
+
+    @Test
+    fun `a constellation lock leaves healthy flow tracking armed`() {
+        val fe = frontEnd()
+        fe.addPage(ByteBuffer.wrap(paper()), 640, 480, 1f, false, 1, RigidMath.identity())
+        assertEquals(VisualMatchMethod.KPM_FULL, fe.match(paperInput(0))!!.method) // KPM seeds flow
+        backend!!.answer = { null }
+        // The periodic refresh misses KPM and locks by constellation instead...
+        assertEquals(VisualMatchMethod.CONSTELLATION, fe.match(paperInput(600))!!.method)
+        val solves = backend!!.calls.size
+        // ...and the next frame is still tracked by flow, not forced into another full solve.
+        assertEquals(VisualMatchMethod.FLOW, fe.match(paperInput(650))!!.method)
+        assertEquals(solves, backend!!.calls.size)
     }
 }

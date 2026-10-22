@@ -11,6 +11,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 /**
@@ -115,9 +116,11 @@ class SphereSlamTrackerTest {
             assertEquals(1, api.creates)
             t.addAnticipatedViews(List(5) { view("v$it") } + view("v1"))
             drain(worker)
-            // A second engine holding the reference, then the views (a repeat skipped), indexed per batch of 4.
+            // A second engine holding the reference, then the views (a repeat skipped), never re-indexed:
+            // preview matching builds its own matcher from the learned images, so a rebuild on the
+            // frame thread would only stall matching.
             assertEquals(2, api.creates)
-            assertEquals(listOf("view:1", "view:2", "view:3", "view:4", "reindex", "view:5", "reindex"), api.calls.filter { it.startsWith("view") || it == "reindex" })
+            assertEquals(listOf("view:1", "view:2", "view:3", "view:4", "view:5"), api.calls.filter { it.startsWith("view") || it == "reindex" })
             assertEquals(listOf(96f), api.views.map { it.referenceDpi }.distinct())
             assertEquals(listOf(2), api.views.map { it.pageHeightPixels }.distinct())
             assertTrue(api.views.none { it.reindex })
@@ -351,5 +354,69 @@ class SphereSlamTrackerTest {
         t.close()
         assertEquals(0, api.creates)
         assertFalse(t.isReferenceReady)
+    }
+
+    // Five X's and an O, bright on black paper.
+    private val marks = listOf(200 to 140, 330 to 170, 250 to 260, 420 to 300, 180 to 340, 380 to 110)
+
+    private fun paper(): ByteArray {
+        val img = ByteArray(640 * 480) { 12 }
+        fun dot(x: Int, y: Int) { if (x in 0 until 640 && y in 0 until 480) img[y * 640 + x] = 240.toByte() }
+        for ((cx, cy) in marks) for (t in -12..12) for (d in -1..1) {
+            dot(cx + t, cy + t + d)
+            dot(cx + t, cy - t + d)
+        }
+        return img
+    }
+
+    @Test
+    fun `a sparse-mark reference KPM misses is observed by constellation`() {
+        val api = RecordingApi(matchPage = -1)
+        val worker = Executors.newSingleThreadExecutor()
+        try {
+            val t = tracker(api, worker)
+            t.configure(SphereSlamTracker.CameraModel(640, 480, 500f, 500f, 319.5f, 239.5f))
+            t.setReference(ByteBuffer.wrap(paper()), 640, 480, 640, dpi = 72f)
+            drain(worker)
+            t.submitFrame(ByteBuffer.wrap(paper()), 640, 480, 640, timestampNs = 1L)
+            drain(worker); drain(worker)
+            val o = t.latestObservation()
+            assertNotNull(o)
+            assertEquals(marks.size, o!!.inliers)
+            assertTrue(o.error < 1f)
+        } finally {
+            worker.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `a non-finite principal point is refused, not passed to native code`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            SphereSlamTracker.CameraModel(640, 480, 500f, 500f, Float.NaN, 240f)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            SphereSlamTracker.CameraModel(640, 480, Float.POSITIVE_INFINITY, 500f, 320f, 240f)
+        }
+    }
+
+    @Test
+    fun `an engine that throws is recorded instead of killing the process`() {
+        val api = object : KpmApi by RecordingApi() {
+            override fun addPage(
+                session: Long, luma: ByteBuffer, width: Int, height: Int, referenceDpi: Float,
+                pageNo: Int, imageNo: Int, maxFeatures: Int,
+            ): Int = throw IllegalStateException("boom")
+        }
+        val worker = Executors.newSingleThreadExecutor()
+        try {
+            val t = tracker(api, worker)
+            t.configure(camera)
+            t.setReference(ByteBuffer.wrap(byteArrayOf(1, 2, 3, 4)), 2, 2, 2)
+            drain(worker)
+            assertFalse(t.isReferenceReady)
+            assertEquals("boom", t.lastReferenceError)
+        } finally {
+            worker.shutdownNow()
+        }
     }
 }

@@ -50,5 +50,74 @@ jobs:
           test "$(/tmp/cmake-4.4.4-linux-x86_64/bin/cmake --version | head -n 1)" = "cmake version 4.4.4"
           printf 'sdk.dir=%s\ncmake.dir=/tmp/cmake-4.4.4-linux-x86_64\n' "$ANDROID_HOME" > local.properties
 
-      - name: Assemble and run JVM tests
-        run: ./gradlew assemble test --stacktrace
+      - name: Install Ninja 1.12.1 (pinned, as jitpack.yml)
+        run: |
+          curl --fail --location --retry 8 --retry-delay 15 --retry-all-errors --output /tmp/ninja-1.12.1-linux.zip https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-linux.zip
+          echo "6f98805688d19672bd699fbbfa2c2cf0fc054ac3df1f0e6a47664d963d530255  /tmp/ninja-1.12.1-linux.zip" | sha256sum --check -
+          unzip -o -q /tmp/ninja-1.12.1-linux.zip -d /tmp/cmake-4.4.4-linux-x86_64/bin
+          chmod +x /tmp/cmake-4.4.4-linux-x86_64/bin/ninja
+          test "$(/tmp/cmake-4.4.4-linux-x86_64/bin/ninja --version)" = "1.12.1"
+
+      - name: Assemble, run JVM tests, check the public API
+        run: ./gradlew assemble test apiCheck --stacktrace
+
+  # The native code (KPM bridge, the arx_overrides matcher) only runs on a device: an x86_64 emulator
+  # with an extra x86_64 build of libsphereslam (never published).
+  native-instrumented:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Verify the pinned artoolkitX commit
+        run: test "$(git -C third_party/artoolkitx rev-parse HEAD)" = "9d487c9fa02d2ae9cef986d2698e829c2dcfbd25"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # The native build requires CMake 4.4.4 exactly (same bootstrap as jitpack.yml).
+      # Cached so a GitHub release-download outage (504s) doesn't fail the run; checksum-verified either way.
+      - uses: actions/cache@v4
+        id: cmake
+        with:
+          path: /tmp/cmake.tar.gz
+          key: cmake-4.4.4-linux-x86_64-e5bb807f
+
+      - name: Install CMake 4.4.4
+        run: |
+          if [ "${{ steps.cmake.outputs.cache-hit }}" != "true" ]; then
+            curl --fail --location --retry 8 --retry-delay 15 --retry-all-errors --output /tmp/cmake.tar.gz https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-linux-x86_64.tar.gz
+          fi
+          echo "e5bb807f7728cb60cd8b27ebc97a2edb469b68655f21e844a600c3575b76f5bb  /tmp/cmake.tar.gz" | sha256sum --check -
+          tar -xzf /tmp/cmake.tar.gz -C /tmp
+          test "$(/tmp/cmake-4.4.4-linux-x86_64/bin/cmake --version | head -n 1)" = "cmake version 4.4.4"
+          printf 'sdk.dir=%s\ncmake.dir=/tmp/cmake-4.4.4-linux-x86_64\n' "$ANDROID_HOME" > local.properties
+
+      - name: Install Ninja 1.12.1 (pinned, as jitpack.yml)
+        run: |
+          curl --fail --location --retry 8 --retry-delay 15 --retry-all-errors --output /tmp/ninja-1.12.1-linux.zip https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-linux.zip
+          echo "6f98805688d19672bd699fbbfa2c2cf0fc054ac3df1f0e6a47664d963d530255  /tmp/ninja-1.12.1-linux.zip" | sha256sum --check -
+          unzip -o -q /tmp/ninja-1.12.1-linux.zip -d /tmp/cmake-4.4.4-linux-x86_64/bin
+          chmod +x /tmp/cmake-4.4.4-linux-x86_64/bin/ninja
+          test "$(/tmp/cmake-4.4.4-linux-x86_64/bin/ninja --version)" = "1.12.1"
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run instrumented native tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: ./gradlew :core:nativebridge:connectedDebugAndroidTest -Psphereslam.extraAbis=x86_64 --stacktrace

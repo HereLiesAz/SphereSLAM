@@ -8,6 +8,7 @@ import org.junit.Test
 import kotlin.math.cos
 import kotlin.math.sin
 
+@OptIn(ExperimentalSphereSlamApi::class)
 class ConstellationTest {
 
     private val w = 640
@@ -59,7 +60,7 @@ class ConstellationTest {
                 (s * (sin(a) * p[0] + cos(a) * p[1]) + 40).toFloat(),
             )
         }.shuffled(java.util.Random(3)) + listOf(floatArrayOf(20f, 20f), floatArrayOf(600f, 450f))
-        val pairing = assertNotNull(Constellation.match(ref, frame)).let { Constellation.match(ref, frame)!! }
+        val pairing = Constellation.match(ref, frame).also { assertNotNull(it) }!!
         assertEquals(5, pairing.reference.size)
         for (k in pairing.reference.indices) {
             val p = ref[pairing.reference[k]]
@@ -91,11 +92,41 @@ class ConstellationTest {
             val z = r[6] * p[0] + r[7] * p[1] + t[2]
             floatArrayOf((k[0] * x / z + k[2]).toFloat(), (k[1] * y / z + k[3]).toFloat())
         }
-        val pose = assertNotNull(Constellation.pose(page, image, k)).let { Constellation.pose(page, image, k)!! }
+        val pose = Constellation.pose(page, image, k).also { assertNotNull(it) }!!
         assertTrue(pose.meanSquaredErrorPx < 1e-3f)
         for (row in 0..2) assertEquals(t[row], pose.cameraFromPage3x4[row * 4 + 3].toDouble(), 0.1)
         for (row in 0..2) for (col in 0..2) {
             assertEquals(r[row * 3 + col], pose.cameraFromPage3x4[row * 4 + col].toDouble(), 1e-3)
         }
+    }
+
+    @Test
+    fun matchesTheArrangementUnderPerspective() {
+        // The reference square-on; the frame the same marks seen 30° off the page normal.
+        val k = floatArrayOf(500f, 500f, 320f, 240f)
+        val ref = (centres + o).map { floatArrayOf(it.first, it.second) }
+        val b = Math.toRadians(30.0)
+        val r = doubleArrayOf(cos(b), 0.0, sin(b), 0.0, 1.0, 0.0, -sin(b), 0.0, cos(b))
+        val t = doubleArrayOf(-300.0, -240.0, 900.0)
+        val frame = ref.map { p ->
+            val x = r[0] * p[0] + r[1] * p[1] + t[0]
+            val y = r[3] * p[0] + r[4] * p[1] + t[1]
+            val z = r[6] * p[0] + r[7] * p[1] + t[2]
+            floatArrayOf((k[0] * x / z + k[2]).toFloat(), (k[1] * y / z + k[3]).toFloat())
+        }
+        val pairing = Constellation.match(ref, frame).also { assertNotNull(it) }!!
+        assertEquals(ref.size, pairing.reference.size)
+        for (c in pairing.reference.indices) assertEquals(pairing.reference[c], pairing.frame[c])
+    }
+
+    @Test
+    fun manyMarksStayCheapAndStillMatch() {
+        val rnd = java.util.Random(11)
+        val ref = List(24) { floatArrayOf(rnd.nextFloat() * 600f, rnd.nextFloat() * 440f) }
+        val frame = ref.map { floatArrayOf(it[0] * 0.8f + 30f, it[1] * 0.8f + 20f) }
+        val start = System.nanoTime()
+        val pairing = Constellation.match(ref, frame).also { assertNotNull(it) }!!
+        assertTrue("match took ${(System.nanoTime() - start) / 1_000_000} ms", System.nanoTime() - start < 2_000_000_000L)
+        for (c in pairing.reference.indices) assertEquals(pairing.reference[c], pairing.frame[c])
     }
 }

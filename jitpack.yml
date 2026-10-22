@@ -38,4 +38,5 @@ before_install:
   - printf '\ncmake.dir=/tmp/cmake-4.4.4-linux-x86_64\n' >> local.properties
 
 install:
-  - /tmp/gradle-9.8.0/bin/gradle publishToMavenLocal -x test -x lint --no-daemon --stacktrace
+  # JVM tests gate the publish (a failing build is never published). Lint stays in CI, not here.
+  - /tmp/gradle-9.8.0/bin/gradle test publishToMavenLocal -x lint --no-daemon --stacktrace

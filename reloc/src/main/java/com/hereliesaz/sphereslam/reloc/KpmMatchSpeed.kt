@@ -351,6 +351,16 @@ internal class KpmMatchScheduler(private val config: KpmMatchSpeedConfig) {
         }
     }
 
+    /**
+     * A full solve succeeded without correspondences to seed flow (the constellation fallback): the
+     * attempt clock restarts, but flow stays armed or not exactly as it was — its coverage still
+     * runs from the last seeded solve.
+     */
+    fun onUnseededSolve(nowMs: Long) {
+        lastAttemptMs = nowMs
+        framesSinceAttempt = 0
+    }
+
     /** After a missed REFRESH: may flow still supply this frame's pose? */
     fun flowMayCoverMiss(nowMs: Long): Boolean {
         if (!armed || lastSuccessMs == Long.MIN_VALUE) return false

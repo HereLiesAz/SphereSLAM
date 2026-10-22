@@ -16,6 +16,7 @@ import kotlin.math.sqrt
  * from every pair of points and scored by how many other centres it lands on ([match]); the pose comes
  * from the homography of the matched centres ([pose]). Pure Kotlin, no OpenCV.
  */
+@ExperimentalSphereSlamApi
 object Constellation {
 
     /** One mark: its centre (pixels of the image it was found in) and area (pixels). */
@@ -24,22 +25,46 @@ object Constellation {
     /** Fewest marks a constellation needs: a homography takes four. */
     const val MIN_MARKS = 4
 
+    /**
+     * Fewest matched points a pose is taken from. Four fit a homography exactly (zero error whatever
+     * the pairing), so a fifth is what lets the reprojection error reject a wrong one.
+     */
+    const val MIN_POSE_POINTS = 5
+
+    /**
+     * How near (fraction of the hypothesis pair's frame length) a mapped mark must land. Tunable, not
+     * measured: wide enough for moderate perspective (see ConstellationTest's tilted case).
+     */
+    const val MATCH_TOLERANCE = 0.12f
+
+    /** Fraction of the reference's marks a match must pair. Tunable, not measured. */
+    const val MIN_MATCHED_FRACTION = 0.6f
+
+    /** Nearest neighbours each point hypothesises with once the search is no longer exhaustive. */
+    const val NEIGHBOURS = 4
+
+    /** Homography refits of a hypothesis' pairing before it is scored. */
+    const val REFINE_ROUNDS = 2
+
+    /** Up to this n·m every point pair is hypothesised; beyond, nearest neighbours only. */
+    const val FULL_SEARCH_LIMIT = 96
+
     /** More blobs than this is texture, not a handful of marks: left to KPM. */
     const val MAX_MARKS = 24
 
     /** Long side (px) marks are found at; larger images are block-averaged down first. */
     const val WORK_LONG_SIDE = 320
 
-    /** A mark differs from the surface median by at least this much luma (0–255)... */
+    /** A mark differs from the surface median by at least this much luma (0–255)... Tunable, not measured. */
     const val MIN_CONTRAST = 48
 
-    /** ...and by at least this many median absolute deviations of the surface. */
+    /** ...and by at least this many median absolute deviations of the surface. Tunable, not measured. */
     const val MAD_FACTOR = 6f
 
-    /** A blob smaller than this fraction of the image is noise. */
+    /** A blob smaller than this fraction of the image is noise. Tunable, not measured. */
     const val MIN_AREA_FRACTION = 0.0002f
 
-    /** A blob larger than this fraction of the image is not a mark. */
+    /** A blob larger than this fraction of the image is not a mark. Tunable, not measured. */
     const val MAX_AREA_FRACTION = 0.08f
 
     /**
@@ -48,13 +73,29 @@ object Constellation {
      * [MIN_AREA_FRACTION] and [MAX_AREA_FRACTION] of the image. Empty unless there are
      * [MIN_MARKS]..[MAX_MARKS] of them: a busy surface is KPM's.
      */
-    fun extractMarks(luma: ByteArray, width: Int, height: Int): List<Mark> {
+    /** Scratch arrays [extractMarks] reuses across calls (one per thread; not thread-safe). */
+    class Workspace {
+        internal var img = IntArray(0)
+        internal var dev = IntArray(0)
+        internal var mark = BooleanArray(0)
+        internal var seen = BooleanArray(0)
+        internal var stack = IntArray(0)
+
+        internal fun ensure(n: Int) {
+            if (img.size >= n) return
+            img = IntArray(n); dev = IntArray(n); mark = BooleanArray(n); seen = BooleanArray(n); stack = IntArray(n)
+        }
+    }
+
+    fun extractMarks(luma: ByteArray, width: Int, height: Int, workspace: Workspace = Workspace()): List<Mark> {
         require(width > 0 && height > 0 && luma.size >= width * height)
         val step = max(1, (max(width, height) + WORK_LONG_SIDE - 1) / WORK_LONG_SIDE)
         val w = width / step
         val h = height / step
         if (w < 8 || h < 8) return emptyList()
-        val img = IntArray(w * h)
+        val n = w * h
+        workspace.ensure(n)
+        val img = workspace.img
         for (y in 0 until h) for (x in 0 until w) {
             var s = 0
             for (dy in 0 until step) {
@@ -63,17 +104,21 @@ object Constellation {
             }
             img[y * w + x] = s / (step * step)
         }
-        val median = medianOf(img)
-        val mad = medianOf(IntArray(img.size) { abs(img[it] - median) })
+        val median = medianOf(img, n)
+        val dev = workspace.dev
+        for (i in 0 until n) dev[i] = abs(img[i] - median)
+        val mad = medianOf(dev, n)
         val threshold = max(MIN_CONTRAST.toFloat(), MAD_FACTOR * mad)
-        val mark = BooleanArray(img.size) { abs(img[it] - median) > threshold }
+        val mark = workspace.mark
+        for (i in 0 until n) mark[i] = dev[i] > threshold
 
         val minArea = max(4, (MIN_AREA_FRACTION * w * h).toInt())
         val maxArea = (MAX_AREA_FRACTION * w * h).toInt()
-        val seen = BooleanArray(img.size)
-        val stack = IntArray(img.size)
+        val seen = workspace.seen
+        seen.fill(false, 0, n)
+        val stack = workspace.stack
         val out = ArrayList<Mark>()
-        for (start in img.indices) {
+        for (start in 0 until n) {
             if (!mark[start] || seen[start]) continue
             var top = 0
             stack[top++] = start
@@ -131,86 +176,160 @@ object Constellation {
     fun match(
         reference: List<FloatArray>,
         frame: List<FloatArray>,
-        tolerance: Float = 0.12f,
-        minFraction: Float = 0.6f,
+        tolerance: Float = MATCH_TOLERANCE,
+        minFraction: Float = MIN_MATCHED_FRACTION,
     ): Pairing? {
         val n = reference.size
         val m = frame.size
         if (n < MIN_MARKS || m < MIN_MARKS) return null
-        var best: Pairing? = null
+        // Hypothesis pairs: every pair while the sets are small, else each point with its
+        // [NEIGHBOURS] nearest (an arrangement keeps its local neighbourhoods), bounding the work at
+        // O((n·k)·(m·k)·n·m) instead of O(n²·m²·n·m).
+        val refPairs = hypothesisPairs(reference, full = n * m <= FULL_SEARCH_LIMIT)
+        val framePairs = hypothesisPairs(frame, full = n * m <= FULL_SEARCH_LIMIT)
+        var bestRef = IntArray(0)
+        var bestFrame = IntArray(0)
         var bestCount = 0
         var tie = false
-        val assignedRef = IntArray(n)
+        val assigned = IntArray(n)
         val claimed = BooleanArray(m)
-        for (i in 0 until n) for (j in 0 until n) {
-            if (i == j) continue
+        val frameSpan = span(frame)
+        for (rp in refPairs) {
+            val i = rp ushr 16
+            val j = rp and 0xFFFF
             val rdx = reference[j][0] - reference[i][0]
             val rdy = reference[j][1] - reference[i][1]
             val rLen = hypot(rdx, rdy)
             if (rLen <= 0f) continue
-            for (a in 0 until m) for (b in 0 until m) {
-                if (a == b) continue
+            for (fp in framePairs) {
+                val a = fp ushr 16
+                val b = fp and 0xFFFF
                 val fdx = frame[b][0] - frame[a][0]
                 val fdy = frame[b][1] - frame[a][1]
                 val fLen = hypot(fdx, fdy)
                 if (fLen <= 0f) continue
-                run {
-                    // Similarity taking reference i→a, j→b.
-                    val sy = 1f
-                    val ux = rdx
-                    val uy = rdy
-                    val s = fLen / rLen
-                    val cos = (ux * fdx + uy * fdy) / (rLen * fLen)
-                    val sin = (ux * fdy - uy * fdx) / (rLen * fLen)
-                    val tol = tolerance * fLen
-                    val tol2 = tol * tol
-                    claimed.fill(false)
-                    var count = 0
-                    for (k in 0 until n) {
-                        val px = reference[k][0] - reference[i][0]
-                        val py = sy * (reference[k][1] - reference[i][1])
-                        val qx = frame[a][0] + s * (cos * px - sin * py)
-                        val qy = frame[a][1] + s * (sin * px + cos * py)
-                        var nearest = -1
-                        var nearest2 = tol2
-                        for (f in 0 until m) {
-                            if (claimed[f]) continue
-                            val dx = frame[f][0] - qx
-                            val dy = frame[f][1] - qy
-                            val d2 = dx * dx + dy * dy
-                            if (d2 <= nearest2) {
-                                nearest2 = d2
-                                nearest = f
-                            }
-                        }
-                        assignedRef[k] = nearest
-                        if (nearest >= 0) {
-                            claimed[nearest] = true
-                            count++
+                // Similarity taking reference i→a, j→b (never a mirror: no view of a page makes one).
+                val s = fLen / rLen
+                val cos = (rdx * fdx + rdy * fdy) / (rLen * fLen)
+                val sin = (rdx * fdy - rdy * fdx) / (rLen * fLen)
+                val tol2 = (tolerance * fLen) * (tolerance * fLen)
+                claimed.fill(false)
+                var count = 0
+                for (k in 0 until n) {
+                    val px = reference[k][0] - reference[i][0]
+                    val py = reference[k][1] - reference[i][1]
+                    val qx = frame[a][0] + s * (cos * px - sin * py)
+                    val qy = frame[a][1] + s * (sin * px + cos * py)
+                    var nearest = -1
+                    var nearest2 = tol2
+                    for (f in 0 until m) {
+                        if (claimed[f]) continue
+                        val dx = frame[f][0] - qx
+                        val dy = frame[f][1] - qy
+                        val d2 = dx * dx + dy * dy
+                        if (d2 <= nearest2) {
+                            nearest2 = d2
+                            nearest = f
                         }
                     }
-                    if (count < bestCount) return@run
-                    val refIdx = (0 until n).filter { assignedRef[it] >= 0 }.toIntArray()
-                    val frameIdx = IntArray(refIdx.size) { assignedRef[refIdx[it]] }
-                    if (count > bestCount) {
-                        bestCount = count
-                        best = Pairing(refIdx, frameIdx)
-                        tie = false
-                    } else if (!samePairing(best, refIdx, frameIdx)) {
-                        tie = true
+                    assigned[k] = nearest
+                    if (nearest >= 0) {
+                        claimed[nearest] = true
+                        count++
                     }
+                }
+                // Perspective bends an arrangement away from any similarity: refit the pairing with a
+                // homography and re-pair under it before scoring.
+                if (count >= MIN_MARKS) count = refine(reference, frame, assigned, claimed, tolerance * frameSpan)
+                if (count < bestCount || count == 0) continue
+                if (count > bestCount) {
+                    bestCount = count
+                    bestRef = IntArray(count)
+                    bestFrame = IntArray(count)
+                    var c = 0
+                    for (k in 0 until n) if (assigned[k] >= 0) { bestRef[c] = k; bestFrame[c] = assigned[k]; c++ }
+                    tie = false
+                } else if (!tie && !sameAssignment(bestRef, bestFrame, assigned)) {
+                    tie = true
                 }
             }
         }
-        if (best == null || tie) return null
+        if (bestCount == 0 || tie) return null
         if (bestCount < MIN_MARKS || bestCount < minFraction * n) return null
-        return best
+        return Pairing(bestRef, bestFrame)
     }
 
-    private fun samePairing(p: Pairing?, ref: IntArray, frame: IntArray): Boolean {
-        if (p == null || p.reference.size != ref.size) return false
-        val a = p.reference.indices.associate { p.reference[it] to p.frame[it] }
-        return ref.indices.all { a[ref[it]] == frame[it] }
+    // Re-pairs [assigned] under the homography of its current pairs ([REFINE_ROUNDS] times, a match
+    // within [tolerance] px); returns the count. Keeps the similarity's pairing when a fit fails.
+    private fun refine(
+        reference: List<FloatArray>,
+        frame: List<FloatArray>,
+        assigned: IntArray,
+        claimed: BooleanArray,
+        tolerance: Float,
+    ): Int {
+        var count = assigned.count { it >= 0 }
+        repeat(REFINE_ROUNDS) {
+            val src = ArrayList<FloatArray>()
+            val dst = ArrayList<FloatArray>()
+            for (k in assigned.indices) if (assigned[k] >= 0) { src += reference[k]; dst += frame[assigned[k]] }
+            val h = homography(src, dst) ?: return count
+            val trial = IntArray(assigned.size) { -1 }
+            claimed.fill(false)
+            var c = 0
+            val tol2 = tolerance * tolerance
+            for (k in reference.indices) {
+                val x = reference[k][0].toDouble(); val y = reference[k][1].toDouble()
+                val w = h[6] * x + h[7] * y + h[8]
+                if (w <= 1e-9) continue
+                val qx = ((h[0] * x + h[1] * y + h[2]) / w).toFloat()
+                val qy = ((h[3] * x + h[4] * y + h[5]) / w).toFloat()
+                var nearest = -1
+                var nearest2 = tol2
+                for (f in frame.indices) {
+                    if (claimed[f]) continue
+                    val dx = frame[f][0] - qx; val dy = frame[f][1] - qy
+                    val d2 = dx * dx + dy * dy
+                    if (d2 <= nearest2) { nearest2 = d2; nearest = f }
+                }
+                trial[k] = nearest
+                if (nearest >= 0) { claimed[nearest] = true; c++ }
+            }
+            if (c < count) return count
+            trial.copyInto(assigned)
+            count = c
+        }
+        return count
+    }
+
+    private fun span(points: List<FloatArray>): Float {
+        var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE; var maxX = -Float.MAX_VALUE; var maxY = -Float.MAX_VALUE
+        for (p in points) { minX = min(minX, p[0]); maxX = max(maxX, p[0]); minY = min(minY, p[1]); maxY = max(maxY, p[1]) }
+        return hypot(maxX - minX, maxY - minY)
+    }
+
+    // Ordered pairs (i shl 16 or j) to hypothesise from: all of them, or each point with its nearest.
+    private fun hypothesisPairs(points: List<FloatArray>, full: Boolean): IntArray {
+        val n = points.size
+        val out = ArrayList<Int>()
+        for (i in 0 until n) {
+            val others = (0 until n).filter { it != i }
+            val chosen = if (full) {
+                others
+            } else {
+                others.sortedBy { j -> hypot(points[j][0] - points[i][0], points[j][1] - points[i][1]) }.take(NEIGHBOURS)
+            }
+            for (j in chosen) out += (i shl 16) or j
+        }
+        return out.toIntArray()
+    }
+
+    private fun sameAssignment(ref: IntArray, frame: IntArray, assigned: IntArray): Boolean {
+        var count = 0
+        for (k in assigned.indices) if (assigned[k] >= 0) count++
+        if (count != ref.size) return false
+        for (c in ref.indices) if (assigned[ref[c]] != frame[c]) return false
+        return true
     }
 
     /** A camera-from-page pose and its fit. */
@@ -328,11 +447,11 @@ object Constellation {
         return DoubleArray(n) { m[it][n] / m[it][it] }
     }
 
-    private fun medianOf(v: IntArray): Int {
+    private fun medianOf(v: IntArray, count: Int): Int {
         val hist = IntArray(256)
-        for (x in v) hist[min(255, max(0, x))]++
+        for (i in 0 until count) hist[min(255, max(0, v[i]))]++
         var acc = 0
-        val half = (v.size + 1) / 2
+        val half = (count + 1) / 2
         for (i in 0..255) {
             acc += hist[i]
             if (acc >= half) return i

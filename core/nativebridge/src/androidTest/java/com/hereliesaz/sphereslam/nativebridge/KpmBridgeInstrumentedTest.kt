@@ -170,22 +170,52 @@ class KpmBridgeInstrumentedTest {
             val pool = Executors.newFixedThreadPool(2)
             val started = CountDownLatch(1)
             val calls = AtomicInteger()
+            val matched = AtomicInteger()
             val matcher = pool.submit {
                 started.countDown()
                 val out = FloatArray(KpmBridge.MATCH_OUTPUT_FLOATS)
                 repeat(10) {
-                    KpmBridge.matchPlanar(s, page.duplicate(), out) // -1 once destroyed, never a crash
+                    // 0 while the session lives, -1 once destroyed, never a crash.
+                    if (KpmBridge.matchPlanar(s, page.duplicate(), out) == 0) matched.incrementAndGet()
                     calls.incrementAndGet()
                 }
             }
             started.await(5, TimeUnit.SECONDS)
+            // Destroy only once matching is under way, so the race is real: a match has completed and
+            // the next is running (or about to) when the session goes.
+            val deadline = System.nanoTime() + 5_000_000_000L
+            while (calls.get() < 1 && System.nanoTime() < deadline) Thread.yield()
+            assertTrue("no match ran before destroy", calls.get() >= 1)
             KpmBridge.destroySession(s)
             KpmBridge.destroySession(s) // a second destroy is a no-op
             matcher.get(30, TimeUnit.SECONDS)
             pool.shutdown()
             assertEquals(10, calls.get())
+            assertTrue("no match succeeded before destroy", matched.get() >= 1)
             assertEquals(-1, KpmBridge.matchPlanar(s, page.duplicate(), FloatArray(KpmBridge.MATCH_OUTPUT_FLOATS)))
             assertFalse(KpmBridge.clearPages(s))
+        }
+    }
+
+    /**
+     * Repeated identical marks (the same tile at irregular places on a blank page) used to fail
+     * artoolkitX's ratio test on every feature; SphereSLAM's matcher override keeps lookalikes
+     * (arx_overrides/matchers/feature_matcher-inline.h), so the page still matches itself.
+     */
+    @Test
+    fun aPageOfLookalikeMarksMatchesItself() {
+        val s = session()
+        try {
+            val tile = Random(42).let { r -> ByteArray(32 * 32) { r.nextInt(256).toByte() } }
+            val bytes = ByteArray(w * h) { 10 }
+            for ((ox, oy) in listOf(20 to 30, 140 to 20, 250 to 60, 60 to 150, 190 to 170)) {
+                for (y in 0 until 32) for (x in 0 until 32) bytes[(oy + y) * w + ox + x] = tile[y * 32 + x]
+            }
+            val page = ByteBuffer.allocateDirect(bytes.size).apply { put(bytes); flip() }
+            assertTrue(KpmBridge.addPlanarPage(s, page, w, h, 72f, 0, 0, 500) > 0)
+            assertEquals(0, KpmBridge.matchPlanar(s, page.duplicate(), FloatArray(KpmBridge.MATCH_OUTPUT_FLOATS)))
+        } finally {
+            KpmBridge.destroySession(s)
         }
     }
 }

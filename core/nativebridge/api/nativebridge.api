@@ -1,0 +1,17 @@
+public final class com.hereliesaz.sphereslam.nativebridge.KpmBridge {
+  public static final com.hereliesaz.sphereslam.nativebridge.KpmBridge INSTANCE;
+  public static final int MATCH_OUTPUT_FLOATS;
+  public static final int MATCH_EX_OUTPUT_FLOATS;
+  public final boolean isAvailable();
+  public final long createCalibratedSession(int, int, float, float, float, float);
+  public final int addPlanarPage(long, java.nio.ByteBuffer, int, int, float, int, int, int);
+  public final int addPlanarPageView(long, java.nio.ByteBuffer, int, int, int, int, int, float[], int, float, boolean);
+  public static int addPlanarPageView$default(com.hereliesaz.sphereslam.nativebridge.KpmBridge, long, java.nio.ByteBuffer, int, int, int, int, int, float[], int, float, boolean, int, java.lang.Object);
+  public final int matchPlanar(long, java.nio.ByteBuffer, float[]);
+  public final int matchPlanarEx(long, java.nio.ByteBuffer, int, float[], float[]);
+  public final int reindex(long);
+  public final int matchPlanarImages(long, java.nio.ByteBuffer, int[], int[], float[], float[]);
+  public final boolean clearPages(long);
+  public final long cloneSession(long);
+  public final void destroySession(long);
+}
