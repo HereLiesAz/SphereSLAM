@@ -93,6 +93,8 @@ import kotlin.math.sqrt
  * @property maxReferenceScale register a reference whose long side exceeds this many times the matched
  *   image's long side from an area-downscaled copy of that size (page geometry in millimetres is
  *   unchanged); 0 registers references as given.
+ * @property constellationFallback when a direct full solve misses and the page is a handful of
+ *   isolated marks ([Constellation]), match the arrangement of the marks instead of their look.
  */
 @ExperimentalSphereSlamRelocApi
 data class KpmMatchSpeedConfig(
@@ -118,6 +120,7 @@ data class KpmMatchSpeedConfig(
     val previewRectify: Boolean = true,
     val previewMaxFeatures: Int = 600,
     val maxReferenceScale: Float = 3f,
+    val constellationFallback: Boolean = true,
 ) {
     init {
         require(matchDownscale >= 1)
@@ -165,6 +168,9 @@ enum class VisualMatchMethod {
 
     /** KPM against previews of the references ([KpmMatchSpeedConfig.previewSearchAfterMisses]). */
     KPM_PREVIEW,
+
+    /** The arrangement of a few isolated marks ([KpmMatchSpeedConfig.constellationFallback]). */
+    CONSTELLATION,
 }
 
 /**

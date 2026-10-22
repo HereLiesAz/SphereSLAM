@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Constellation fallback for sparse marks.** A target of a few isolated marks (five X's and an O on
+  black paper) gives KPM nothing: identical marks are ambiguous to its per-feature matching and smooth
+  ones yield no features. When a direct full solve misses and the page is 4–24 isolated marks,
+  `Constellation` finds each mark as a blob, matches the arrangement of their centres by similarity
+  hypotheses from every point pair (symmetric arrangements refused), and poses the page from the
+  homography of the matched centres (`VisualMatchMethod.CONSTELLATION`,
+  `KpmMatchSpeedConfig.constellationFallback`, on by default).
 - **Strong flow covers missed full solves for longer.** When a periodic KPM solve misses, flow kept the
   pose for at most `maxFlowOnlyMs` (1.5 s). While flow's last frame kept at least `strongFlowInliers`
   (30) points — a target filling the frame at arm's length — it may now cover misses for
