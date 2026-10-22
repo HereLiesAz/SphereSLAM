@@ -50,6 +50,8 @@ class PhotosphereTrackingSessionTest {
         var closed = false
         var matches = 0
         var throwOnMatch: RuntimeException? = null
+        /** Runs inside each match, e.g. to advance the clock the way a slow real match would. */
+        var duringMatch: (() -> Unit)? = null
 
         override fun addPage(
             luma: ByteBuffer, width: Int, height: Int, referenceWidthUnits: Float,
@@ -65,6 +67,7 @@ class PhotosphereTrackingSessionTest {
 
         override fun match(luma: ByteBuffer, timestampNs: Long): PlanarMatchResult? {
             matches++
+            duringMatch?.invoke()
             throwOnMatch?.let { throw it }
             return next
         }
@@ -180,10 +183,11 @@ class PhotosphereTrackingSessionTest {
         luma: ByteArray = textured,
         k: CameraIntrinsics = intrinsics,
         heading: Float? = null,
+        timestampNs: Long = nowNs,
     ) = PhotosphereTrackingSession.Frame(
         luma = if (luma.size == k.width * k.height) luma else noise(k.width * k.height, 2),
         intrinsics = k,
-        timestampNs = nowNs,
+        timestampNs = timestampNs,
         attitude = attitude,
         headingDeg = heading,
         elevationDeg = heading?.let { 0f },
@@ -299,6 +303,35 @@ class PhotosphereTrackingSessionTest {
         assertEquals(1, rec.solved.size) // once per reference
         assertArrayEquals(rec.solved[0], s.mapFromFingerprint!!, 0f)
         assertEquals(1, rec.ready.size)
+    }
+
+    /**
+     * A match that takes longer than the age limit is this session's own compute, not a stale frame:
+     * it must still lock. Counting match time as frame age rejected most matches on mid-range phones
+     * (STALE_OBSERVATION with every attempt matched) and pinned tracking in REACQUIRING.
+     */
+    @Test
+    fun `a slow match on a fresh frame is not stale`() {
+        val s = session(PhotosphereTrackingSession.Config(timestampSource = CameraTimestampSource.REALTIME))
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame(yaw(0.0)))
+        fronts.single().next = match(viewAt(0f, 0f, 2f))
+        fronts.single().duringMatch = { advance(400) } // > the 250 ms default age limit
+        val results = List(3) { s.onFrame(frame(yaw(0.0))) }
+        assertTrue(rec.failures.none { it.reason == TrackingFailureReason.STALE_OBSERVATION })
+        assertEquals(TrackingState.LOCKED, results.last().state)
+    }
+
+    /** A frame that was already old on arrival is still stale. */
+    @Test
+    fun `a frame old on arrival is still stale`() {
+        val s = session(PhotosphereTrackingSession.Config(timestampSource = CameraTimestampSource.REALTIME))
+        s.updatePrecisionLayer(reference)
+        s.onFrame(frame(yaw(0.0)))
+        fronts.single().next = match(viewAt(0f, 0f, 2f))
+        advance(1_000)
+        s.onFrame(frame(yaw(0.0), timestampNs = nowNs - 400_000_000L))
+        assertTrue(rec.failures.any { it.reason == TrackingFailureReason.STALE_OBSERVATION })
     }
 
     @Test

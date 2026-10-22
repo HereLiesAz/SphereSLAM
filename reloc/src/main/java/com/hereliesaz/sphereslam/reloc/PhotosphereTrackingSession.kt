@@ -604,6 +604,12 @@ class PhotosphereTrackingSession internal constructor(
 
     private fun process(frame: Frame): FrameResult {
         val intrinsics = frame.intrinsics
+        // Frame age is judged as of ARRIVAL here, not after this method's own work. Keyframe capture,
+        // setup and the KPM match are this session's compute (~100-450 ms on mid-range phones), not
+        // staleness of the frame: counting them rejected most good matches as STALE_OBSERVATION and
+        // pinned the session in REACQUIRING on a rotation-only pose. Display-rate re-posing already
+        // rotates a pose forward by the attitude change since its frame.
+        val frameArrivalNs = elapsedRealtimeNanos()
         val frameStartMs = nowMs()
         val projection = ProjectionMatrix.buildFrom(intrinsics)
         timing.frames++
@@ -658,7 +664,7 @@ class PhotosphereTrackingSession internal constructor(
         timing.match.add(matchEndNs - matchStartNs)
         if (pose != null) timing.matched++
         val matchDurationMs = (matchEndNs - matchStartNs).toFloat() / 1_000_000f
-        val observationAge = agePolicy.evaluate(frame.timestampNs, matchEndNs, config.timestampSource)
+        val observationAge = agePolicy.evaluate(frame.timestampNs, frameArrivalNs, config.timestampSource)
 
         val loop = requireNotNull(robustLoop) { "robust tracking loop not initialised" }
         val outcome = loop.onFrame(
@@ -666,7 +672,7 @@ class PhotosphereTrackingSession internal constructor(
             inlierCount = pose?.inlierCount ?: 0,
             reprojectionError = pose?.reprojectionError ?: Float.MAX_VALUE,
             frameTimestampNs = frame.timestampNs,
-            nowElapsedRealtimeNs = matchEndNs,
+            nowElapsedRealtimeNs = frameArrivalNs,
             timestampSource = config.timestampSource,
             nowMs = matchEndNs / 1_000_000L,
             bridgeAvailable = canBridge(frame.attitude, matchEndNs / 1_000_000L),
