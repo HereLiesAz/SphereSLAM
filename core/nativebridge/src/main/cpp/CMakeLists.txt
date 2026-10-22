@@ -209,7 +209,10 @@ if(EXISTS ${ARX_ROOT}/KPM/include/ARX/KPM/kpm.h)
         ARX_TARGET_PLATFORM_ANDROID=1
         NOCRYPT=1
     )
-    target_include_directories(arx_kpm PUBLIC
+    # arx_overrides shadows individual artoolkitX headers (first on the path): today only
+    # matchers/feature_matcher-inline.h, which keeps lookalike matches the ratio test drops.
+    target_include_directories(arx_kpm BEFORE PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/arx_overrides
         ${ARX_GENERATED_INCLUDE}
         ${ARX_ROOT}/KPM/include
         ${ARX_ROOT}/KPM
