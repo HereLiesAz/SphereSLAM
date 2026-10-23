@@ -12,6 +12,7 @@ concurrency:
 
 permissions:
   contents: read
+  id-token: write # the ci-report step authenticates with the run's OIDC token
 
 jobs:
   build-and-test:
@@ -60,6 +61,10 @@ jobs:
 
       - name: Assemble, run JVM tests, check the public API
         run: ./gradlew assemble test apiCheck --stacktrace
+
+      # Declares this workflow as target-local CI to HereLiesAz/workflows and records its result.
+      - if: always()
+        uses: HereLiesAz/workflows/.github/actions/ci-report@main
 
   # The native code (KPM bridge, the arx_overrides matcher) only runs on a device: an x86_64 emulator
   # with an extra x86_64 build of libsphereslam (never published).
@@ -121,3 +126,6 @@ jobs:
           target: google_apis
           disable-animations: true
           script: ./gradlew :core:nativebridge:connectedDebugAndroidTest -Psphereslam.extraAbis=x86_64 --stacktrace
+
+      - if: always()
+        uses: HereLiesAz/workflows/.github/actions/ci-report@main
