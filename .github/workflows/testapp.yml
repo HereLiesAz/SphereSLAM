@@ -15,6 +15,7 @@ concurrency:
 
 permissions:
   contents: read
+  id-token: write # the ci-report step authenticates with the run's OIDC token
 
 jobs:
   build:
@@ -67,3 +68,7 @@ jobs:
           path: ${{ steps.apk.outputs.name }}.apk
           if-no-files-found: error
           retention-days: 30
+
+      # Declares this workflow as target-local CI to HereLiesAz/workflows and records its result.
+      - if: always()
+        uses: HereLiesAz/workflows/.github/actions/ci-report@main
